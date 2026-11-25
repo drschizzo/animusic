@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import './style.css';
-import { buildEnsemble, classifyTrack, ROLES } from './arranger.js';
+import { buildEnsemble, assignRoles, ROLES } from './arranger.js';
 import { planShots, cameraAt } from './director.js';
 import { parseMidi, demoSong } from './midi.js';
 import { Player } from './audio.js';
@@ -73,7 +73,7 @@ async function loadSounds(notes, drums) {
 
 function loadSong(s) {
   song = s;
-  for (const t of s.tracks) t.role = classifyTrack(t);
+  assignRoles(s.tracks).forEach((role, i) => (s.tracks[i].role = role));
   $('song').hidden = false;
   $('songName').textContent = s.name;
   const list = $('tracks');
@@ -189,6 +189,44 @@ window.addEventListener('drop', (e) => {
   if (file) loadFile(file);
 });
 
+// Qualité graphique. En mode auto, on part de « haute » et on descend d'un cran
+// si l'animation tombe durablement sous ~40 images/s pendant la lecture.
+const LEVELS = ['high', 'medium', 'low'];
+let qualityMode = 'auto';
+function setQuality(mode) {
+  qualityMode = mode;
+  $('quality').value = mode;
+  stage.setQuality(mode === 'auto' ? 'high' : mode);
+  try {
+    localStorage.setItem('animusic.quality', mode);
+  } catch {
+    /* réglage non mémorisé */
+  }
+}
+$('quality').addEventListener('change', (e) => setQuality(e.target.value));
+try {
+  setQuality(localStorage.getItem('animusic.quality') || 'auto');
+} catch {
+  setQuality('auto');
+}
+const fpsMeter = { frames: 0, since: performance.now(), slow: 0 };
+function measureFps() {
+  fpsMeter.frames++;
+  const now = performance.now();
+  if (now - fpsMeter.since < 1000) return;
+  const fps = (fpsMeter.frames * 1000) / (now - fpsMeter.since);
+  fpsMeter.frames = 0;
+  fpsMeter.since = now;
+  $('fps').textContent = `${Math.round(fps)} img/s`;
+  if (qualityMode !== 'auto' || !player.playing) return;
+  fpsMeter.slow = fps < 40 ? fpsMeter.slow + 1 : 0;
+  const i = LEVELS.indexOf(stage.quality);
+  if (fpsMeter.slow >= 3 && i < LEVELS.length - 1) {
+    stage.setQuality(LEVELS[i + 1]);
+    fpsMeter.slow = 0;
+  }
+}
+
 const fmt = (s) => {
   const v = Math.max(0, s);
   return `${Math.floor(v / 60)}:${String(Math.floor(v % 60)).padStart(2, '0')}`;
@@ -207,6 +245,7 @@ function frame() {
     }
   }
   stage.render();
+  measureFps();
   requestAnimationFrame(frame);
 }
 

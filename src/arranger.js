@@ -37,16 +37,45 @@ export function trackStats(notes) {
   return { meanPitch: pitch / notes.length, meanDuration: dur / notes.length, polyphony: poly / j };
 }
 
-/** Rôle par défaut d'une piste, d'après son programme General MIDI puis ses statistiques. */
+const PAD_PROGRAMS = (p) => (p >= 16 && p <= 23) || (p >= 48 && p <= 55) || (p >= 88 && p <= 95);
+const BASS_PROGRAMS = (p) => p >= 32 && p <= 39;
+const LOW_STRINGS = (p) => p === 42 || p === 43; // violoncelle, contrebasse
+
+/**
+ * Rôle par défaut d'une piste prise isolément : le programme General MIDI sert
+ * d'indice, les statistiques des notes tranchent (un « ensemble de cordes » qui
+ * joue des notes courtes ira aux billes, pas à l'orgue).
+ */
 export function classifyTrack(track) {
   if (track.percussion) return 'drums';
   const p = track.program ?? -1;
-  if (p >= 32 && p <= 39) return 'bass';
-  if ((p >= 16 && p <= 23) || (p >= 48 && p <= 55) || (p >= 88 && p <= 95)) return 'pads';
   const s = trackStats(track.notes);
+  if (BASS_PROGRAMS(p)) return 'bass';
+  if (LOW_STRINGS(p) && s.meanPitch < 55 && s.polyphony < 1.6) return 'bass';
+  if (PAD_PROGRAMS(p) && s.meanDuration > 0.4) return 'pads';
   if (s.meanPitch < 50 && s.polyphony < 1.4) return 'bass';
   if (s.meanDuration > 0.9 || (s.polyphony >= 2.5 && s.meanDuration > 0.5)) return 'pads';
   return 'balls';
+}
+
+/**
+ * Rôles de toutes les pistes d'un morceau : classification individuelle, puis
+ * passe globale. S'il n'y a pas de basse, la piste mélodique nettement plus grave
+ * que les autres (voix de basse d'un choral, violoncelle d'un quatuor) le devient.
+ */
+export function assignRoles(tracks) {
+  const roles = tracks.map(classifyTrack);
+  if (!roles.includes('bass')) {
+    const melodic = tracks
+      .map((t, i) => ({ i, s: trackStats(t.notes) }))
+      .filter(({ i }) => roles[i] === 'balls' || roles[i] === 'pads')
+      .sort((a, b) => a.s.meanPitch - b.s.meanPitch);
+    if (melodic.length >= 2) {
+      const [low, next] = melodic;
+      if (low.s.meanPitch < 58 && next.s.meanPitch - low.s.meanPitch >= 6 && low.s.polyphony < 1.6) roles[low.i] = 'bass';
+    }
+  }
+  return roles;
 }
 
 const side = (angle, r) => [Math.sin(angle) * r, 0, -Math.cos(angle) * r];

@@ -43,6 +43,7 @@ export class Stage {
     const key = new THREE.DirectionalLight(0xfff1dd, 2.2);
     key.position.set(6, 14, 8);
     key.castShadow = true;
+    this.keyLight = key;
     key.shadow.mapSize.set(2048, 2048);
     Object.assign(key.shadow.camera, { left: -20, right: 20, top: 20, bottom: -20, near: 1, far: 50 });
     key.shadow.bias = -0.0005;
@@ -120,6 +121,24 @@ export class Stage {
   /** Pose tous les objets à l'instant musical t. */
   update(t) {
     for (const v of this.views ?? []) v.update(t);
+  }
+
+  /**
+   * Niveau de qualité : 'high' (ombres, bloom, haute résolution), 'medium' (bloom
+   * sans ombres), 'low' (ni l'un ni l'autre, résolution 1).
+   */
+  setQuality(level) {
+    this.quality = level;
+    const dpr = window.devicePixelRatio || 1;
+    this.renderer.setPixelRatio(level === 'high' ? Math.min(dpr, 2) : level === 'medium' ? Math.min(dpr, 1.5) : 1);
+    this.renderer.shadowMap.enabled = level === 'high';
+    this.keyLight.castShadow = level === 'high';
+    this.bloom.enabled = level !== 'low';
+    // Les matériaux doivent être recompilés quand les ombres changent.
+    this.scene.traverse((o) => {
+      if (o.material) [].concat(o.material).forEach((m) => (m.needsUpdate = true));
+    });
+    this.resize();
   }
 
   render() {

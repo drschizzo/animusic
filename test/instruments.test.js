@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildBassStrings, carrierPose, stringVibration } from '../src/strings.js';
 import { buildPipes, pipeState } from '../src/pipes.js';
-import { classifyTrack, buildEnsemble } from '../src/arranger.js';
+import { classifyTrack, assignRoles, buildEnsemble } from '../src/arranger.js';
 
 const bassNotes = [];
 [40, 43, 45, 40, 47, 43, 40, 40].forEach((midi, i) =>
@@ -65,12 +65,25 @@ test('orgue : la lumière suit la durée de la note, la valve anticipe', () => {
 test('classification des pistes', () => {
   assert.equal(classifyTrack({ percussion: true, notes: [] }), 'drums');
   assert.equal(classifyTrack({ program: 33, notes: [] }), 'bass');
-  assert.equal(classifyTrack({ program: 48, notes: [] }), 'pads');
+  const long = [60, 64].map((midi) => ({ midi, time: 0, duration: 1.5, velocity: 0.7 }));
+  const short = [60, 64, 67, 72].map((midi, i) => ({ midi, time: i * 0.2, duration: 0.15, velocity: 0.7 }));
+  assert.equal(classifyTrack({ program: 48, notes: long }), 'pads');
+  // « Ensemble de cordes » mais notes courtes : c'est une ligne mélodique.
+  assert.equal(classifyTrack({ program: 48, notes: short }), 'balls');
   assert.equal(classifyTrack({ program: 0, notes: bassNotes }), 'bass');
   const chords = [60, 64, 67].map((midi) => ({ midi, time: 0, duration: 2, velocity: 0.7 }));
   assert.equal(classifyTrack({ program: 0, notes: chords }), 'pads');
   const melody = [72, 74, 76, 77].map((midi, i) => ({ midi, time: i * 0.3, duration: 0.25, velocity: 0.7 }));
   assert.equal(classifyTrack({ program: 0, notes: melody }), 'balls');
+});
+
+test('passe globale : la voix nettement plus grave devient la basse', () => {
+  const voice = (base) => [0, 2, 4, 5].map((d, i) => ({ midi: base + d, time: i * 0.5, duration: 0.45, velocity: 0.7 }));
+  const chorale = [72, 65, 58, 51].map((base) => ({ program: 0, notes: voice(base) }));
+  assert.deepEqual(assignRoles(chorale), ['balls', 'balls', 'balls', 'bass']);
+  // Voix serrées : pas de basse forcée.
+  const close = [64, 62, 60].map((base) => ({ program: 0, notes: voice(base) }));
+  assert.ok(!assignRoles(close).includes('bass'));
 });
 
 test('ensemble : instruments présents, début et fin globaux', () => {

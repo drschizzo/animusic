@@ -1,0 +1,97 @@
+// Banc d'essai : passe des fichiers MIDI dans toute la chaîne (lecture, arrangement,
+// chorégraphie, plans caméra) puis simule 60 images/s sur tout le morceau en appelant
+// les mêmes fonctions de pose que les vues. Vérifie l'absence de NaN et mesure les temps.
+//
+//   node tools/bench.mjs fichier1.mid [fichier2.mid ...]
+
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { parseMidi } from '../src/midi.js';
+import { assignRoles, buildEnsemble } from '../src/arranger.js';
+import { planShots, cameraAt } from '../src/director.js';
+import { activeBallRange, ballPosition, ballScale, launcherPose, barPulse } from '../src/choreography.js';
+import { armAngles, hitPulse } from '../src/drums.js';
+import { carrierPose, stringVibration } from '../src/strings.js';
+import { pipeState } from '../src/pipes.js';
+
+const finite = (...vals) => vals.flat(Infinity).every((v) => typeof v !== 'number' || Number.isFinite(v));
+
+function frame(ens, plan, t) {
+  let bad = 0;
+  const check = (...v) => {
+    if (!finite(...v)) bad++;
+  };
+  for (const inst of ens.instruments) {
+    const m = inst.model;
+    if (inst.kind === 'balls') {
+      const [s, e] = activeBallRange(m, t);
+      for (let i = s; i < e; i++) check(ballPosition(m, m.balls[i], t), ballScale(m.balls[i], t));
+      for (const L of m.launchers) check(Object.values(launcherPose(m, L, t)));
+      for (const b of m.bars) check(Object.values(barPulse(m, b, t)).filter((v) => v !== Infinity));
+    } else if (inst.kind === 'drums') {
+      for (const p of m.pieces) check(armAngles(m, p, t), hitPulse(m, p, t).pulse);
+    } else if (inst.kind === 'bass') {
+      for (const s of m.strings) check(stringVibration(m, s, t).amp);
+      for (const c of m.carriers) check(Object.values(carrierPose(m, c, t)));
+    } else if (inst.kind === 'pads') {
+      for (const p of m.pipes) check(Object.values(pipeState(m, p, t)));
+    }
+  }
+  const cam = cameraAt(plan, t);
+  check(cam.position, cam.target);
+  return bad;
+}
+
+for (const file of process.argv.slice(2)) {
+  const buf = readFileSync(file);
+  let t0 = performance.now();
+  const song = parseMidi(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), basename(file));
+  const parseMs = performance.now() - t0;
+
+  const parts = { balls: [], bass: [], pads: [], drums: [] };
+  const assigned = assignRoles(song.tracks);
+  const roles = song.tracks.map((tr, ti) => {
+    tr.role = assigned[ti];
+    parts[tr.role].push(...tr.notes.map((n) => ({ ...n, track: ti })));
+    return `${tr.name}[${tr.program}]→${tr.role}(${tr.notes.length})`;
+  });
+
+  t0 = performance.now();
+  const ens = buildEnsemble(parts);
+  const buildMs = performance.now() - t0;
+  t0 = performance.now();
+  const plan = planShots(ens);
+  const planMs = performance.now() - t0;
+
+  let bad = 0;
+  let worst = 0;
+  let frames = 0;
+  t0 = performance.now();
+  for (let t = ens.start; t <= ens.end; t += 1 / 60) {
+    const f0 = performance.now();
+    bad += frame(ens, plan, t);
+    worst = Math.max(worst, performance.now() - f0);
+    frames++;
+  }
+  const avg = (performance.now() - t0) / Math.max(1, frames);
+
+  const kinds = ens.instruments.map((i) => {
+    const m = i.model;
+    const extra =
+      i.kind === 'balls' ? ` ${m.bars.length} lames, rayon ${m.radius.toFixed(1)} m, ${m.maxConcurrent} billes max`
+      : i.kind === 'drums' ? ` ${m.pieces.length} éléments`
+      : i.kind === 'bass' ? ` ${m.strings.length} cordes, largeur ${m.width.toFixed(1)} m`
+      : ` ${m.pipes.length} tubes, largeur ${m.width.toFixed(1)} m`;
+    return `${i.kind}: ${i.onsets.length} notes,${extra}`;
+  });
+
+  console.log(`\n== ${basename(file)} (${(ens.end - ens.start).toFixed(0)} s)`);
+  console.log(`  pistes : ${roles.join(' | ')}`);
+  console.log(`  instruments : ${kinds.join(' ; ') || 'aucun'}`);
+  console.log(`  ${plan.shots.length} plans caméra`);
+  console.log(
+    `  lecture ${parseMs.toFixed(1)} ms · arrangement ${buildMs.toFixed(1)} ms · plans ${planMs.toFixed(1)} ms · ` +
+      `pose/image moy ${avg.toFixed(3)} ms, pire ${worst.toFixed(2)} ms · valeurs invalides : ${bad}`,
+  );
+}

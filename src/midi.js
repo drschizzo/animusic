@@ -1,4 +1,7 @@
-import { Midi } from '@tonejs/midi';
+import * as midiPkg from '@tonejs/midi';
+
+// Vite charge la version ES module (export nommé), Node la version CommonJS (export par défaut).
+const Midi = midiPkg.Midi ?? midiPkg.default?.Midi;
 
 /**
  * Convertit un fichier MIDI en structure interne :

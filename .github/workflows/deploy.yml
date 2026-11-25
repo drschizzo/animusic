@@ -25,6 +25,12 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      # Charge le build dans un vrai Chromium avant de déployer.
+      - name: Test de fumée
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          npm run smoke
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
