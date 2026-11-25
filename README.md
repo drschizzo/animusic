@@ -37,6 +37,13 @@ Pour la batterie, chaque élément utilisé (grosse caisse, caisse claire, charl
 reçoit un bras à deux segments dont la pose de frappe est obtenue par cinématique inverse : la baguette se lève
 avant le coup (d'autant plus que le coup est fort et espacé), touche la peau pile à l'instant de la note, puis rebondit.
 
+## Synchro image / son
+
+L'image est calée sur l'échantillon **réellement en train de sortir des haut-parleurs**
+(`AudioContext.getOutputTimestamp()`, à défaut `currentTime − outputLatency`), et non sur l'horloge de
+programmation de Tone.js qui a ~0,1 s d'avance. Si le navigateur annonce mal la latence (fréquent en Bluetooth),
+le curseur « Retard image » permet d'ajouter un retard manuel ; il est mémorisé dans le navigateur.
+
 ## Architecture
 
 | Fichier | Rôle |

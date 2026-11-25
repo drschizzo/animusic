@@ -109,6 +109,27 @@ $('restart').addEventListener('click', async () => {
 });
 $('orbit').addEventListener('change', (e) => (stage.controls.autoRotate = e.target.checked));
 
+// Réglage fin de la synchro image/son (ex. casque Bluetooth dont la latence est mal annoncée).
+function setOffset(ms) {
+  player.manualOffset = ms / 1000;
+  $('offset').value = ms;
+  $('offsetVal').textContent = `${ms} ms`;
+  try {
+    localStorage.setItem('animusic.offsetMs', String(ms));
+  } catch {
+    /* stockage indisponible : réglage non mémorisé */
+  }
+}
+$('offset').addEventListener('input', (e) => setOffset(Number(e.target.value)));
+try {
+  setOffset(Number(localStorage.getItem('animusic.offsetMs')) || 0);
+} catch {
+  setOffset(0);
+}
+setInterval(() => {
+  if (player.playing) $('latency').textContent = `Latence audio compensée : ${Math.round(player.compensation() * 1000)} ms`;
+}, 500);
+
 // Glisser-déposer
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => {

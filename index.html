@@ -31,6 +31,12 @@
           <span id="time">0:00</span>
           <label class="toggle"><input id="orbit" type="checkbox" checked /> Caméra auto</label>
         </div>
+        <div class="row">
+          <label for="offset" class="muted">Retard image</label>
+          <input id="offset" type="range" min="-300" max="800" step="10" value="0" />
+          <span id="offsetVal" class="muted">0 ms</span>
+        </div>
+        <p id="latency" class="hint"></p>
       </div>
       <p id="error" class="error" hidden></p>
     </aside>

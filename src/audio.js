@@ -66,6 +66,11 @@ function createDrumSynths() {
  */
 export class Player {
   constructor() {
+    // Contexte audio natif : l'enveloppe par défaut de Tone masque outputLatency et
+    // getOutputTimestamp, indispensables pour caler l'image sur le son réellement entendu.
+    const Native = window.AudioContext || window.webkitAudioContext;
+    if (Native) Tone.setContext(new Tone.Context({ context: new Native({ latencyHint: 'interactive' }) }));
+    this.rawContext = Tone.getContext().rawContext;
     this.transport = Tone.getTransport();
     this.reverb = new Tone.Reverb({ decay: 2.5, wet: 0.25 }).toDestination();
     // Son de marimba approximatif : FM avec attaque sèche et décroissance rapide.
@@ -84,6 +89,8 @@ export class Player {
     this.lead = 0;
     this.playing = false;
     this.lastDrum = new Map();
+    // Retard supplémentaire (s) réglable par l'utilisateur si le son arrive encore après l'image.
+    this.manualOffset = 0;
     this.transport.on('stop', () => this.lastDrum.clear());
   }
 
@@ -137,8 +144,30 @@ export class Player {
     this.playing = false;
   }
 
-  /** Temps musical (secondes) : négatif pendant la pré-roll. */
+  /**
+   * Instant (horloge AudioContext) actuellement entendu dans les haut-parleurs.
+   * Attention : transport.seconds correspond à currentTime + lookAhead (≈ 0,1 s d'avance),
+   * et le son met encore outputLatency à sortir (bien plus en Bluetooth).
+   */
+  audibleContextTime() {
+    const ctx = this.rawContext;
+    const ts = typeof ctx.getOutputTimestamp === 'function' ? ctx.getOutputTimestamp() : null;
+    if (ts && ts.contextTime > 0 && ts.performanceTime > 0) {
+      // Échantillon en cours de sortie, extrapolé jusqu'à maintenant (plus fluide que currentTime).
+      return ts.contextTime + (performance.now() - ts.performanceTime) / 1000;
+    }
+    return ctx.currentTime - (ctx.outputLatency || ctx.baseLatency || 0);
+  }
+
+  /** Avance (s) de l'horloge de programmation sur le son entendu, pour information. */
+  compensation() {
+    return Tone.now() - this.audibleContextTime();
+  }
+
+  /** Temps musical (secondes) tel qu'il est entendu : négatif pendant la pré-roll. */
   currentTime() {
-    return this.transport.seconds - this.lead;
+    if (this.transport.state !== 'started') return this.transport.seconds - this.lead;
+    const audible = this.audibleContextTime() - this.manualOffset;
+    return this.transport.getSecondsAtTime(audible) - this.lead;
   }
 }
