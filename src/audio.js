@@ -1,5 +1,30 @@
 import * as Tone from 'tone';
 
+// Échantillons générés par tools/make-samples.mjs ; index.json liste les notes disponibles.
+const SAMPLES_URL = `${import.meta.env?.BASE_URL ?? './'}samples/`;
+let sampleIndex = null;
+function getSampleIndex() {
+  sampleIndex ??= fetch(`${SAMPLES_URL}index.json`).then((r) => {
+    if (!r.ok) throw new Error(`index des échantillons : HTTP ${r.status}`);
+    return r.json();
+  });
+  return sampleIndex;
+}
+
+function loadSampler(baseUrl, notes, output, options = {}) {
+  return new Promise((resolve, reject) => {
+    const urls = Object.fromEntries(notes.map((n) => [n, `${n}.mp3`]));
+    const sampler = new Tone.Sampler({
+      urls,
+      baseUrl,
+      release: 0.5,
+      ...options,
+      onload: () => resolve(sampler),
+      onerror: reject,
+    }).connect(output);
+  });
+}
+
 /** Synthés de batterie, un par élément (voir drums.js). */
 function createDrumSynths() {
   const out = new Tone.Volume(-4).toDestination();
@@ -104,14 +129,21 @@ export class Player {
     this.lead = 0;
     this.playing = false;
     this.lastDrum = new Map();
+    // Échantillons General MIDI (FluidR3) : un sampler par programme, chargé à la demande.
+    this.useSamples = true;
+    this.sampleBus = new Tone.Volume(-4).connect(this.reverb);
+    this.sampleDry = new Tone.Volume(-4).toDestination();
+    this.samplers = new Map(); // programme | 'drums' → Promise<Sampler>
+    this.ready = new Map(); // programme | 'drums' → Sampler chargé
     // Retard supplémentaire (s) réglable par l'utilisateur si le son arrive encore après l'image.
     this.manualOffset = 0;
     this.transport.on('stop', () => this.lastDrum.clear());
   }
 
   /**
-   * @param notes notes mélodiques [{midi,time,duration,velocity,voice}] (voice : mallet | bass | pad)
-   * @param drumHits frappes [{piece,time,velocity}]
+   * @param notes notes mélodiques [{midi,time,duration,velocity,voice,program}]
+   *   voice (mallet | bass | pad) : son de synthèse de secours ; program : échantillons General MIDI
+   * @param drumHits frappes [{piece,midi,time,velocity}]
    * @param lead avance (s) laissée avant la première note
    */
   load(notes, drumHits, lead) {
@@ -120,12 +152,17 @@ export class Player {
     this.lead = lead;
 
     const melodic = notes.map((n) => ({ ...n, time: n.time + lead }));
-    const drums = drumHits.map((h) => ({ time: h.time + lead, piece: h.piece, velocity: h.velocity }));
+    const drums = drumHits.map((h) => ({ time: h.time + lead, piece: h.piece, midi: h.midi, velocity: h.velocity }));
     // Les synthés monophoniques refusent deux attaques au même instant (ex. 38 + 40 → caisse claire).
     const last = this.lastDrum;
     last.clear();
     this.parts = [
       new Tone.Part((time, ev) => {
+        const sampler = this.useSamples && this.ready.get(ev.program);
+        if (sampler) {
+          sampler.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), Math.max(0.05, ev.duration), time, ev.velocity);
+          return;
+        }
         const synth = this.voices[ev.voice] ?? this.synth;
         const dur = ev.voice === 'mallet' ? 0.4 : Math.max(0.05, ev.duration);
         synth.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), dur, time, ev.velocity);
@@ -136,12 +173,47 @@ export class Player {
         const t = Math.max(time, Tone.now(), (last.get(ev.piece) ?? -1) + 0.005);
         last.set(ev.piece, t);
         try {
+          const kit = this.useSamples && this.ready.get('drums');
+          if (kit && this.drumNotes?.has(ev.midi)) {
+            kit.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), 2, t, ev.velocity);
+            return;
+          }
           this.playDrum(ev.piece, t, ev.velocity);
         } catch (err) {
           console.warn('Frappe ignorée :', err.message);
         }
       }, drums).start(0),
     ];
+  }
+
+  /**
+   * Charge les échantillons des programmes General MIDI utilisés (et de la batterie).
+   * Les sons de synthèse servent tant qu'un instrument n'est pas chargé ou en cas d'échec.
+   */
+  async prepareSamples(programs, drums) {
+    const keys = [...new Set(programs)];
+    if (drums) keys.push('drums');
+    const jobs = keys.map((key) => {
+      if (!this.samplers.has(key)) {
+        const promise = getSampleIndex().then((index) => {
+          const notes = key === 'drums' ? index.drums : index.programs[key];
+          if (!notes?.length) throw new Error('aucune note');
+          if (key === 'drums') this.drumNotes = new Set(notes);
+          return key === 'drums'
+            ? loadSampler(`${SAMPLES_URL}drums/`, notes, this.sampleDry, { release: 1 })
+            : loadSampler(`${SAMPLES_URL}gm/${key}/`, notes, this.sampleBus);
+        });
+        this.samplers.set(
+          key,
+          promise.then((s) => this.ready.set(key, s)).catch((err) => {
+            console.warn(`Échantillons indisponibles (${key}), synthèse utilisée :`, err?.message ?? err);
+          }),
+        );
+      }
+      return this.samplers.get(key);
+    });
+    await Promise.all(jobs);
+    return keys.filter((k) => this.ready.has(k)).length === keys.length;
   }
 
   async play() {

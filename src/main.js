@@ -44,7 +44,9 @@ function rebuild() {
   shotPlan = planShots(ensemble);
 
   const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad' };
-  const notes = ['balls', 'bass', 'pads'].flatMap((role) => parts[role].map((n) => ({ ...n, voice: voiceOf[role] })));
+  const notes = ['balls', 'bass', 'pads'].flatMap((role) =>
+    parts[role].map((n) => ({ ...n, voice: voiceOf[role], program: song.tracks[n.track].program ?? 0 })),
+  );
   const kit = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
   const drumHits = kit ? kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name }))) : [];
   duration = ensemble.end;
@@ -52,11 +54,21 @@ function rebuild() {
   player.load(notes, drumHits, Math.max(0, -ensemble.start) + 0.5);
   $('seek').max = duration.toFixed(2);
   $('seek').value = 0;
+  loadSounds(notes, drumHits.length > 0);
 
   const labels = { balls: 'billes', bass: 'basse', pads: 'orgue', drums: 'batterie' };
   $('stats').textContent = ensemble.instruments
     .map((i) => `${labels[i.kind]} : ${i.onsets.length} notes`)
     .join(' · ');
+}
+
+/** Charge (en arrière-plan) les échantillons des instruments utilisés. */
+async function loadSounds(notes, drums) {
+  if (!player.useSamples) return;
+  const programs = [...new Set(notes.map((n) => n.program))];
+  $('sound').textContent = 'Chargement des sons…';
+  const ok = await player.prepareSamples(programs, drums);
+  $('sound').textContent = ok ? '' : 'Certains sons n\u2019ont pas pu être chargés : synthèse utilisée.';
 }
 
 function loadSong(s) {
@@ -115,6 +127,11 @@ let seeking = false;
 $('seek').addEventListener('pointerdown', () => (seeking = true));
 window.addEventListener('pointerup', () => (seeking = false));
 $('seek').addEventListener('input', (e) => player.seek(Number(e.target.value)));
+$('samples').addEventListener('change', (e) => {
+  player.useSamples = e.target.checked;
+  if (ensemble) rebuild();
+});
+
 $('collapse').addEventListener('click', () => {
   const collapsed = $('panel').classList.toggle('collapsed');
   $('collapse').setAttribute('aria-expanded', String(!collapsed));
