@@ -54,7 +54,7 @@ export class Stage {
 
     const floor = new THREE.Mesh(
       new THREE.CircleGeometry(60, 96),
-      new THREE.MeshStandardMaterial({ color: 0x0b0c12, roughness: 0.3, metalness: 0.5 }),
+      new THREE.MeshStandardMaterial({ color: 0x0b0c12, roughness: 0.6, metalness: 0.15 }),
     );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
