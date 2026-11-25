@@ -48,7 +48,7 @@ const browser = await playwright.chromium.launch({
   args: ['--autoplay-policy=no-user-gesture-required'],
 });
 try {
-  const page = await browser.newPage();
+  const page = await browser.newPage({ acceptDownloads: true });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => m.type() === 'error' && !m.text().includes('GL Driver') && errors.push(m.text()));
@@ -68,6 +68,13 @@ try {
   await page.waitForTimeout(2500);
   const t = await page.evaluate(() => window.animusic.player.currentTime());
   check(t > 0.5, `la lecture avance (t = ${t.toFixed(2)} s)`);
+
+  // Export glTF de la démo (animation cuite).
+  const download = page.waitForEvent('download', { timeout: 60000 });
+  await page.click('#exportGltf');
+  const glb = await download;
+  const size = (await readFile(await glb.path())).byteLength;
+  check(glb.suggestedFilename().endsWith('.glb') && size > 500_000, `export glTF ${glb.suggestedFilename()} (${(size / 1e6).toFixed(1)} Mo)`);
 
   // Lecture d'un fichier MIDI généré à la volée.
   const { Midi } = midiPkg;

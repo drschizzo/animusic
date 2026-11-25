@@ -133,14 +133,23 @@ function download(blob, name) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 function status(msg) {
   $('exportStatus').hidden = !msg;
   $('exportStatus').textContent = msg ?? '';
 }
-const safeName = () => (song?.name || 'animusic').replace(/[^\w\-À-ÿ ]+/g, '_').trim() || 'animusic';
+// Nom de fichier en ASCII : certains navigateurs ignorent les noms accentués.
+const safeName = () =>
+  (song?.name || 'animusic')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\- ]+/g, '_')
+    .trim() || 'animusic';
 
 async function startRecording() {
   if (!ensemble || !window.MediaRecorder) return status('Enregistrement vidéo non pris en charge par ce navigateur.');
@@ -177,6 +186,30 @@ function stopRecording() {
   $('record').textContent = '⏺ Vidéo';
 }
 $('record').addEventListener('click', () => (recorder ? stopRecording() : startRecording()));
+
+// ---- Export glTF pour Blender (animation cuite, chargé à la demande) ----
+$('exportGltf').addEventListener('click', async () => {
+  if (!ensemble || recorder) return;
+  player.pause();
+  updatePlayButton();
+  $('exportGltf').disabled = true;
+  try {
+    const { exportGLTF } = await import('./exporter.js');
+    const glb = await exportGLTF(stage, ensemble, shotPlan, {
+      fps: 30,
+      trackColors: song.tracks.map((_, i) => colorFor(i)),
+      name: safeName(),
+      onProgress: (f) => status(`Export glTF : ${Math.round(f * 100)} %`),
+    });
+    download(new Blob([glb], { type: 'model/gltf-binary' }), `${safeName()}.glb`);
+    status(`Export terminé (${(glb.byteLength / 1e6).toFixed(1)} Mo, 30 img/s). Son décalé de ${(-ensemble.start).toFixed(2)} s.`);
+  } catch (err) {
+    console.error(err);
+    status(`Échec de l'export : ${err.message}`);
+  } finally {
+    $('exportGltf').disabled = false;
+  }
+});
 
 $('samples').addEventListener('change', (e) => {
   player.useSamples = e.target.checked;
