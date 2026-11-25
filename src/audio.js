@@ -145,11 +145,20 @@ export class Player {
    *   voice (mallet | bass | pad) : son de synthèse de secours ; program : échantillons General MIDI
    * @param drumHits frappes [{piece,midi,time,velocity}]
    * @param lead avance (s) laissée avant la première note
+   * @param audio AudioBuffer de l'enregistrement original (import audio), ou null
    */
-  load(notes, drumHits, lead) {
+  load(notes, drumHits, lead, audio = null) {
     this.stop();
     this.parts.forEach((p) => p.dispose());
     this.lead = lead;
+
+    // Enregistrement original : calé sur le transport (pause, saut et vidéo suivent).
+    this.original?.dispose();
+    this.original = null;
+    if (audio) {
+      this.original = new Tone.Player(audio).toDestination();
+      this.original.sync().start(lead);
+    }
 
     const melodic = notes.map((n) => ({ ...n, time: n.time + lead }));
     const drums = drumHits.map((h) => ({ time: h.time + lead, piece: h.piece, midi: h.midi, velocity: h.velocity }));
@@ -184,6 +193,14 @@ export class Player {
         }
       }, drums).start(0),
     ];
+    this.setListenOriginal(!!audio);
+  }
+
+  /** Avec un enregistrement importé : l'entendre lui (true) ou la transcription jouée (false). */
+  setListenOriginal(original) {
+    this.listenOriginal = original && !!this.original;
+    for (const p of this.parts) p.mute = this.listenOriginal;
+    if (this.original) this.original.mute = !this.listenOriginal;
   }
 
   /**

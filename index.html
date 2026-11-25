@@ -14,11 +14,11 @@
         <button id="collapse" class="icon" title="Replier le panneau" aria-expanded="true">▾</button>
       </h1>
       <div id="panelBody">
-      <p class="hint">Glisse un fichier <b>.mid</b> sur la page, ou :</p>
+      <p class="hint">Glisse un fichier <b>.mid</b> ou un enregistrement (<b>.mp3</b>, .wav…) sur la page, ou :</p>
       <div class="row">
         <label class="btn">
-          Ouvrir un MIDI…
-          <input id="file" type="file" accept=".mid,.midi,audio/midi" hidden />
+          Ouvrir…
+          <input id="file" type="file" accept=".mid,.midi,audio/*,.mp3,.wav,.ogg,.flac,.m4a" hidden />
         </label>
         <button id="demo" class="btn">Démo</button>
       </div>
@@ -67,6 +67,15 @@
           >
           <span id="fps" class="muted"></span>
         </div>
+        <div class="row" id="listenRow" hidden>
+          <label class="toggle"
+            >Écouter
+            <select id="listen">
+              <option value="original" selected>l’enregistrement original</option>
+              <option value="transcription">la transcription</option>
+            </select></label
+          >
+        </div>
         <div class="row">
           <label class="toggle"><input id="samples" type="checkbox" checked /> Sons réalistes (SoundFont FluidR3)</label>
         </div>
@@ -77,7 +86,7 @@
       </div>
     </aside>
 
-    <div id="drop" hidden>Dépose ton fichier MIDI</div>
+    <div id="drop" hidden>Dépose ton fichier MIDI ou audio</div>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

@@ -3,6 +3,7 @@ import './style.css';
 import { buildEnsemble, assignRoles, ROLES } from './arranger.js';
 import { planShots, cameraAt } from './director.js';
 import { parseMidi, demoSong } from './midi.js';
+import { isAudioFile, importAudio } from './audioImport.js';
 import { Player } from './audio.js';
 import { Stage } from './scene.js';
 
@@ -51,7 +52,8 @@ function rebuild() {
   const drumHits = kit ? kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name }))) : [];
   duration = ensemble.end;
   // Pré-roll : laisse le temps à la première bille de voler / au premier bras de se lever.
-  player.load(notes, drumHits, Math.max(0, -ensemble.start) + 0.5);
+  player.load(notes, drumHits, Math.max(0, -ensemble.start) + 0.5, song.audio ?? null);
+  if (song.audio) player.setListenOriginal($('listen').value === 'original');
   $('seek').max = duration.toFixed(2);
   $('seek').value = 0;
   loadSounds(notes, drumHits.length > 0);
@@ -73,7 +75,9 @@ async function loadSounds(notes, drums) {
 
 function loadSong(s) {
   song = s;
-  assignRoles(s.tracks).forEach((role, i) => (s.tracks[i].role = role));
+  // Un import audio arrive avec des rôles déjà décidés ; un MIDI passe par l'arrangeur.
+  if (!s.tracks.every((t) => t.role)) assignRoles(s.tracks).forEach((role, i) => (s.tracks[i].role = role));
+  $('listenRow').hidden = !s.audio;
   $('song').hidden = false;
   $('songName').textContent = s.name;
   const list = $('tracks');
@@ -95,13 +99,35 @@ function loadSong(s) {
   rebuild();
 }
 
+let importing = false;
 async function loadFile(file) {
+  if (importing) return;
   try {
-    const buf = await file.arrayBuffer();
-    loadSong(parseMidi(buf, file.name.replace(/\.midi?$/i, '')));
+    if (isAudioFile(file)) {
+      // Enregistrement : transcription dans le navigateur (chargée à la demande).
+      importing = true;
+      player.stop();
+      updatePlayButton();
+      document.body.classList.add('busy');
+      showError('');
+      const song = await importAudio(file, (msg) => status(msg));
+      const a = song.analysis;
+      loadSong(song);
+      status(
+        `Transcription : ${a.notes} notes${a.drumsAbsent ? ', pas de batterie détectée' : `, ${a.drums} coups de batterie`}. ` +
+          'Rôles modifiables ci-dessus.',
+      );
+    } else {
+      const buf = await file.arrayBuffer();
+      loadSong(parseMidi(buf, file.name.replace(/\.midi?$/i, '')));
+    }
   } catch (err) {
     console.error(err);
-    showError(`Impossible de lire ce fichier MIDI : ${err.message}`);
+    status('');
+    showError(`Impossible de lire ce fichier : ${err.message}`);
+  } finally {
+    importing = false;
+    document.body.classList.remove('busy');
   }
 }
 
@@ -210,6 +236,8 @@ $('exportGltf').addEventListener('click', async () => {
     $('exportGltf').disabled = false;
   }
 });
+
+$('listen').addEventListener('change', (e) => player.setListenOriginal(e.target.value === 'original'));
 
 $('samples').addEventListener('change', (e) => {
   player.useSamples = e.target.checked;

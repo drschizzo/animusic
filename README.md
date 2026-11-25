@@ -10,7 +10,9 @@ batterie, des médiators pincent des cordes de basse et des tubes d'orgue s'illu
 
 ## Utilisation
 
-- Glisse un `.mid` sur la page (ou « Ouvrir un MIDI… ») ; une démo se charge au démarrage.
+- Glisse un `.mid` sur la page (ou « Ouvrir… ») ; une démo se charge au démarrage.
+- **Ou un enregistrement** (`.mp3`, `.wav`, `.ogg`, `.flac`…) : il est transcrit dans le navigateur (rien n'est
+  envoyé nulle part), puis la scène est animée **sur le vrai son** ; un sélecteur permet d'écouter la transcription.
 - Chaque piste reçoit automatiquement un instrument (**Billes**, **Basse**, **Orgue**, **Batterie**),
   modifiable dans la liste des pistes, ou **Masquée**.
 - **Caméra** : *Réalisateur* (plans automatiques), *Orbite*, ou *Libre* (souris). Toucher la vue passe en libre.
@@ -45,6 +47,23 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
 - **Réalisateur** : la liste des plans est calculée pour tout le morceau ; chaque segment cadre l'instrument le plus
   actif par rapport à son niveau habituel (bonus à son entrée), en alternant plans larges, rapprochés, contre-plongées.
 
+## Import audio (mp3 → animation)
+
+1. **Notes** : [Basic Pitch](https://github.com/spotify/basic-pitch) (Spotify, Apache-2.0), réseau de neurones léger
+   exécuté avec TensorFlow.js (chargé seulement à l'import d'un fichier audio, modèle servi dans `public/models/`).
+2. **Batterie** (`src/drumDetect.js`, dans un Web Worker) : spectrogramme, séparation harmonique / percussive (HPSS,
+   filtres médians), puis montées d'énergie par bande — grave → grosse caisse, 180-3000 Hz → caisse claire,
+   5-11 kHz → charleston. Si l'aigu ne contient presque pas d'énergie percussive (piano, cordes…), on conclut à
+   l'absence de batterie.
+3. **Répartition** (`src/audioArrange.js`) : la note la plus grave de chaque attaque, sous un seuil relatif au morceau,
+   va à la basse ; les notes longues à l'orgue ; le reste aux billes (polyphonie limitée).
+4. **Lecture** de l'enregistrement original, calé sur le transport (pause, saut et vidéo suivent).
+
+Précision mesurée par `tools/audio-bench.cjs` sur des rendus FluidSynth dont la partition est connue (F1, attaque à
+± 50 ms) : notes à la hauteur exacte 50-85 % selon les morceaux (piano seul ≈ 85 %, mix dense ≈ 50 %), basse 30-65 %,
+grosse caisse ≈ 90 %, caisse claire ≈ 93 %, charleston 60-80 %, aucun coup fantôme sur piano ou cordes seuls.
+C'est fait pour animer, pas pour obtenir une partition : on entend toujours le vrai morceau.
+
 ## Synchro image / son
 
 L'image est calée sur l'échantillon **réellement en train de sortir des haut-parleurs**
@@ -64,10 +83,12 @@ l'image suit l'horloge de rendu audio.
 | `src/scene.js` | Scène, lumières, post-traitement, qualité ; instancie la vue de chaque instrument |
 | `src/audio.js` | Tone.js : échantillons GM, synthèse de secours, horloge de référence, capture pour la vidéo |
 | `src/exporter.js` | Export glTF (animation cuite) |
+| `src/audioImport.js`, `src/transcribe.js`, `src/drumDetect.js`, `src/audioArrange.js` | Import d'un enregistrement : décodage, transcription, batterie, répartition |
 | `src/main.js` | Interface et boucle de rendu |
 
 Outils : `tools/make-samples.mjs` (génère les échantillons avec FluidSynth), `tools/bench.mjs`,
-`tools/smoke.mjs`, `tools/stress-midi.mjs` (fichiers MIDI de stress).
+`tools/smoke.mjs`, `tools/stress-midi.mjs` (fichiers MIDI de stress), `tools/audio-bench.cjs` (précision de l'import
+audio : `node tools/audio-bench.cjs morceau.mp3` à côté de `morceau.mid`, ffmpeg requis).
 
 ## Export vers Blender
 
@@ -78,10 +99,11 @@ début de l'animation est indiqué dans le message d'export et dans les proprié
 (`animusic.decalageAudioSecondes`). Non exportés : sol, lumières et éclats lumineux (émission animée, non
 standard en glTF) — à recréer dans Blender.
 
-## Sons
+## Sons et modèles
 
 Les échantillons de `public/samples/` sont extraits du SoundFont *Fluid (R3) General MIDI* de Frank Wen,
-sous licence MIT (voir `public/samples/LICENSE.txt`). Pour les régénérer :
+sous licence MIT (voir `public/samples/LICENSE.txt`). Le modèle de transcription de `public/models/basic-pitch/`
+est celui de Basic Pitch (Spotify), sous licence Apache-2.0. Pour régénérer les échantillons :
 
 ```bash
 sudo apt-get install fluidsynth fluid-soundfont-gm ffmpeg

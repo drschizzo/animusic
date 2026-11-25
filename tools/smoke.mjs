@@ -37,6 +37,50 @@ const server = createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, r));
 const url = `http://localhost:${server.address().port}/animusic/`;
 
+/** WAV 16 bits mono de 6 s : arpège (sinus + harmoniques) avec grosse caisse et charleston. */
+function makeWav(sr = 22050, seconds = 6) {
+  const n = sr * seconds;
+  const x = new Float32Array(n);
+  let seed = 7;
+  const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  [60, 64, 67, 72, 67, 64, 60, 64, 67, 72, 76, 72].forEach((midi, i) => {
+    const f = 440 * 2 ** ((midi - 69) / 12);
+    const start = Math.round((0.3 + i * 0.45) * sr);
+    for (let k = 0; k < sr * 0.4 && start + k < n; k++) {
+      const t = k / sr;
+      x[start + k] += 0.3 * Math.exp(-t * 4) * (Math.sin(2 * Math.PI * f * t) + 0.4 * Math.sin(4 * Math.PI * f * t));
+    }
+  });
+  for (let b = 0; b < 12; b++) {
+    const start = Math.round((0.3 + b * 0.45) * sr);
+    let hp = 0;
+    let prev = 0;
+    for (let k = 0; k < sr * 0.2 && start + k < n; k++) {
+      const t = k / sr;
+      if (b % 2 === 0) x[start + k] += 0.8 * Math.sin(2 * Math.PI * (55 + 80 * Math.exp(-t * 30)) * t) * Math.exp(-t * 15);
+      const w = noise();
+      hp = 0.6 * (hp + w - prev); // passe-haut grossier
+      prev = w;
+      x[start + Math.round(0.225 * sr) + k] += 0.25 * hp * Math.exp(-t * 50);
+    }
+  }
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + n * 2, 4);
+  buf.write('WAVEfmt ', 8);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sr, 24);
+  buf.writeUInt32LE(sr * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) buf.writeInt16LE(Math.round(Math.max(-1, Math.min(1, x[i])) * 32000), 44 + i * 2);
+  return buf;
+}
+
 const failures = [];
 const check = (ok, msg) => {
   console.log(`${ok ? '✓' : '✗'} ${msg}`);
@@ -84,7 +128,22 @@ try {
   await page.setInputFiles('#file', { name: 'test.mid', mimeType: 'audio/midi', buffer: Buffer.from(midi.toArray()) });
   await page.waitForTimeout(500);
   const stats = await page.textContent('#stats');
-  check(stats.includes('4 notes'), `fichier MIDI lu (${stats})`);
+  check(stats.trim() === 'billes : 4 notes', `fichier MIDI lu (${stats})`);
+
+  // Import d'un enregistrement (WAV synthétique) : transcription + batterie + lecture de l'original.
+  await page.setInputFiles('#file', { name: 'essai.wav', mimeType: 'audio/wav', buffer: makeWav() });
+  await page.waitForFunction(() => document.getElementById('exportStatus').textContent.startsWith('Transcription'), null, {
+    timeout: 180000,
+  });
+  const imported = await page.evaluate(() => ({
+    roles: [...document.querySelectorAll('#tracks select')].map((s) => s.value),
+    status: document.getElementById('exportStatus').textContent,
+  }));
+  check(imported.roles.includes('balls') && imported.roles.includes('drums'), `audio importé : ${imported.status} (${imported.roles.join(', ')})`);
+  await page.click('#play');
+  await page.waitForTimeout(1500);
+  const original = await page.evaluate(() => window.animusic.player.original?.state);
+  check(original === 'started', `enregistrement original en lecture (${original})`);
 
   check(missing.length === 0, `aucune ressource manquante ${missing.slice(0, 3).join(' ')}`);
   check(errors.length === 0, `aucune erreur JavaScript ${errors.slice(0, 3).join(' | ')}`);

@@ -169,3 +169,9 @@ select option {
 [hidden] {
   display: none !important;
 }
+
+body.busy #panel .btn,
+body.busy #panel select {
+  pointer-events: none;
+  opacity: 0.5;
+}
