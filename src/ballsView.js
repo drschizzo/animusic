@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose } from './choreography.js';
 import { lowerBound, upperBound } from './util.js';
 import { mat, fx } from './materials.js';
-import { roundedBox, lathe, rod, V } from './parts.js';
+import { roundedBox, lathe, rod, ringOf, V } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const TRAIL = 6; // fantômes lumineux derrière chaque bille
@@ -114,8 +114,25 @@ export class BallsView {
           [0, 0.2],
         ],
         72,
-        dark,
+        // Plateau mat et assez clair : les ombres et l'occlusion des canons s'y lisent.
+        new THREE.MeshStandardMaterial({ color: 0x30343e, roughness: 0.68, metalness: 0.4 }),
       );
+      // Ombre de contact au sol : le plateau ne « flotte » plus sur son reflet.
+      const shade = new THREE.Mesh(
+        new THREE.RingGeometry(R + 0.3, R + 1.5, 72, 1),
+        new THREE.ShaderMaterial({
+          uniforms: { uInner: { value: R + 0.6 }, uOuter: { value: R + 1.5 } },
+          vertexShader: 'varying float vR; void main(){ vR = length(position.xy); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+          fragmentShader:
+            'uniform float uInner; uniform float uOuter; varying float vR; void main(){ float a = 1.0 - smoothstep(uInner, uOuter, vR); gl_FragColor = vec4(0.0, 0.0, 0.0, 0.8 * a * a); }',
+          transparent: true,
+          depthWrite: false,
+        }),
+      );
+      shade.rotation.x = -Math.PI / 2;
+      shade.position.y = 0.004;
+      shade.renderOrder = -1;
+      this.content.add(fx(shade));
       this.hubMat = mat.glow(0xffc46b, 1.6);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(R + 0.53, 0.018, 8, 96), this.hubMat);
       ring.rotation.x = Math.PI / 2;
@@ -145,6 +162,9 @@ export class BallsView {
     const bandGeo = new THREE.TorusGeometry(0.125, 0.018, 8, 28);
     const muzzleGeo = new THREE.TorusGeometry(0.112, 0.022, 10, 28);
     const bore = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const flangeGeo = new THREE.CylinderGeometry(0.27, 0.29, 0.04, 28);
+    const boltGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.03, 8);
+    const seatGeo = new THREE.TorusGeometry(0.3, 0.008, 6, 40);
     const boreGeo = new THREE.CircleGeometry(0.085, 20);
     this.launcherParts = ch.launchers.map((launcher) => {
       const pivot = new THREE.Vector3(...launcher.pivot);
@@ -160,6 +180,16 @@ export class BallsView {
         steel,
       );
       post.position.set(pivot.x, 0.27, pivot.z);
+      // Embase boulonnée sur le plateau, soulignée d'un filet lumineux.
+      const flange = new THREE.Mesh(flangeGeo, dark);
+      flange.position.set(pivot.x, 0.27 + 0.02, pivot.z);
+      flange.castShadow = flange.receiveShadow = true;
+      const bolts = ringOf(6, 0.235, boltGeo, chrome, 0.05);
+      bolts.position.set(pivot.x, 0.27, pivot.z);
+      const seat = new THREE.Mesh(seatGeo, this.hubMat);
+      seat.rotation.x = Math.PI / 2;
+      seat.position.set(pivot.x, 0.275, pivot.z);
+      this.content.add(flange, bolts, seat);
       const joint = new THREE.Mesh(new THREE.SphereGeometry(0.19, 28, 18), chrome);
       joint.position.copy(pivot);
       joint.castShadow = true;
