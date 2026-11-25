@@ -129,11 +129,12 @@ export class Stage {
     this.controls.update();
     const wall = performance.now() / 1000;
     this.environment.update(wall, this.pulse);
-    // Les ombres ne dépendent pas de la caméra : calculées une fois (pendant le rendu
-    // du reflet), elles resservent pour le rendu principal.
-    this.renderer.shadowMap.autoUpdate = true;
+    // Les ombres ne dépendent pas de la caméra : calculées au premier rendu de l'image
+    // (sonde ou reflet), elles resservent pour tous les suivants.
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.environment.renderProbe();
     this.environment.renderReflection(this.renderer, this.camera);
-    if (this.environment.reflections) this.renderer.shadowMap.autoUpdate = false;
     this.post.render(wall);
   }
 }

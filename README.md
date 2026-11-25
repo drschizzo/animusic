@@ -76,13 +76,17 @@ Le programme General MIDI donne un indice, les statistiques des notes tranchent 
 - **Sol** : plateau poli dont la rugosité varie ; il reflète la scène par un rendu miroir anticrénelé, puis une
   pyramide de flous gaussiens (quatre niveaux, chacun deux fois plus flou) entre lesquels le sol interpole selon sa
   rugosité : reflets nets là où il est lisse, diffus ailleurs, sans effet de blocs.
+- **Sonde de reflets dynamique** : une caméra à six faces, au-dessus du centre de la scène, filme en continu ce qui
+  l'entoure ; l'image, préfiltrée par niveaux de rugosité, sert d'environnement à tous les matériaux. Les chromes et
+  les cuivres reflètent donc la scène réelle (l'orgue ou le laser qui s'allument), et plus un décor fixe. Deux faces
+  par image en qualité haute (tour complet toutes les trois images), une en moyenne, décor fixe en basse.
 - **Lumière indirecte (SSGI)**, `src/ssgi.js` : en qualité haute, la lumière visible à l'écran éclaire les surfaces
   voisines (flaque verte au pied de l'orgue, lames qui teintent leurs résonateurs…). Un tampon géométrique (normales,
   couleur de base, profondeur) est rendu une fois et partagé avec l'occlusion ambiante ; à demi-résolution, six rayons
   par pixel marchent dans la profondeur et récoltent la lumière de l'image, puis un flou respectant les arêtes
   débruite le résultat. Limite inhérente à la technique : seul ce qui est à l'écran éclaire. Débrayable (case
   *Lumière indirecte*).
-- **Lumière** : carte d'environnement « studio » générée au démarrage (boîtes à lumière), lumière principale avec
+- **Lumière** : boîtes à lumière de studio visibles dans les seuls reflets, lumière principale avec
   ombres douces 4K, contre-jours colorés, lampes ponctuelles pilotées par la musique (orgue, cristal, frappes des
   lames), projecteurs à faisceaux volumétriques et bordure de scène qui pulsent avec la grosse caisse.
 - **Matériaux** physiques (laque sous vernis, métal brossé, verre, bois veiné) à textures procédurales : aucun

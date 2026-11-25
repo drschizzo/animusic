@@ -1,6 +1,6 @@
 // Capture d'écran du build de production à un instant du morceau de démo.
 //
-//   npm run build && node tools/shot.mjs sortie.png [--t 12] [--cam x,y,z,tx,ty,tz] [autre.png --t 20 …] [--ui] [--size 1280x720] [--quality high] [--gi off|debug]
+//   npm run build && node tools/shot.mjs sortie.png [--t 12] [--cam x,y,z,tx,ty,tz] [autre.png --t 20 …] [--ui] [--size 1280x720] [--quality high] [--gi off|debug] [--probe off]
 //
 // Sans --cam, c'est le plan du réalisateur à l'instant t. Sert à l'aperçu du README.
 
@@ -53,13 +53,18 @@ try {
   await page.waitForFunction(() => window.animusic?.ensemble, null, { timeout: 60000 });
   for (const { out, t, cam } of shots) {
     await page.evaluate(
-      ({ t, cam, quality, ui, gi }) => {
+      ({ t, cam, quality, ui, gi, probe }) => {
         const a = window.animusic;
         a.stage.setIndirectLight(gi !== 'off');
         a.stage.post.ssgi.debug = gi === 'debug';
         if (!ui) document.getElementById('panel').style.display = 'none';
         document.getElementById('quality').value = quality;
         document.getElementById('quality').dispatchEvent(new Event('change'));
+        // Après le réglage de qualité, qui réactive la sonde.
+        if (probe === 'off') {
+          a.stage.environment.probeFaces = 0;
+          a.stage.scene.environment = a.stage.environment.studio;
+        }
         a.player.seek(t);
         document.getElementById('camMode').value = cam ? 'free' : 'director';
         document.getElementById('camMode').dispatchEvent(new Event('change'));
@@ -68,10 +73,10 @@ try {
           a.stage.setCamera({ position: c.slice(0, 3), target: c.slice(3, 6) });
         }
       },
-      { t, cam, quality, ui: args.includes('--ui'), gi: opt('gi', 'on') },
+      { t, cam, quality, ui: args.includes('--ui'), gi: opt('gi', 'on'), probe: opt('probe', 'on') },
     );
-    // Laisse passer quelques images (compilation des shaders, reflets, halo).
-    await page.evaluate(() => new Promise((r) => { let n = 0; const f = () => (++n > 4 ? r() : requestAnimationFrame(f)); f(); }));
+    // Laisse passer quelques images (compilation des shaders, tour complet de la sonde de reflets).
+    await page.evaluate(() => new Promise((r) => { let n = 0; const f = () => (++n > 10 ? r() : requestAnimationFrame(f)); f(); }));
     await page.screenshot({ path: out, timeout: 180000 });
     console.log(`${out} (t = ${t} s)`);
   }

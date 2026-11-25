@@ -10,16 +10,19 @@ const HAZE = 0x070a14;
 const BLUR_LEVELS = 4;
 const ACCENTS = [0x49d8ff, 0xff4fa3, 0xffc46b, 0x8f7bff];
 
-/** Environnement pour les reflets : pièce sombre éclairée par quelques boîtes à lumière. */
-function studioEnvironment(renderer) {
-  const scene = new THREE.Scene();
-  const room = new THREE.Mesh(new THREE.BoxGeometry(40, 24, 40), new THREE.MeshBasicMaterial({ color: 0x05060a, side: THREE.BackSide }));
-  scene.add(room);
+const PROBE_LAYER = 1; // objets visibles seulement par la sonde de reflets
+
+/** Boîtes à lumière du « studio » : elles n'existent que dans les reflets. */
+function studioPanels() {
+  const group = new THREE.Group();
   const panel = (color, gain, w, h, pos, look = [0, 0, 0]) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(gain), side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(gain), side: THREE.DoubleSide, fog: false }),
+    );
     m.position.set(...pos);
     m.lookAt(...look);
-    scene.add(m);
+    group.add(m);
   };
   panel(0xfff2e0, 2.2, 14, 8, [0, 11.5, 2]); // grande boîte zénithale chaude
   panel(0x7fd4ff, 3.5, 3, 14, [-19, 3, -4]); // bandes latérales froides
@@ -27,6 +30,14 @@ function studioEnvironment(renderer) {
   panel(0xff5fae, 3, 10, 2.5, [6, 4, -19]); // accent magenta au fond
   panel(0xffffff, 2, 16, 1.2, [0, 1.5, 19]); // liseré bas côté public
   for (let i = 0; i < 6; i++) panel(0xffffff, 7, 1.2, 1.2, [-12.5 + i * 5, 9, -12 + (i % 2) * 20]); // spots ponctuels
+  return group;
+}
+
+/** Environnement fixe (qualité basse, et point de départ) : pièce sombre et boîtes à lumière. */
+function studioEnvironment(renderer) {
+  const scene = new THREE.Scene();
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(40, 24, 40), new THREE.MeshBasicMaterial({ color: 0x05060a, side: THREE.BackSide })));
+  scene.add(studioPanels());
   const pmrem = new THREE.PMREMGenerator(renderer);
   const map = pmrem.fromScene(scene, 0.03).texture;
   pmrem.dispose();
@@ -35,6 +46,61 @@ function studioEnvironment(renderer) {
     o.material?.dispose();
   });
   return map;
+}
+
+/**
+ * Sonde de reflets dynamique : une caméra à six faces, au-dessus du centre de la scène,
+ * filme en continu ce qui l'entoure (instruments, lumières, boîtes à lumière). L'image
+ * obtenue, préfiltrée par niveaux de rugosité, remplace l'environnement fixe : les
+ * métaux reflètent alors l'orgue ou le laser qui s'allument à côté d'eux, et toutes les
+ * surfaces reçoivent leur lumière ambiante.
+ *
+ * Pour étaler le coût, seules quelques faces sont rendues à chaque image ; le
+ * préfiltrage a lieu quand le tour des six faces est terminé.
+ */
+class ReflectionProbe {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.pmrem = new THREE.PMREMGenerator(renderer);
+    this.filtered = null;
+    this.face = 0;
+    this.setSize(256);
+  }
+
+  setSize(size) {
+    if (this.size === size) return;
+    this.size = size;
+    this.target?.dispose();
+    this.filtered?.dispose();
+    this.filtered = null;
+    this.target = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType });
+    this.camera = new THREE.CubeCamera(0.3, 200, this.target);
+    this.camera.coordinateSystem = this.renderer.coordinateSystem;
+    this.camera.updateCoordinateSystem();
+    for (const c of this.camera.children) c.layers.enable(PROBE_LAYER);
+    this.face = 0;
+  }
+
+  /** Rend `faces` faces de plus ; renvoie la texture d'environnement si elle vient d'être refaite. */
+  update(scene, position, faces) {
+    const renderer = this.renderer;
+    const previous = renderer.getRenderTarget();
+    this.camera.position.copy(position);
+    this.camera.updateMatrixWorld();
+    let fresh = null;
+    for (let i = 0; i < faces; i++) {
+      renderer.setRenderTarget(this.target, this.face);
+      renderer.clear();
+      renderer.render(scene, this.camera.children[this.face]);
+      this.face = (this.face + 1) % 6;
+      if (this.face === 0) {
+        this.filtered = this.pmrem.fromCubemap(this.target.texture, this.filtered);
+        fresh = this.filtered.texture;
+      }
+    }
+    renderer.setRenderTarget(previous);
+    return fresh;
+  }
 }
 
 /** Sol poli : MeshStandardMaterial enrichi d'un reflet planaire flouté. */
@@ -252,11 +318,18 @@ export class Environment {
     this.radius = 8;
     scene.background = new THREE.Color(HAZE);
     scene.fog = new THREE.FogExp2(HAZE, 0.016);
-    scene.environment = studioEnvironment(renderer);
+    this.studio = studioEnvironment(renderer);
+    scene.environment = this.studio;
     scene.environmentIntensity = 0.8;
+    this.probe = new ReflectionProbe(renderer);
+    this.probePosition = new THREE.Vector3();
 
     const root = (this.root = new THREE.Group());
     scene.add(root);
+    // Les boîtes à lumière sont dans la scène, mais seule la sonde de reflets les voit.
+    this.panels = studioPanels();
+    this.panels.traverse((o) => o.layers.set(PROBE_LAYER));
+    root.add(this.panels);
 
     // --- Lumières
     root.add(new THREE.HemisphereLight(0x8fa4ff, 0x1a120c, 0.32));
@@ -383,6 +456,9 @@ export class Environment {
     this.curb.scale.setScalar(stageR);
     this.curb.scale.z = 1;
     this.dustMat.uniforms.uRadius.value = stageR;
+    this.panels.scale.setScalar(stageR / 14.2);
+    this.probePosition.set(0, 2.8 + R * 0.1, -R * 0.2);
+    this.probe.face = 0;
 
     // Lumière principale : cadre d'ombre ajusté au plateau pour garder des ombres nettes.
     this.key.position.set(R * 0.55, R * 1.5 + 6, R * 0.75);
@@ -430,6 +506,24 @@ export class Environment {
     this.edgeMat.emissiveIntensity = 3 + 4 * pulse;
   }
 
+  /**
+   * Met à jour la sonde de reflets (à appeler avant les autres rendus). Le sol y est
+   * rendu sans son reflet miroir (calculé pour la caméra principale), et sans
+   * faisceaux ni poussières, qui noieraient l'image vue de l'intérieur.
+   */
+  renderProbe() {
+    if (!this.probeFaces) return;
+    const hidden = [this.dust, ...this.heads.map((h) => h.beam)];
+    const visible = hidden.map((o) => o.visible);
+    hidden.forEach((o) => (o.visible = false));
+    const reflect = this.floor.uniforms.uReflect.value;
+    this.floor.uniforms.uReflect.value = 0;
+    const fresh = this.probe.update(this.scene, this.probePosition, this.probeFaces);
+    this.floor.uniforms.uReflect.value = reflect;
+    hidden.forEach((o, i) => (o.visible = visible[i]));
+    if (fresh) this.scene.environment = fresh;
+  }
+
   /** Rendu du reflet du sol (à appeler avant le rendu principal). */
   renderReflection(renderer, camera) {
     if (!this.reflections) return;
@@ -442,6 +536,10 @@ export class Environment {
   }
 
   setQuality(level) {
+    // Sonde de reflets : deux faces par image en qualité haute, une (plus petite) en moyenne.
+    this.probeFaces = level === 'high' ? 2 : level === 'medium' ? 1 : 0;
+    this.probe.setSize(level === 'high' ? 256 : 128);
+    if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
     this.reflections = level !== 'low';
     this.reflectionScale = level === 'high' ? 0.75 : 0.5;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;
