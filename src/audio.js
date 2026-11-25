@@ -262,10 +262,27 @@ export class Player {
     return Tone.now() - this.audibleContextTime();
   }
 
+  /**
+   * Flux audio du mixage, pour l'enregistrement vidéo. Pendant l'enregistrement,
+   * le son est capté à la source (sans latence de sortie) : l'image doit suivre
+   * l'horloge de rendu audio et non ce qui sort des haut-parleurs.
+   */
+  startCapture() {
+    this.captureDest ??= this.rawContext.createMediaStreamDestination();
+    Tone.getDestination().connect(this.captureDest);
+    this.recording = true;
+    return this.captureDest.stream;
+  }
+
+  stopCapture() {
+    if (this.captureDest) Tone.getDestination().disconnect(this.captureDest);
+    this.recording = false;
+  }
+
   /** Temps musical (secondes) tel qu'il est entendu : négatif pendant la pré-roll. */
   currentTime() {
     if (this.transport.state !== 'started') return this.transport.seconds - this.lead;
-    const audible = this.audibleContextTime() - this.manualOffset;
+    const audible = this.recording ? this.rawContext.currentTime : this.audibleContextTime() - this.manualOffset;
     return this.transport.getSecondsAtTime(audible) - this.lead;
   }
 }

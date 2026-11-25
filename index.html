@@ -32,6 +32,11 @@
           <button id="restart" class="btn">⏮ Début</button>
         </div>
         <div class="row">
+          <button id="record" class="btn" title="Rejoue le morceau depuis le début et l'enregistre en vidéo">⏺ Vidéo</button>
+          <button id="exportGltf" class="btn" title="Animation complète au format glTF, à importer dans Blender">⇩ Blender</button>
+        </div>
+        <p id="exportStatus" class="hint" hidden></p>
+        <div class="row">
           <input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Position dans le morceau" />
         </div>
         <div class="row">

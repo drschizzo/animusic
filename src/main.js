@@ -127,6 +127,57 @@ let seeking = false;
 $('seek').addEventListener('pointerdown', () => (seeking = true));
 window.addEventListener('pointerup', () => (seeking = false));
 $('seek').addEventListener('input', (e) => player.seek(Number(e.target.value)));
+// ---- Enregistrement vidéo (temps réel : canvas + mixage audio) ----
+let recorder = null;
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+function status(msg) {
+  $('exportStatus').hidden = !msg;
+  $('exportStatus').textContent = msg ?? '';
+}
+const safeName = () => (song?.name || 'animusic').replace(/[^\w\-À-ÿ ]+/g, '_').trim() || 'animusic';
+
+async function startRecording() {
+  if (!ensemble || !window.MediaRecorder) return status('Enregistrement vidéo non pris en charge par ce navigateur.');
+  const mime = [
+    'video/mp4;codecs=avc1.640028,mp4a.40.2',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ].find((m) => MediaRecorder.isTypeSupported(m));
+  player.stop();
+  const audio = player.startCapture();
+  const stream = new MediaStream([...stage.renderer.domElement.captureStream(60).getVideoTracks(), ...audio.getAudioTracks()]);
+  const chunks = [];
+  recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12_000_000 });
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = () => {
+    const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+    download(new Blob(chunks, { type: mime.split(';')[0] }), `${safeName()}.${ext}`);
+    status(`Vidéo enregistrée (${ext}).`);
+  };
+  recorder.start(1000);
+  await player.play();
+  updatePlayButton();
+  $('record').textContent = '⏹ Arrêter';
+  status('Enregistrement en cours… (le morceau est rejoué en entier)');
+}
+function stopRecording() {
+  if (!recorder) return;
+  recorder.stop();
+  recorder = null;
+  player.stopCapture();
+  player.pause();
+  updatePlayButton();
+  $('record').textContent = '⏺ Vidéo';
+}
+$('record').addEventListener('click', () => (recorder ? stopRecording() : startRecording()));
+
 $('samples').addEventListener('change', (e) => {
   player.useSamples = e.target.checked;
   if (ensemble) rebuild();
@@ -240,6 +291,7 @@ function frame() {
     $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
     if (!seeking) $('seek').value = Math.max(0, t);
     if (player.playing && t > duration + 0.5) {
+      if (recorder) stopRecording();
       player.stop();
       updatePlayButton();
     }
@@ -253,4 +305,4 @@ loadSong(demoSong());
 frame();
 
 // Accès pour le débogage depuis la console.
-window.animusic = { stage, player, get ensemble() { return ensemble; } };
+window.animusic = { stage, player, get recorder() { return recorder; }, get ensemble() { return ensemble; } };
