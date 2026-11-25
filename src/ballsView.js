@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose } from './choreography.js';
 import { lowerBound, upperBound } from './util.js';
 import { mat, fx } from './materials.js';
-import { roundedBox, lathe, rod, ringOf, V } from './parts.js';
+import { roundedBox, lathe, rod, ringOf, footShadow, V } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const TRAIL = 6; // fantômes lumineux derrière chaque bille
@@ -62,8 +62,12 @@ export class BallsView {
         24,
         brass,
       );
-      tube.position.set(bar.position[0], o.barTopY - 0.2 - tubeLen, bar.position[2]);
-      this.content.add(tube);
+      // Le résonateur est suspendu à une traverse fixée aux deux rails (il ne flotte pas).
+      const hangY = o.barTopY - 0.115 - 0.045;
+      tube.position.set(bar.position[0], hangY - 0.012 - tubeLen, bar.position[2]);
+      const dir = [Math.sin(bar.angle), -Math.cos(bar.angle)];
+      const at = (r) => V(dir[0] * r, hangY, dir[1] * r);
+      this.content.add(tube, rod(at(ch.radius - 0.3), at(ch.radius + 0.3), 0.014, dark, 8));
       return mesh;
     });
 
@@ -118,21 +122,7 @@ export class BallsView {
         new THREE.MeshStandardMaterial({ color: 0x30343e, roughness: 0.68, metalness: 0.4 }),
       );
       // Ombre de contact au sol : le plateau ne « flotte » plus sur son reflet.
-      const shade = new THREE.Mesh(
-        new THREE.RingGeometry(R + 0.3, R + 1.5, 72, 1),
-        new THREE.ShaderMaterial({
-          uniforms: { uInner: { value: R + 0.6 }, uOuter: { value: R + 1.5 } },
-          vertexShader: 'varying float vR; void main(){ vR = length(position.xy); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-          fragmentShader:
-            'uniform float uInner; uniform float uOuter; varying float vR; void main(){ float a = 1.0 - smoothstep(uInner, uOuter, vR); gl_FragColor = vec4(0.0, 0.0, 0.0, 0.8 * a * a); }',
-          transparent: true,
-          depthWrite: false,
-        }),
-      );
-      shade.rotation.x = -Math.PI / 2;
-      shade.position.y = 0.004;
-      shade.renderOrder = -1;
-      this.content.add(fx(shade));
+      this.content.add(footShadow(0, 0, R + 0.6, { spread: 0.9, strength: 0.8 }));
       this.hubMat = mat.glow(0xffc46b, 1.6);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(R + 0.53, 0.018, 8, 96), this.hubMat);
       ring.rotation.x = Math.PI / 2;

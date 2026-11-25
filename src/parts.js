@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { mat } from './materials.js';
+import { mat, fx } from './materials.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 export const V = (x, y, z = 0) => new THREE.Vector3(x, y, z);
@@ -39,6 +39,56 @@ export function plinth(width, depth, height, { bottom = 0, color = 0x49d8ff } = 
   top.position.y = bottom + height + 0.012;
   group.add(body, strip, top);
   return { group, led };
+}
+
+const shadowGeo = new THREE.PlaneGeometry(1, 1);
+shadowGeo.rotateX(-Math.PI / 2);
+
+/**
+ * Ombre de contact posée sur le sol : assombrit le sol (et son reflet) au pied d'un
+ * objet, pour qu'il ne paraisse pas flotter. Forme : rectangle arrondi de demi-côtés
+ * (halfX, halfZ) et de rayon `radius` (un disque si les demi-côtés sont nuls), qui
+ * s'estompe sur la distance `spread`.
+ */
+export function contactShadow(halfX, halfZ, { radius = 0, spread = 0.35, strength = 0.75, y = 0.004 } = {}) {
+  const sx = 2 * (halfX + radius + spread);
+  const sz = 2 * (halfZ + radius + spread);
+  const mesh = new THREE.Mesh(
+    shadowGeo,
+    new THREE.ShaderMaterial({
+      uniforms: {
+        uSize: { value: new THREE.Vector2(sx, sz) },
+        uHalf: { value: new THREE.Vector2(halfX, halfZ) },
+        uShape: { value: new THREE.Vector3(radius, spread, strength) },
+      },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `
+        uniform vec2 uSize; uniform vec2 uHalf; uniform vec3 uShape; varying vec2 vUv;
+        void main() {
+          vec2 p = abs((vUv - 0.5) * uSize) - uHalf;
+          float d = length(max(p, 0.0)) + min(max(p.x, p.y), 0.0) - uShape.x;
+          float a = 1.0 - smoothstep(0.0, uShape.y, d);
+          gl_FragColor = vec4(0.0, 0.0, 0.0, uShape.z * a * a);
+        }`,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+  mesh.scale.set(sx, 1, sz);
+  mesh.position.y = y;
+  mesh.renderOrder = -1;
+  return fx(mesh);
+}
+
+/** Ombre de contact en disque, centrée en (x, z). */
+export function footShadow(x, z, radius, options) {
+  const mesh = contactShadow(0, 0, { radius, ...options });
+  mesh.position.x = x;
+  mesh.position.z = z;
+  return mesh;
 }
 
 /** Profil de révolution : liste de [rayon, hauteur]. */
