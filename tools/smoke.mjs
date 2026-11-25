@@ -92,7 +92,9 @@ const browser = await playwright.chromium.launch({
   args: ['--autoplay-policy=no-user-gesture-required'],
 });
 try {
-  const page = await browser.newPage({ acceptDownloads: true });
+  // Sans carte graphique (CI), le rendu est logiciel : petite fenêtre pour garder la qualité « haute »
+  // (tous les shaders sont compilés et exécutés) dans des délais raisonnables.
+  const page = await browser.newPage({ acceptDownloads: true, viewport: { width: 480, height: 270 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => m.type() === 'error' && !m.text().includes('GL Driver') && errors.push(m.text()));
@@ -100,9 +102,9 @@ try {
   page.on('response', (r) => r.status() >= 400 && missing.push(`${r.status()} ${r.url()}`));
 
   await page.goto(url);
-  await page.waitForFunction(() => window.animusic?.ensemble, null, { timeout: 15000 });
+  await page.waitForFunction(() => window.animusic?.ensemble, null, { timeout: 120000 });
   const kinds = await page.evaluate(() => window.animusic.ensemble.instruments.map((i) => i.kind));
-  check(kinds.length === 4, `démo construite avec ${kinds.join(', ')}`);
+  check(kinds.length === 7, `démo construite avec ${kinds.join(', ')}`);
 
   await page.waitForFunction(() => document.getElementById('sound').textContent === '', null, { timeout: 30000 });
   const ready = await page.evaluate(() => window.animusic.player.ready.size);
@@ -114,7 +116,7 @@ try {
   check(t > 0.5, `la lecture avance (t = ${t.toFixed(2)} s)`);
 
   // Export glTF de la démo (animation cuite).
-  const download = page.waitForEvent('download', { timeout: 60000 });
+  const download = page.waitForEvent('download', { timeout: 240000 });
   await page.click('#exportGltf');
   const glb = await download;
   const size = (await readFile(await glb.path())).byteLength;
@@ -126,7 +128,7 @@ try {
   const track = midi.addTrack();
   [60, 64, 67, 72].forEach((n, i) => track.addNote({ midi: n, time: i * 0.3, duration: 0.25 }));
   await page.setInputFiles('#file', { name: 'test.mid', mimeType: 'audio/midi', buffer: Buffer.from(midi.toArray()) });
-  await page.waitForTimeout(500);
+  await page.waitForFunction(() => window.animusic.ensemble.instruments.length === 1, null, { timeout: 60000 });
   const stats = await page.textContent('#stats');
   check(stats.trim() === 'billes : 4 notes', `fichier MIDI lu (${stats})`);
 

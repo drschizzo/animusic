@@ -12,6 +12,9 @@ import { assignRoles, buildEnsemble } from '../src/arranger.js';
 import { planShots, cameraAt } from '../src/director.js';
 import { activeBallRange, ballPosition, ballScale, launcherPose, barPulse } from '../src/choreography.js';
 import { armAngles, hitPulse } from '../src/drums.js';
+import { hammerAngle, bellState } from '../src/bells.js';
+import { laserState } from '../src/laser.js';
+import { keyDepth, keyHammerAngle, tineVibration } from '../src/keys.js';
 import { carrierPose, stringVibration } from '../src/strings.js';
 import { pipeState } from '../src/pipes.js';
 
@@ -36,6 +39,12 @@ function frame(ens, plan, t) {
       for (const c of m.carriers) check(Object.values(carrierPose(m, c, t)));
     } else if (inst.kind === 'pads') {
       for (const p of m.pipes) check(Object.values(pipeState(m, p, t)));
+    } else if (inst.kind === 'bells') {
+      for (const b of m.bells) check(hammerAngle(m, b, t), bellState(m, b, t).angle, bellState(m, b, t).pulse);
+    } else if (inst.kind === 'laser') {
+      for (const e of m.emitters) check(Object.values(laserState(m, e, t)));
+    } else if (inst.kind === 'keys') {
+      for (const k of m.played) check(keyDepth(m, k, t), keyHammerAngle(m, k, t), tineVibration(m, k, t).amp);
     }
   }
   const cam = cameraAt(plan, t);
@@ -49,7 +58,7 @@ for (const file of process.argv.slice(2)) {
   const song = parseMidi(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), basename(file));
   const parseMs = performance.now() - t0;
 
-  const parts = { balls: [], bass: [], pads: [], drums: [] };
+  const parts = { balls: [], bass: [], pads: [], drums: [], bells: [], laser: [], keys: [] };
   const assigned = assignRoles(song.tracks);
   const roles = song.tracks.map((tr, ti) => {
     tr.role = assigned[ti];
@@ -82,6 +91,9 @@ for (const file of process.argv.slice(2)) {
       i.kind === 'balls' ? ` ${m.bars.length} lames, rayon ${m.radius.toFixed(1)} m, ${m.maxConcurrent} billes max`
       : i.kind === 'drums' ? ` ${m.pieces.length} éléments`
       : i.kind === 'bass' ? ` ${m.strings.length} cordes, largeur ${m.width.toFixed(1)} m`
+      : i.kind === 'bells' ? ` ${m.bells.length} cloches, largeur ${m.width.toFixed(1)} m`
+      : i.kind === 'laser' ? ` ${m.emitters.length} rayons, largeur ${m.width.toFixed(1)} m`
+      : i.kind === 'keys' ? ` ${m.keys.length} touches, largeur ${m.width.toFixed(1)} m`
       : ` ${m.pipes.length} tubes, largeur ${m.width.toFixed(1)} m`;
     return `${i.kind}: ${i.onsets.length} notes,${extra}`;
   });

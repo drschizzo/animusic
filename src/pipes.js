@@ -46,18 +46,18 @@ export function buildPipes(notes, options = {}) {
 }
 
 /**
- * État d'un tube à l'instant t.
- * level : hauteur de la colonne de lumière (0..1), valve : ouverture (0..1), track : piste.
+ * État d'une voix tenue (tube d'orgue, rayon laser…) à l'instant t, à partir de
+ * ses notes triées {start, end, velocity, track}.
+ * level : intensité (0..1), valve : ouverture anticipée (0..1), track : piste.
  */
-export function pipeState(model, pipe, t) {
-  const o = model.options;
+export function sustainState(notes, maxDur, o, t) {
   let level = 0;
   let valve = 0;
   let track = -1;
   // Seules les notes commencées depuis moins de maxDur + release peuvent encore briller.
-  const horizon = t - pipe.maxDur - o.release;
-  for (let i = upperBound(pipe.notes, t + o.anticipation, (n) => n.start) - 1; i >= 0; i--) {
-    const n = pipe.notes[i];
+  const horizon = t - maxDur - o.release;
+  for (let i = upperBound(notes, t + o.anticipation, (n) => n.start) - 1; i >= 0; i--) {
+    const n = notes[i];
     if (n.start < horizon) break;
     let l;
     let v;
@@ -75,4 +75,9 @@ export function pipeState(model, pipe, t) {
     valve = Math.max(valve, v);
   }
   return { level, valve: Math.min(1, Math.max(0, valve)), track };
+}
+
+/** État d'un tube à l'instant t : hauteur de la colonne de lumière, valve, piste. */
+export function pipeState(model, pipe, t) {
+  return sustainState(pipe.notes, pipe.maxDur, model.options, t);
 }

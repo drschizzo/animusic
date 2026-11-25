@@ -28,7 +28,7 @@ function showError(msg) {
 
 /** (Re)construit la scène à partir du rôle de chaque piste. */
 function rebuild() {
-  const parts = { balls: [], bass: [], pads: [], drums: [] };
+  const parts = { balls: [], bass: [], pads: [], drums: [], bells: [], laser: [], keys: [] };
   song.tracks.forEach((t, ti) => {
     if (t.role !== 'off') parts[t.role].push(...t.notes.map((n) => ({ ...n, track: ti })));
   });
@@ -44,8 +44,8 @@ function rebuild() {
   stage.build(ensemble, song.tracks.map((_, i) => colorFor(i)));
   shotPlan = planShots(ensemble);
 
-  const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad' };
-  const notes = ['balls', 'bass', 'pads'].flatMap((role) =>
+  const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad', bells: 'mallet', laser: 'pad', keys: 'mallet' };
+  const notes = Object.keys(voiceOf).flatMap((role) =>
     parts[role].map((n) => ({ ...n, voice: voiceOf[role], program: song.tracks[n.track].program ?? 0 })),
   );
   const kit = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
@@ -58,7 +58,7 @@ function rebuild() {
   $('seek').value = 0;
   loadSounds(notes, drumHits.length > 0);
 
-  const labels = { balls: 'billes', bass: 'basse', pads: 'orgue', drums: 'batterie' };
+  const labels = { balls: 'billes', bass: 'basse', pads: 'orgue', drums: 'batterie', bells: 'carillon', laser: 'harpe laser', keys: 'clavier' };
   $('stats').textContent = ensemble.instruments
     .map((i) => `${labels[i.kind]} : ${i.onsets.length} notes`)
     .join(' · ');

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { pipeState } from './pipes.js';
+import { mat, fx } from './materials.js';
+import { plinth, lathe } from './parts.js';
 
 /** Rendu des tubes d'orgue lumineux (voir pipes.js). */
 export class PipesView {
@@ -11,61 +13,93 @@ export class PipesView {
     g.rotation.y = model.yaw;
     parent.add(g);
 
-    const chrome = new THREE.MeshStandardMaterial({ color: 0xc8ccd6, roughness: 0.15, metalness: 1 });
-    const brass = new THREE.MeshStandardMaterial({ color: 0xd8a84a, roughness: 0.22, metalness: 1 });
-    const glass = new THREE.MeshStandardMaterial({
-      color: 0x9fb4ff,
-      roughness: 0.05,
-      metalness: 0.2,
-      transparent: true,
-      opacity: 0.22,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    const baseH = 0.35;
+    const chrome = mat.chrome();
+    const gold = mat.gold();
+    const glass = mat.glass();
+    const baseH = (this.baseH = 0.35);
 
-    // Socle commun
-    const plinth = new THREE.Mesh(
-      new THREE.BoxGeometry(model.width, baseH, 0.7),
-      new THREE.MeshStandardMaterial({ color: 0x23262f, roughness: 0.3, metalness: 0.9 }),
-    );
-    plinth.position.y = baseH / 2;
-    plinth.castShadow = plinth.receiveShadow = true;
-    g.add(plinth);
+    const base = plinth(model.width, 0.8, baseH, { color: 0x5cff8f });
+    this.led = base.led;
+    g.add(base.group);
 
-    const column = new THREE.CylinderGeometry(1, 1, 1, 20);
+    const column = new THREE.CylinderGeometry(1, 1, 1, 24);
     column.translate(0, 0.5, 0); // base à y = 0
+    const r = model.spacing * 0.36;
+    const footGeo = new THREE.LatheGeometry(
+      [
+        [r * 1.45, 0],
+        [r * 1.45, 0.03],
+        [r * 1.2, 0.06],
+        [r * 1.2, 0.11],
+        [r * 1.02, 0.13],
+      ].map(([x, y]) => new THREE.Vector2(x, y)),
+      28,
+    );
+    const capGeo = new THREE.TorusGeometry(r, 0.024, 10, 32);
+    const valveGeo = new THREE.TorusGeometry(r * 1.12, 0.022, 8, 28);
     this.pipeViews = model.pipes.map((p) => {
-      const r = model.spacing * 0.36;
-      const tube = new THREE.Mesh(new THREE.CylinderGeometry(r, r, p.height, 24, 1, true), glass);
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(r, r, p.height, 32, 1, true), glass);
       tube.position.set(p.x, baseH + p.height / 2, 0);
-      const cap = new THREE.Mesh(new THREE.TorusGeometry(r, 0.025, 8, 24), brass);
+      tube.renderOrder = 2;
+      const cap = new THREE.Mesh(capGeo, gold);
       cap.rotation.x = Math.PI / 2;
       cap.position.set(p.x, baseH + p.height, 0);
-      const lightMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffffff, emissiveIntensity: 0 });
+      cap.castShadow = true;
+      const lightMat = new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false });
       const light = new THREE.Mesh(column, lightMat);
-      light.position.set(p.x, baseH, 0);
-      light.scale.set(r * 0.7, 0.001, r * 0.7);
-      const valveMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 1, roughness: 0.2, emissive: 0xffffff, emissiveIntensity: 0 });
-      const valve = new THREE.Mesh(new THREE.TorusGeometry(r * 1.1, 0.03, 8, 24), valveMat);
+      light.position.set(p.x, baseH + 0.1, 0);
+      light.scale.set(r * 0.66, 0.001, r * 0.66);
+      const valveMat = mat.glow(0xffffff, 0);
+      valveMat.color.set(0x8a8f9c);
+      valveMat.metalness = 1;
+      valveMat.roughness = 0.2;
+      const valve = new THREE.Mesh(valveGeo, valveMat);
       valve.rotation.x = Math.PI / 2;
-      valve.position.set(p.x, baseH + 0.04, 0);
-      const foot = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.15, r * 1.25, 0.08, 24), chrome);
-      foot.position.set(p.x, baseH + 0.04, 0);
+      valve.position.set(p.x, baseH + 0.15, 0);
+      const foot = new THREE.Mesh(footGeo, chrome);
+      foot.position.set(p.x, baseH + 0.02, 0);
+      foot.castShadow = true;
       g.add(tube, cap, light, valve, foot);
-      return { p, light, lightMat, valve, valveMat, color: new THREE.Color() };
+      return { p, light, lightMat, valve, valveMat };
     });
+
+    // La lumière des tubes éclaire réellement les alentours.
+    this.lamp = fx(new THREE.PointLight(0xffffff, 0, 12, 1.6));
+    this.lamp.position.set(0, baseH + 1.3, 0.5);
+    g.add(this.lamp);
+    this._c = new THREE.Color();
   }
 
   update(t) {
     const m = this.model;
+    let total = 0;
+    let best = 0;
     for (const v of this.pipeViews) {
       const { level, valve, track } = pipeState(m, v.p, t);
-      if (track >= 0) v.lightMat.emissive.copy(this.trackColors[track]);
-      v.light.scale.y = Math.max(0.001, level * v.p.height);
-      v.lightMat.emissiveIntensity = 0.6 + 1.6 * level;
-      v.valve.position.y = 0.35 + 0.04 + valve * 0.12;
-      v.valveMat.emissiveIntensity = valve * 0.8;
+      const color = track >= 0 ? this.trackColors[track] : null;
+      if (level <= 0.003) v.lightMat.color.setRGB(0, 0, 0);
+      else if (color) {
+        // Cœur presque blanc à pleine puissance, couleur de la piste autour (halo).
+        v.lightMat.color.copy(color).lerp(WHITE, 0.25 * level).multiplyScalar(0.6 + 2.6 * level);
+      }
+      if (color) v.valveMat.emissive.copy(color);
+      v.light.scale.y = Math.max(0.001, level * (v.p.height - 0.14));
+      v.valve.position.y = this.baseH + 0.15 + valve * 0.12;
+      v.valveMat.emissiveIntensity = valve * 1.6;
+      total += level;
+      if (level > best) {
+        best = level;
+        this._c.copy(color);
+      }
     }
+    const energy = Math.min(1, total / 2.5);
+    if (best > 0) {
+      this.lamp.color.copy(this._c);
+      this.led.emissive.copy(this._c);
+    }
+    this.lamp.intensity = 9 * energy;
+    this.led.emissiveIntensity = 2.5 + 4 * energy;
   }
 }
+
+const WHITE = new THREE.Color(1, 1, 1);

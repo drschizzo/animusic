@@ -47,6 +47,18 @@ export function demoSong() {
     [74, 74, 76, 74, 72, null, null, null],
   ];
 
+  const bells = [];
+  const lead = [];
+  const keys = [];
+  // Contre-chant : [note, durée en temps] par mesure.
+  const counter = [
+    [[67, 4], [72, 4]],
+    [[69, 4], [64, 2], [69, 2]],
+    [[65, 3], [69, 1], [72, 4]],
+    [[71, 4], [67, 2], [62, 2]],
+  ];
+  const counterStart = (c, s) => counter[c].slice(0, s).reduce((a, [, len]) => a + len, 0);
+
   for (let rep = 0; rep < 2; rep++) {
     chords.forEach((chord, c) => {
       const bar = rep * 4 + c;
@@ -62,6 +74,20 @@ export function demoSong() {
         tune[c].forEach((m, s) => {
           if (m !== null) melody.push({ midi: m, time: t0 + s * beat, duration: beat, velocity: 0.9 });
         });
+      }
+      // Carillon : notes de l'accord égrenées, une octave au-dessus (dès la 3e mesure).
+      if (bar >= 2) {
+        [0, 2, 1, 2].forEach((p, s) => bells.push({ midi: tones[p] + 12, time: t0 + s * beat * 2, duration: beat * 2, velocity: s === 0 ? 0.9 : 0.65 }));
+      }
+      // Contre-chant tenu (harpe laser) sur la reprise.
+      if (rep === 1) {
+        counter[c].forEach(([m, len], s) => lead.push({ midi: m, time: t0 + counterStart(c, s) * beat, duration: len * beat * 0.92, velocity: 0.75 }));
+      }
+      // Piano : accords plaqués à contretemps.
+      if (bar >= 1) {
+        for (const s of [1, 3, 5, 6.5]) {
+          for (const m of chord) keys.push({ midi: m + 12, time: t0 + s * beat, duration: beat * 0.45, velocity: 0.6 });
+        }
       }
     });
   }
@@ -99,8 +125,11 @@ export function demoSong() {
     tracks: [
       { name: 'Arpèges', percussion: false, program: 12, notes: arp },
       { name: 'Basse', percussion: false, program: 33, notes: bass },
-      { name: 'Mélodie', percussion: false, program: 11, notes: melody },
+      { name: 'Mélodie', percussion: false, program: 13, notes: melody },
       { name: 'Nappe', percussion: false, program: 19, notes: pad },
+      { name: 'Carillon', percussion: false, program: 14, notes: bells },
+      { name: 'Contre-chant', percussion: false, program: 73, notes: lead },
+      { name: 'Piano', percussion: false, program: 0, notes: keys },
       { name: 'Batterie', percussion: true, program: 0, notes: drums },
     ],
   };

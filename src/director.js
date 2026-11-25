@@ -42,7 +42,7 @@ export function planShots(ensemble, options = {}) {
     type: 'wide',
     subject: -1,
     center: [0, 1, -R * 0.3],
-    dist: R * 1.25 + 3,
+    dist: R * 1.45 + 4.5,
     height: R * 0.5 + 2.5,
     angle: (random() - 0.5) * 0.9,
   });

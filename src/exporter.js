@@ -79,6 +79,9 @@ export async function exportGLTF(stage, ensemble, plan, options) {
   const ballsView = stage.views.find((v) => v instanceof BallsView);
   const pools = ballsView ? makeBallPools(ballsView, trackColors, root) : [];
   if (ballsView) ballsView.balls.visible = false;
+  // Les purs effets lumineux (halos, étincelles, traînées, rayons) ne sont pas exportés.
+  const effects = [];
+  root.traverse((o) => o.userData.fx && o.visible && effects.push(o));
   const camera = new THREE.PerspectiveCamera(stage.camera.fov, 16 / 9, 0.1, 200);
   camera.name = 'camera_realisateur';
   root.add(camera);
@@ -86,6 +89,7 @@ export async function exportGLTF(stage, ensemble, plan, options) {
   const tmp = [0, 0, 0];
   const pose = (t) => {
     stage.update(t);
+    for (const o of effects) o.visible = false;
     if (ballsView) poseBalls(ballsView.ch, pools, t, tmp);
     const cam = cameraAt(plan, t);
     camera.position.set(...cam.position);
@@ -93,7 +97,7 @@ export async function exportGLTF(stage, ensemble, plan, options) {
   };
 
   // Noms lisibles dans Blender : préfixe de l'instrument (billes, batterie, basse, orgue).
-  const LABELS = { balls: 'billes', drums: 'batterie', bass: 'basse', pads: 'orgue' };
+  const LABELS = { balls: 'billes', drums: 'batterie', bass: 'basse', pads: 'orgue', bells: 'carillon', laser: 'harpe_laser', keys: 'clavier' };
   let counter = 0;
   stage.views.forEach((v, k) => {
     const viewRoot = v.group ?? v.content;
@@ -167,6 +171,7 @@ export async function exportGLTF(stage, ensemble, plan, options) {
     for (const { meshes } of pools) meshes[0]?.material.dispose();
     root.remove(camera);
     if (ballsView) ballsView.balls.visible = true;
+    for (const o of effects) o.visible = true;
     onProgress(1);
   }
 }
