@@ -92,6 +92,11 @@ h2 {
 .muted {
   color: #8b93b0;
 }
+#seek {
+  flex: 1;
+  min-width: 0;
+  accent-color: #3a5bd9;
+}
 #offset {
   flex: 1;
   min-width: 0;

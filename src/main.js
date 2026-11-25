@@ -49,6 +49,8 @@ function rebuild() {
   const start = Math.min(notes.length ? choreo.start : Infinity, firstDrum - kit.options.strikeTime);
   duration = Math.max(notes.length ? choreo.duration : 0, drumHits.length ? lastDrum + 1.5 : 0);
   player.load(notes, drumHits, Math.max(0, -start) + 0.5);
+  $('seek').max = duration.toFixed(2);
+  $('seek').value = 0;
 
   const parts = [];
   if (notes.length)
@@ -107,6 +109,11 @@ $('restart').addEventListener('click', async () => {
   await player.play();
   updatePlayButton();
 });
+// Barre de lecture : pendant le glisser, c'est elle qui pilote le temps.
+let seeking = false;
+$('seek').addEventListener('pointerdown', () => (seeking = true));
+window.addEventListener('pointerup', () => (seeking = false));
+$('seek').addEventListener('input', (e) => player.seek(Number(e.target.value)));
 $('orbit').addEventListener('change', (e) => (stage.controls.autoRotate = e.target.checked));
 
 // Réglage fin de la synchro image/son (ex. casque Bluetooth dont la latence est mal annoncée).
@@ -159,6 +166,7 @@ function frame() {
     const t = player.currentTime();
     stage.update(t);
     $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
+    if (!seeking) $('seek').value = Math.max(0, t);
     if (player.playing && t > duration + 0.5) {
       player.stop();
       updatePlayButton();

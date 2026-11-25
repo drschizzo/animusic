@@ -134,8 +134,17 @@ export class Player {
   }
 
   pause() {
+    // On repart de ce qui a réellement été entendu (et non de l'horloge en avance de Tone).
+    const t = this.currentTime();
     this.transport.pause();
+    this.transport.seconds = Math.max(0, t + this.lead);
     this.playing = false;
+  }
+
+  /** Saute à l'instant musical t (secondes), en lecture comme en pause. */
+  seek(t) {
+    this.transport.seconds = Math.max(0, t + this.lead);
+    this.lastDrum.clear();
   }
 
   stop() {
