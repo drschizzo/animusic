@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import './style.css';
-import { buildChoreography } from './choreography.js';
-import { buildDrumKit } from './drums.js';
+import { buildEnsemble, classifyTrack, ROLES } from './arranger.js';
 import { parseMidi, demoSong } from './midi.js';
 import { Player } from './audio.js';
 import { Stage } from './scene.js';
@@ -12,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 const stage = new Stage($('stage'));
 const player = new Player();
 let song = null;
-let choreo = null;
+let ensemble = null;
 let duration = 0;
 
 function colorFor(i) {
@@ -24,57 +23,56 @@ function showError(msg) {
   $('error').hidden = !msg;
 }
 
-/** (Re)construit la scène à partir des pistes cochées. */
+/** (Re)construit la scène à partir du rôle de chaque piste. */
 function rebuild() {
-  const pick = (perc) =>
-    song.tracks.flatMap((t, ti) => (t.enabled && t.percussion === perc ? t.notes.map((n) => ({ ...n, track: ti })) : []));
-  const notes = pick(false);
-  const drumNotes = pick(true);
+  const parts = { balls: [], bass: [], pads: [], drums: [] };
+  song.tracks.forEach((t, ti) => {
+    if (t.role !== 'off') parts[t.role].push(...t.notes.map((n) => ({ ...n, track: ti })));
+  });
   player.stop();
   updatePlayButton();
-  if (notes.length + drumNotes.length === 0) {
-    showError('Aucune piste sélectionnée.');
+  const total = Object.values(parts).reduce((a, p) => a + p.length, 0);
+  if (total === 0) {
+    showError('Aucune piste à jouer.');
     return;
   }
   showError('');
-  choreo = buildChoreography(notes);
-  // La batterie se place entre les canons et l'arc de lames.
-  const kit = buildDrumKit(drumNotes, { center: [0, 0, -(choreo.radius * 0.5 + 0.4)] });
-  stage.build(choreo, song.tracks.map((_, i) => colorFor(i)), kit);
+  ensemble = buildEnsemble(parts);
+  stage.build(ensemble, song.tracks.map((_, i) => colorFor(i)));
 
-  const drumHits = kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name })));
-  const firstDrum = Math.min(...drumHits.map((h) => h.time));
-  const lastDrum = Math.max(...drumHits.map((h) => h.time));
+  const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad' };
+  const notes = ['balls', 'bass', 'pads'].flatMap((role) => parts[role].map((n) => ({ ...n, voice: voiceOf[role] })));
+  const kit = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
+  const drumHits = kit ? kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name }))) : [];
+  duration = ensemble.end;
   // Pré-roll : laisse le temps à la première bille de voler / au premier bras de se lever.
-  const start = Math.min(notes.length ? choreo.start : Infinity, firstDrum - kit.options.strikeTime);
-  duration = Math.max(notes.length ? choreo.duration : 0, drumHits.length ? lastDrum + 1.5 : 0);
-  player.load(notes, drumHits, Math.max(0, -start) + 0.5);
+  player.load(notes, drumHits, Math.max(0, -ensemble.start) + 0.5);
   $('seek').max = duration.toFixed(2);
   $('seek').value = 0;
 
-  const parts = [];
-  if (notes.length)
-    parts.push(`${notes.length} notes`, `${choreo.bars.length} lames`, `${choreo.launchers.length} canons`,
-      `jusqu'à ${choreo.maxConcurrent} billes en vol`);
-  if (drumHits.length) parts.push(`${drumHits.length} frappes`, `${kit.pieces.length} bras robotisés`);
-  $('stats').textContent = parts.join(' · ');
+  const labels = { balls: 'billes', bass: 'basse', pads: 'orgue', drums: 'batterie' };
+  $('stats').textContent = ensemble.instruments
+    .map((i) => `${labels[i.kind]} : ${i.onsets.length} notes`)
+    .join(' · ');
 }
 
 function loadSong(s) {
   song = s;
+  for (const t of s.tracks) t.role = classifyTrack(t);
   $('song').hidden = false;
   $('songName').textContent = s.name;
   const list = $('tracks');
   list.innerHTML = '';
   s.tracks.forEach((t, i) => {
     const li = document.createElement('li');
-    li.innerHTML = `<label><input type="checkbox" ${t.enabled ? 'checked' : ''}/>
-      <span class="swatch" style="background:${PALETTE[i % PALETTE.length]}"></span>
-      <span></span><span class="muted"></span></label>`;
-    li.querySelector('span:nth-of-type(2)').textContent = t.name;
-    li.querySelector('.muted').textContent = `${t.notes.length}${t.percussion ? ' · percu' : ''}`;
-    li.querySelector('input').addEventListener('change', (e) => {
-      t.enabled = e.target.checked;
+    li.innerHTML = `<span class="swatch" style="background:${PALETTE[i % PALETTE.length]}"></span>
+      <span class="name"></span><span class="muted"></span><select aria-label="Instrument"></select>`;
+    li.querySelector('.name').textContent = t.name;
+    li.querySelector('.muted').textContent = t.notes.length;
+    const select = li.querySelector('select');
+    for (const [value, label] of Object.entries(ROLES)) select.add(new Option(label, value, false, value === t.role));
+    select.addEventListener('change', (e) => {
+      t.role = e.target.value;
       rebuild();
     });
     list.appendChild(li);
@@ -99,7 +97,7 @@ function updatePlayButton() {
 $('file').addEventListener('change', (e) => e.target.files[0] && loadFile(e.target.files[0]));
 $('demo').addEventListener('click', () => loadSong(demoSong()));
 $('play').addEventListener('click', async () => {
-  if (!choreo) return;
+  if (!ensemble) return;
   if (player.playing) player.pause();
   else await player.play();
   updatePlayButton();
@@ -162,7 +160,7 @@ const fmt = (s) => {
 };
 
 function frame() {
-  if (choreo) {
+  if (ensemble) {
     const t = player.currentTime();
     stage.update(t);
     $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
@@ -180,4 +178,4 @@ loadSong(demoSong());
 frame();
 
 // Accès pour le débogage depuis la console.
-window.animusic = { stage, player, get choreo() { return choreo; } };
+window.animusic = { stage, player, get ensemble() { return ensemble; } };

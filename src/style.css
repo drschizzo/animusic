@@ -76,12 +76,30 @@ h2 {
   padding: 0;
   margin: 0;
 }
-#tracks li label {
+#tracks li {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 3px 0;
-  cursor: pointer;
+}
+#tracks .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tracks select,
+select {
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 2px 4px;
+  font: inherit;
+}
+select option {
+  background: #1a1d2a;
 }
 .swatch {
   width: 12px;

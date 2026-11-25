@@ -13,7 +13,7 @@ export function parseMidi(arrayBuffer, fileName = 'MIDI') {
       return {
         name: t.name || t.instrument.name || `Piste ${i + 1}`,
         percussion,
-        enabled: true,
+        program: t.instrument.number,
         notes: t.notes.map((n) => ({
           midi: n.midi,
           time: n.time,
@@ -82,13 +82,23 @@ export function demoSong() {
     if (fill) [50, 50, 48, 48, 45, 45, 43, 41].forEach((m, i) => hit(m, t0 + 6 * beat + (i * beat) / 4, 0.8));
   }
 
+  // Nappe : accords tenus sur toute la mesure.
+  const pad = [];
+  for (let bar = 0; bar < 8; bar++) {
+    const chord = chords[bar % 4];
+    for (const m of [chord[0] + 12, chord[1] + 12, chord[2] + 12]) {
+      pad.push({ midi: m, time: bar * 8 * beat, duration: 8 * beat * 0.95, velocity: 0.6 });
+    }
+  }
+
   return {
     name: 'Démo',
     tracks: [
-      { name: 'Arpèges', percussion: false, enabled: true, notes: arp },
-      { name: 'Basse', percussion: false, enabled: true, notes: bass },
-      { name: 'Mélodie', percussion: false, enabled: true, notes: melody },
-      { name: 'Batterie', percussion: true, enabled: true, notes: drums },
+      { name: 'Arpèges', percussion: false, program: 12, notes: arp },
+      { name: 'Basse', percussion: false, program: 33, notes: bass },
+      { name: 'Mélodie', percussion: false, program: 11, notes: melody },
+      { name: 'Nappe', percussion: false, program: 19, notes: pad },
+      { name: 'Batterie', percussion: true, program: 0, notes: drums },
     ],
   };
 }

@@ -84,6 +84,21 @@ export class Player {
     }).connect(this.reverb);
     this.synth.maxPolyphony = 64;
     this.synth.volume.value = -10;
+    const bass = new Tone.PolySynth(Tone.MonoSynth, {
+      oscillator: { type: 'sawtooth' },
+      filter: { Q: 2, type: 'lowpass', rolloff: -24 },
+      filterEnvelope: { attack: 0.001, decay: 0.25, sustain: 0.3, release: 0.3, baseFrequency: 110, octaves: 2.6 },
+      envelope: { attack: 0.004, decay: 0.3, sustain: 0.6, release: 0.25 },
+    }).toDestination();
+    bass.volume.value = -16;
+    const pad = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'fattriangle', count: 3, spread: 18 },
+      envelope: { attack: 0.12, decay: 0.3, sustain: 0.8, release: 0.7 },
+    }).connect(this.reverb);
+    pad.maxPolyphony = 32;
+    pad.volume.value = -20;
+    // Un son par rôle d'instrument (remplacé par des échantillons quand ils sont disponibles).
+    this.voices = { mallet: this.synth, bass, pad };
     this.playDrum = createDrumSynths();
     this.parts = [];
     this.lead = 0;
@@ -95,7 +110,7 @@ export class Player {
   }
 
   /**
-   * @param notes notes mélodiques [{midi,time,velocity}]
+   * @param notes notes mélodiques [{midi,time,duration,velocity,voice}] (voice : mallet | bass | pad)
    * @param drumHits frappes [{piece,time,velocity}]
    * @param lead avance (s) laissée avant la première note
    */
@@ -104,14 +119,16 @@ export class Player {
     this.parts.forEach((p) => p.dispose());
     this.lead = lead;
 
-    const melodic = notes.map((n) => ({ time: n.time + lead, midi: n.midi, velocity: n.velocity }));
+    const melodic = notes.map((n) => ({ ...n, time: n.time + lead }));
     const drums = drumHits.map((h) => ({ time: h.time + lead, piece: h.piece, velocity: h.velocity }));
     // Les synthés monophoniques refusent deux attaques au même instant (ex. 38 + 40 → caisse claire).
     const last = this.lastDrum;
     last.clear();
     this.parts = [
       new Tone.Part((time, ev) => {
-        this.synth.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), 0.4, time, ev.velocity);
+        const synth = this.voices[ev.voice] ?? this.synth;
+        const dur = ev.voice === 'mallet' ? 0.4 : Math.max(0.05, ev.duration);
+        synth.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), dur, time, ev.velocity);
       }, melodic).start(0),
       new Tone.Part((time, ev) => {
         // Si le navigateur prend du retard, Tone ramène les attaques passées à « maintenant » :
