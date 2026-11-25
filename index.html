@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Animusic — prototype</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="stage"></div>
+
+    <aside id="panel">
+      <h1>Animusic <span>proto</span></h1>
+      <p class="hint">Glisse un fichier <b>.mid</b> sur la page, ou :</p>
+      <div class="row">
+        <label class="btn">
+          Ouvrir un MIDI…
+          <input id="file" type="file" accept=".mid,.midi,audio/midi" hidden />
+        </label>
+        <button id="demo" class="btn">Démo</button>
+      </div>
+
+      <div id="song" hidden>
+        <h2 id="songName"></h2>
+        <ul id="tracks"></ul>
+        <p id="stats" class="hint"></p>
+        <div class="row">
+          <button id="play" class="btn primary">▶ Lecture</button>
+          <button id="restart" class="btn">⏮ Début</button>
+        </div>
+        <div class="row">
+          <span id="time">0:00</span>
+          <label class="toggle"><input id="orbit" type="checkbox" checked /> Caméra auto</label>
+        </div>
+      </div>
+      <p id="error" class="error" hidden></p>
+    </aside>
+
+    <div id="drop" hidden>Dépose ton fichier MIDI</div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

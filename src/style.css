@@ -1,0 +1,119 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #07080d;
+  color: #e6e8f0;
+  font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+#stage {
+  position: fixed;
+  inset: 0;
+}
+#panel {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  width: min(300px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px;
+  background: rgba(16, 18, 28, 0.82);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+}
+h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+h1 span {
+  font-size: 12px;
+  color: #8b93b0;
+  font-weight: 500;
+}
+h2 {
+  margin: 16px 0 8px;
+  font-size: 15px;
+  word-break: break-word;
+}
+.hint {
+  color: #8b93b0;
+  margin: 6px 0;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+.btn {
+  flex: 1;
+  padding: 8px 10px;
+  text-align: center;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.btn.primary {
+  background: #3a5bd9;
+  border-color: #3a5bd9;
+}
+#tracks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+#tracks li label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+}
+.muted {
+  color: #8b93b0;
+}
+#time {
+  font-variant-numeric: tabular-nums;
+}
+.toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: #8b93b0;
+}
+.error {
+  color: #ff8080;
+}
+#drop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 28px;
+  background: rgba(58, 91, 217, 0.25);
+  border: 4px dashed #3a5bd9;
+  pointer-events: none;
+}
+[hidden] {
+  display: none !important;
+}
