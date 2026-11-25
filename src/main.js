@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { buildEnsemble, classifyTrack, ROLES } from './arranger.js';
+import { planShots, cameraAt } from './director.js';
 import { parseMidi, demoSong } from './midi.js';
 import { Player } from './audio.js';
 import { Stage } from './scene.js';
@@ -12,6 +13,7 @@ const stage = new Stage($('stage'));
 const player = new Player();
 let song = null;
 let ensemble = null;
+let shotPlan = null;
 let duration = 0;
 
 function colorFor(i) {
@@ -39,6 +41,7 @@ function rebuild() {
   showError('');
   ensemble = buildEnsemble(parts);
   stage.build(ensemble, song.tracks.map((_, i) => colorFor(i)));
+  shotPlan = planShots(ensemble);
 
   const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad' };
   const notes = ['balls', 'bass', 'pads'].flatMap((role) => parts[role].map((n) => ({ ...n, voice: voiceOf[role] })));
@@ -112,7 +115,22 @@ let seeking = false;
 $('seek').addEventListener('pointerdown', () => (seeking = true));
 window.addEventListener('pointerup', () => (seeking = false));
 $('seek').addEventListener('input', (e) => player.seek(Number(e.target.value)));
-$('orbit').addEventListener('change', (e) => (stage.controls.autoRotate = e.target.checked));
+$('collapse').addEventListener('click', () => {
+  const collapsed = $('panel').classList.toggle('collapsed');
+  $('collapse').setAttribute('aria-expanded', String(!collapsed));
+});
+
+// Caméra : réalisateur automatique, orbite lente ou libre (souris).
+let camMode = 'director';
+function setCamMode(mode) {
+  camMode = mode;
+  $('camMode').value = mode;
+  stage.controls.autoRotate = mode === 'orbit';
+  if (mode === 'orbit') stage.resetView();
+}
+$('camMode').addEventListener('change', (e) => setCamMode(e.target.value));
+// Dès que l'utilisateur manipule la vue, on lui laisse la main.
+stage.controls.addEventListener('start', () => camMode === 'director' && setCamMode('free'));
 
 // Réglage fin de la synchro image/son (ex. casque Bluetooth dont la latence est mal annoncée).
 function setOffset(ms) {
@@ -163,6 +181,7 @@ function frame() {
   if (ensemble) {
     const t = player.currentTime();
     stage.update(t);
+    if (camMode === 'director' && shotPlan) stage.setCamera(cameraAt(shotPlan, t));
     $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
     if (!seeking) $('seek').value = Math.max(0, t);
     if (player.playing && t > duration + 0.5) {

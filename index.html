@@ -9,7 +9,11 @@
     <div id="stage"></div>
 
     <aside id="panel">
-      <h1>Animusic <span>proto</span></h1>
+      <h1>
+        Animusic <span>proto</span>
+        <button id="collapse" class="icon" title="Replier le panneau" aria-expanded="true">▾</button>
+      </h1>
+      <div id="panelBody">
       <p class="hint">Glisse un fichier <b>.mid</b> sur la page, ou :</p>
       <div class="row">
         <label class="btn">
@@ -32,7 +36,14 @@
         </div>
         <div class="row">
           <span id="time">0:00</span>
-          <label class="toggle"><input id="orbit" type="checkbox" checked /> Caméra auto</label>
+          <label class="toggle"
+            >Caméra
+            <select id="camMode">
+              <option value="director" selected>Réalisateur</option>
+              <option value="orbit">Orbite</option>
+              <option value="free">Libre</option>
+            </select></label
+          >
         </div>
         <div class="row">
           <label for="offset" class="muted">Retard image</label>
@@ -42,6 +53,7 @@
         <p id="latency" class="hint"></p>
       </div>
       <p id="error" class="error" hidden></p>
+      </div>
     </aside>
 
     <div id="drop" hidden>Dépose ton fichier MIDI</div>

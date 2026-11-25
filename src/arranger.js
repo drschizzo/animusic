@@ -69,6 +69,7 @@ export function buildEnsemble(parts) {
       model: balls,
       onsets: balls.balls.map((b) => b.impact),
       focus: { center: [0, 1.4, -R * 0.7], radius: R * 0.75 },
+      front: 0,
       start: balls.start,
       end: balls.duration,
     });
@@ -82,6 +83,9 @@ export function buildEnsemble(parts) {
       model: kit,
       onsets: times,
       focus: { center: [0, 1.0, kit.center[2]], radius: 2.6 },
+      front: 0,
+      // Les canons sont devant la batterie : on la filme en plongée, par-dessus.
+      camera: { distScale: 1.25, minHeight: 3.3, allowLow: false },
       start: times[0] - kit.options.strikeTime,
       end: times[times.length - 1] + 1.5,
     });
@@ -98,6 +102,7 @@ export function buildEnsemble(parts) {
       model,
       onsets: model.onsets,
       focus: { center: [origin[0], 1.6, origin[2]], radius: Math.max(2, model.width * 0.6) },
+      front: model.yaw,
       start: model.onsets[0] - 0.3,
       end: Math.max(...parts.bass.map((n) => n.time + n.duration)) + 1,
     });
@@ -110,6 +115,7 @@ export function buildEnsemble(parts) {
       model,
       onsets: model.onsets,
       focus: { center: [origin[0], 1.6, origin[2]], radius: Math.max(2, model.width * 0.6) },
+      front: model.yaw,
       start: model.onsets[0] - model.options.anticipation,
       end: Math.max(...parts.pads.map((n) => n.time + n.duration)) + model.options.release,
     });

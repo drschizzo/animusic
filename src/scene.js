@@ -35,7 +35,7 @@ export class Stage {
     this.camera.position.set(0, 7, 12);
     this.controls = new OrbitControls(this.camera, renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.autoRotate = true;
+    this.controls.autoRotate = false;
     this.controls.autoRotateSpeed = 0.35;
     this.controls.maxPolarAngle = Math.PI * 0.49;
 
@@ -100,11 +100,21 @@ export class Stage {
     this.ensemble = ensemble;
     this.views = ensemble.instruments.map((inst) => new VIEWS[inst.kind](inst.model, trackColors, this.content));
 
-    // Cadrage initial (vue d'ensemble)
-    const R = ensemble.radius;
+    this.resetView();
+    this.controls.update();
+  }
+
+  /** Place la caméra (pose calculée par le réalisateur). */
+  setCamera({ position, target }) {
+    this.camera.position.set(...position);
+    this.controls.target.set(...target);
+  }
+
+  /** Revient au plan d'ensemble initial. */
+  resetView() {
+    const R = this.ensemble?.radius ?? 8;
     this.controls.target.set(0, 1, -R * 0.3);
     this.camera.position.set(0, 4 + R * 0.6, R * 1.1 + 4);
-    this.controls.update();
   }
 
   /** Pose tous les objets à l'instant musical t. */
