@@ -13,7 +13,7 @@ export function parseMidi(arrayBuffer, fileName = 'MIDI') {
       return {
         name: t.name || t.instrument.name || `Piste ${i + 1}`,
         percussion,
-        enabled: !percussion,
+        enabled: true,
         notes: t.notes.map((n) => ({
           midi: n.midi,
           time: n.time,
@@ -62,12 +62,33 @@ export function demoSong() {
       }
     });
   }
+  // Batterie : grosse caisse 1 & 3, caisse claire 2 & 4, charleston en croches,
+  // crash en début de phrase, roulement de toms en fin de phrase.
+  const drums = [];
+  const hit = (midi, time, velocity = 0.8) => drums.push({ midi, time, duration: 0.1, velocity });
+  for (let bar = 0; bar < 8; bar++) {
+    const t0 = bar * 8 * beat;
+    const fill = bar % 4 === 3;
+    if (bar % 4 === 0) hit(49, t0, 0.9);
+    for (let q = 0; q < 8; q++) {
+      const t = t0 + q * beat;
+      if (fill && q >= 6) continue;
+      if (q % 4 === 0) hit(36, t, 0.95);
+      if (q % 4 === 2) hit(38, t, 0.85);
+      if (q === 7 && !fill) hit(36, t + beat / 2, 0.7);
+      if (bar % 4 !== 0 || q > 0) hit(42, t, q % 2 ? 0.45 : 0.6);
+      hit(42, t + beat / 2, 0.35);
+    }
+    if (fill) [50, 50, 48, 48, 45, 45, 43, 41].forEach((m, i) => hit(m, t0 + 6 * beat + (i * beat) / 4, 0.8));
+  }
+
   return {
     name: 'Démo',
     tracks: [
       { name: 'Arpèges', percussion: false, enabled: true, notes: arp },
       { name: 'Basse', percussion: false, enabled: true, notes: bass },
       { name: 'Mélodie', percussion: false, enabled: true, notes: melody },
+      { name: 'Batterie', percussion: true, enabled: true, notes: drums },
     ],
   };
 }

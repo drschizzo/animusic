@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import './style.css';
 import { buildChoreography } from './choreography.js';
+import { buildDrumKit } from './drums.js';
 import { parseMidi, demoSong } from './midi.js';
 import { Player } from './audio.js';
 import { Stage } from './scene.js';
@@ -11,6 +13,7 @@ const stage = new Stage($('stage'));
 const player = new Player();
 let song = null;
 let choreo = null;
+let duration = 0;
 
 function colorFor(i) {
   return new THREE.Color(PALETTE[i % PALETTE.length]);
@@ -23,21 +26,36 @@ function showError(msg) {
 
 /** (Re)construit la scène à partir des pistes cochées. */
 function rebuild() {
-  const notes = song.tracks.flatMap((t, ti) => (t.enabled ? t.notes.map((n) => ({ ...n, track: ti })) : []));
+  const pick = (perc) =>
+    song.tracks.flatMap((t, ti) => (t.enabled && t.percussion === perc ? t.notes.map((n) => ({ ...n, track: ti })) : []));
+  const notes = pick(false);
+  const drumNotes = pick(true);
   player.stop();
   updatePlayButton();
-  if (notes.length === 0) {
+  if (notes.length + drumNotes.length === 0) {
     showError('Aucune piste sélectionnée.');
     return;
   }
   showError('');
   choreo = buildChoreography(notes);
-  stage.build(choreo, song.tracks.map((_, i) => colorFor(i)));
-  // Pré-roll : laisse le temps à la première bille de voler.
-  player.load(notes, Math.max(0, -choreo.start) + 0.5);
-  $('stats').textContent =
-    `${notes.length} notes · ${choreo.bars.length} lames · ${choreo.launchers.length} canons · ` +
-    `jusqu'à ${choreo.maxConcurrent} billes en vol`;
+  // La batterie se place entre les canons et l'arc de lames.
+  const kit = buildDrumKit(drumNotes, { center: [0, 0, -(choreo.radius * 0.5 + 0.4)] });
+  stage.build(choreo, song.tracks.map((_, i) => colorFor(i)), kit);
+
+  const drumHits = kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name })));
+  const firstDrum = Math.min(...drumHits.map((h) => h.time));
+  const lastDrum = Math.max(...drumHits.map((h) => h.time));
+  // Pré-roll : laisse le temps à la première bille de voler / au premier bras de se lever.
+  const start = Math.min(notes.length ? choreo.start : Infinity, firstDrum - kit.options.strikeTime);
+  duration = Math.max(notes.length ? choreo.duration : 0, drumHits.length ? lastDrum + 1.5 : 0);
+  player.load(notes, drumHits, Math.max(0, -start) + 0.5);
+
+  const parts = [];
+  if (notes.length)
+    parts.push(`${notes.length} notes`, `${choreo.bars.length} lames`, `${choreo.launchers.length} canons`,
+      `jusqu'à ${choreo.maxConcurrent} billes en vol`);
+  if (drumHits.length) parts.push(`${drumHits.length} frappes`, `${kit.pieces.length} bras robotisés`);
+  $('stats').textContent = parts.join(' · ');
 }
 
 function loadSong(s) {
@@ -119,8 +137,8 @@ function frame() {
   if (choreo) {
     const t = player.currentTime();
     stage.update(t);
-    $('time').textContent = `${fmt(t)} / ${fmt(choreo.duration)}`;
-    if (player.playing && t > choreo.duration + 0.5) {
+    $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
+    if (player.playing && t > duration + 0.5) {
       player.stop();
       updatePlayButton();
     }

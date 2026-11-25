@@ -101,7 +101,7 @@ export function buildChoreography(notes, options = {}) {
   const barByMidi = new Map(bars.map((b) => [b.midi, b]));
 
   // --- Canons : répartis en éventail au centre de la scène.
-  const k = Math.max(1, Math.min(o.launcherCount, count));
+  const k = Math.min(o.launcherCount, count);
   const launchers = Array.from({ length: k }, (_, i) => {
     const u = k > 1 ? i / (k - 1) : 0.5;
     const angle = (u - 0.5) * arc * 0.8;

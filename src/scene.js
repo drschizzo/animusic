@@ -6,6 +6,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose } from './choreography.js';
+import { DrumKitView } from './drumsView.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -93,8 +94,12 @@ export class Stage {
     this.content.clear();
   }
 
-  /** @param ch chorégraphie, @param trackColors tableau de THREE.Color indexé par piste */
-  build(ch, trackColors) {
+  /**
+   * @param ch chorégraphie des billes
+   * @param trackColors tableau de THREE.Color indexé par piste
+   * @param kit batterie (drums.js), facultative
+   */
+  build(ch, trackColors, kit = null) {
     this.clear();
     this.ch = ch;
     this.trackColors = trackColors;
@@ -123,7 +128,7 @@ export class Stage {
     // --- Châssis : deux rails en arc sous les lames, plus des pieds
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x2a2d38, roughness: 0.3, metalness: 0.9 });
     const half = ch.arc / 2 + 0.06;
-    for (const r of [ch.radius - 0.3, ch.radius + 0.3]) {
+    for (const r of ch.bars.length ? [ch.radius - 0.3, ch.radius + 0.3] : []) {
       const pts = [];
       for (let i = 0; i <= 64; i++) {
         const a = -half + (2 * half * i) / 64;
@@ -148,7 +153,7 @@ export class Stage {
     );
     hub.position.y = 0.15;
     hub.castShadow = hub.receiveShadow = true;
-    this.content.add(hub);
+    if (ch.launchers.length) this.content.add(hub);
 
     const barrelMat = new THREE.MeshStandardMaterial({ color: 0x6b7385, roughness: 0.35, metalness: 1 });
     const barrelGeo = new THREE.CylinderGeometry(0.11, 0.14, o.barrelLength, 24, 1, true);
@@ -186,6 +191,9 @@ export class Stage {
     this.balls = balls;
     this.content.add(balls);
 
+    // --- Batterie robotisée
+    this.drums = kit && kit.pieces.length ? new DrumKitView(kit, trackColors, this.content) : null;
+
     // Cadrage initial
     this.controls.target.set(0, 1, -ch.radius * 0.45);
     this.camera.position.set(0, 4 + ch.radius * 0.5, ch.radius * 0.9 + 4);
@@ -196,6 +204,7 @@ export class Stage {
   update(t) {
     const ch = this.ch;
     if (!ch) return;
+    this.drums?.update(t);
 
     // Billes
     const [s, e] = activeBallRange(ch, t);
