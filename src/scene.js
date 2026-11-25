@@ -103,7 +103,7 @@ export class Stage {
   }
 
   /**
-   * Niveau de qualité : 'high' (tout : ombres 4K, reflets, occlusion ambiante, halo),
+   * Niveau de qualité : 'high' (tout : ombres 4K, reflets, lumière indirecte, occlusion ambiante, halo),
    * 'medium' (sans occlusion, reflets et ombres allégés), 'low' (rendu direct, résolution 1).
    */
   setQuality(level) {
@@ -118,6 +118,11 @@ export class Stage {
       if (o.material) [].concat(o.material).forEach((m) => (m.needsUpdate = true));
     });
     this.resize();
+  }
+
+  /** Active ou coupe la lumière indirecte (SSGI), effective en qualité haute. */
+  setIndirectLight(on) {
+    this.post.setQuality(this.quality, on);
   }
 
   render() {

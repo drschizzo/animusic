@@ -321,6 +321,22 @@ try {
 } catch {
   setQuality('auto');
 }
+// Lumière indirecte (SSGI) : coûteuse, donc débrayable ; elle n'agit qu'en qualité haute.
+function setIndirectLight(on) {
+  $('gi').checked = on;
+  stage.setIndirectLight(on);
+  try {
+    localStorage.setItem('animusic.gi', on ? '1' : '0');
+  } catch {
+    /* réglage non mémorisé */
+  }
+}
+$('gi').addEventListener('change', (e) => setIndirectLight(e.target.checked));
+try {
+  setIndirectLight(localStorage.getItem('animusic.gi') !== '0');
+} catch {
+  setIndirectLight(true);
+}
 const fpsMeter = { frames: 0, since: performance.now(), slow: 0 };
 function measureFps() {
   fpsMeter.frames++;

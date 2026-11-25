@@ -1,6 +1,6 @@
 // Capture d'écran du build de production à un instant du morceau de démo.
 //
-//   npm run build && node tools/shot.mjs sortie.png [--t 12] [--cam x,y,z,tx,ty,tz] [autre.png --t 20 …] [--ui] [--size 1280x720] [--quality high]
+//   npm run build && node tools/shot.mjs sortie.png [--t 12] [--cam x,y,z,tx,ty,tz] [autre.png --t 20 …] [--ui] [--size 1280x720] [--quality high] [--gi off|debug]
 //
 // Sans --cam, c'est le plan du réalisateur à l'instant t. Sert à l'aperçu du README.
 
@@ -53,8 +53,10 @@ try {
   await page.waitForFunction(() => window.animusic?.ensemble, null, { timeout: 60000 });
   for (const { out, t, cam } of shots) {
     await page.evaluate(
-      ({ t, cam, quality, ui }) => {
+      ({ t, cam, quality, ui, gi }) => {
         const a = window.animusic;
+        a.stage.setIndirectLight(gi !== 'off');
+        a.stage.post.ssgi.debug = gi === 'debug';
         if (!ui) document.getElementById('panel').style.display = 'none';
         document.getElementById('quality').value = quality;
         document.getElementById('quality').dispatchEvent(new Event('change'));
@@ -66,7 +68,7 @@ try {
           a.stage.setCamera({ position: c.slice(0, 3), target: c.slice(3, 6) });
         }
       },
-      { t, cam, quality, ui: args.includes('--ui') },
+      { t, cam, quality, ui: args.includes('--ui'), gi: opt('gi', 'on') },
     );
     // Laisse passer quelques images (compilation des shaders, reflets, halo).
     await page.evaluate(() => new Promise((r) => { let n = 0; const f = () => (++n > 4 ? r() : requestAnimationFrame(f)); f(); }));

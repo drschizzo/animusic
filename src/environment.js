@@ -3,9 +3,11 @@
 // fond brumeux, projecteurs à faisceaux volumétriques et poussières en suspension.
 
 import * as THREE from 'three';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { tex, mat, fx } from './materials.js';
 
 const HAZE = 0x070a14;
+const BLUR_LEVELS = 4;
 const ACCENTS = [0x49d8ff, 0xff4fa3, 0xffc46b, 0x8f7bff];
 
 /** Environnement pour les reflets : pièce sombre éclairée par quelques boîtes à lumière. */
@@ -38,15 +40,38 @@ function studioEnvironment(renderer) {
 /** Sol poli : MeshStandardMaterial enrichi d'un reflet planaire flouté. */
 class ReflectiveFloor {
   constructor() {
-    this.target = new THREE.WebGLRenderTarget(512, 512, {
-      type: THREE.HalfFloatType,
-      generateMipmaps: true,
-      minFilter: THREE.LinearMipmapLinearFilter,
-      magFilter: THREE.LinearFilter,
-    });
+    const options = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
+    this.target = new THREE.WebGLRenderTarget(512, 512, { ...options, samples: 4 });
+    // Pyramide de flous gaussiens : chaque niveau est deux fois plus petit et deux fois
+    // plus flou que le précédent. Le sol interpole entre deux niveaux selon sa rugosité.
+    this.levels = Array.from({ length: BLUR_LEVELS }, () => ({
+      temp: new THREE.WebGLRenderTarget(1, 1, options),
+      blurred: new THREE.WebGLRenderTarget(1, 1, options),
+    }));
+    this.blur = new FullScreenQuad(
+      new THREE.ShaderMaterial({
+        uniforms: { tSource: { value: null }, uStep: { value: new THREE.Vector2() }, uClamp: { value: 1e4 } },
+        vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: `
+          uniform sampler2D tSource; uniform vec2 uStep; uniform float uClamp; varying vec2 vUv;
+          vec3 tap(float k) { return min(texture2D(tSource, vUv + uStep * k).rgb, vec3(uClamp)); }
+          void main() {
+            // Gaussienne à 9 points (σ ≈ 2 texels de destination).
+            vec3 c = tap(0.0) * 0.2042;
+            c += (tap(1.0) + tap(-1.0)) * 0.1802;
+            c += (tap(2.0) + tap(-2.0)) * 0.1238;
+            c += (tap(3.0) + tap(-3.0)) * 0.0663;
+            c += (tap(4.0) + tap(-4.0)) * 0.0276;
+            gl_FragColor = vec4(c, 1.0);
+          }`,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
     this.camera = new THREE.PerspectiveCamera();
     this.uniforms = {
       tReflect: { value: this.target.texture },
+      tReflectBlur: { value: this.levels.map((l) => l.blurred.texture) },
       uReflectMatrix: { value: new THREE.Matrix4() },
       uReflect: { value: 1 },
       uStageRadius: { value: 12 },
@@ -70,7 +95,7 @@ class ReflectiveFloor {
       shader.fragmentShader = shader.fragmentShader
         .replace(
           '#include <common>',
-          '#include <common>\nuniform sampler2D tReflect;\nuniform float uReflect;\nuniform float uStageRadius;\nvarying vec4 vReflectUv;\nvarying vec3 vFloorPos;',
+          '#include <common>\nuniform sampler2D tReflect;\nuniform sampler2D tReflectBlur[' + BLUR_LEVELS + '];\nuniform float uReflect;\nuniform float uStageRadius;\nvarying vec4 vReflectUv;\nvarying vec3 vFloorPos;',
         )
         .replace(
           '#include <roughnessmap_fragment>',
@@ -89,18 +114,17 @@ class ReflectiveFloor {
         )
         .replace(
           '#include <opaque_fragment>',
-          `// Reflet planaire : plus la surface est rugueuse, plus on lit un niveau de mip flou.
+          `// Reflet planaire : net sur une surface lisse, puis de plus en plus flou avec la
+          // rugosité (interpolation entre deux niveaux de la pyramide de flous).
           vec2 reflUv = vReflectUv.xy / vReflectUv.w;
-          float reflLod = 0.8 + reflRough * 7.0;
-          vec2 texel = vec2(exp2(reflLod)) / vec2(textureSize(tReflect, 0));
-          vec3 refl = textureLod(tReflect, reflUv, reflLod).rgb * 0.4;
-          refl += textureLod(tReflect, reflUv + texel * vec2(0.7, 0.35), reflLod).rgb * 0.15;
-          refl += textureLod(tReflect, reflUv + texel * vec2(-0.7, -0.35), reflLod).rgb * 0.15;
-          refl += textureLod(tReflect, reflUv + texel * vec2(-0.35, 0.7), reflLod).rgb * 0.15;
-          refl += textureLod(tReflect, reflUv + texel * vec2(0.35, -0.7), reflLod).rgb * 0.15;
+          float reflLevel = clamp(0.15 + reflRough * 5.5, 0.0, float(${BLUR_LEVELS}));
+          vec3 reflLo = texture2D(tReflect, reflUv).rgb;
+          vec3 reflHi = texture2D(tReflectBlur[0], reflUv).rgb;
+          ${Array.from({ length: BLUR_LEVELS - 1 }, (_, i) => `if (reflLevel > ${i + 1}.0) { reflLo = reflHi; reflHi = texture2D(tReflectBlur[${i + 1}], reflUv).rgb; }`).join('\n          ')}
+          vec3 refl = mix(reflLo, reflHi, reflLevel >= float(${BLUR_LEVELS}) ? 1.0 : fract(reflLevel));
           float reflFresnel = pow(1.0 - saturate(dot(normalize(vViewPosition), normal)), 4.0);
           float reflGloss = 1.0 - reflRough;
-          outgoingLight += min(refl, vec3(4.0)) * uReflect * reflGloss * mix(0.5, 1.0, reflFresnel);
+          outgoingLight += refl * uReflect * reflGloss * mix(0.5, 1.0, reflFresnel);
           #include <opaque_fragment>`,
         );
     };
@@ -108,13 +132,22 @@ class ReflectiveFloor {
     this.mesh = new THREE.Mesh(new THREE.CircleGeometry(90, 96), material);
     this.mesh.rotation.x = -Math.PI / 2;
     this.mesh.receiveShadow = true;
+    this.mesh.userData.giAlbedo = 0.2; // le sol capte bien la lumière indirecte (flaques de lumière)
     this._v = new THREE.Vector3();
     this._up = new THREE.Vector3();
     this._bias = new THREE.Matrix4().set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
   }
 
   setSize(w, h) {
-    this.target.setSize(Math.max(64, Math.round(w)), Math.max(64, Math.round(h)));
+    w = Math.max(64, Math.round(w));
+    h = Math.max(64, Math.round(h));
+    this.target.setSize(w, h);
+    this.levels.forEach((l, i) => {
+      const lw = Math.max(8, Math.round(w / 2 ** (i + 1)));
+      const lh = Math.max(8, Math.round(h / 2 ** (i + 1)));
+      l.temp.setSize(lw, lh);
+      l.blurred.setSize(lw, lh);
+    });
   }
 
   /** Rend la scène vue depuis la caméra symétrique par rapport au sol (y = 0). */
@@ -140,8 +173,27 @@ class ReflectiveFloor {
     renderer.setRenderTarget(this.target);
     renderer.clear();
     renderer.render(scene, v);
-    renderer.setRenderTarget(previous);
     hidden.forEach((o, i) => (o.visible = visible[i]));
+
+    // Flous successifs : horizontal puis vertical, chaque niveau partant du précédent.
+    const u = this.blur.material.uniforms;
+    let source = this.target;
+    this.levels.forEach((l, i) => {
+      // Les points très lumineux sont écrêtés avant le premier flou : sinon chaque
+      // source ponctuelle devient une tache qui scintille.
+      u.uClamp.value = i === 0 ? 6 : 1e4;
+      u.tSource.value = source.texture;
+      u.uStep.value.set(1 / l.temp.width, 0);
+      renderer.setRenderTarget(l.temp);
+      this.blur.render(renderer);
+      u.uClamp.value = 1e4;
+      u.tSource.value = l.temp.texture;
+      u.uStep.value.set(0, 1 / l.temp.height);
+      renderer.setRenderTarget(l.blurred);
+      this.blur.render(renderer);
+      source = l.blurred;
+    });
+    renderer.setRenderTarget(previous);
   }
 }
 
@@ -391,7 +443,7 @@ export class Environment {
 
   setQuality(level) {
     this.reflections = level !== 'low';
-    this.reflectionScale = level === 'high' ? 0.75 : 0.45;
+    this.reflectionScale = level === 'high' ? 0.75 : 0.5;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;
     this.key.castShadow = level !== 'low';
     this.key.shadow.mapSize.setScalar(level === 'high' ? 4096 : 2048);

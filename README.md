@@ -20,7 +20,7 @@ et un clavier mécanique enfonce ses touches tout seul — le tout sur une scèn
   Plusieurs pistes peuvent partager le même instrument.
 - **Caméra** : *Réalisateur* (plans automatiques), *Orbite*, ou *Libre* (souris). Toucher la vue passe en libre.
 - **Barre de lecture** pour naviguer dans le morceau ; **Retard image** pour corriger une latence audio mal
-  annoncée (Bluetooth) ; **Qualité** *Auto* part de *Haute* (reflets du sol, ombres 4K, occlusion ambiante, halo) et descend d'un cran
+  annoncée (Bluetooth) ; **Qualité** *Auto* part de *Haute* (reflets du sol, ombres 4K, lumière indirecte, occlusion ambiante, halo) et descend d'un cran
   si l'animation rame.
 - **Sons réalistes** : échantillons General MIDI (SoundFont FluidR3), sinon synthèse.
 - **⏺ Vidéo** : rejoue le morceau et l'enregistre (image + son) en MP4 ou WebM.
@@ -73,8 +73,15 @@ Le programme General MIDI donne un indice, les statistiques des notes tranchent 
 
 ## Rendu
 
-- **Sol** : plateau poli dont la rugosité varie ; il reflète la scène par un rendu miroir, lu d'autant plus flou
-  que la surface est rugueuse.
+- **Sol** : plateau poli dont la rugosité varie ; il reflète la scène par un rendu miroir anticrénelé, puis une
+  pyramide de flous gaussiens (quatre niveaux, chacun deux fois plus flou) entre lesquels le sol interpole selon sa
+  rugosité : reflets nets là où il est lisse, diffus ailleurs, sans effet de blocs.
+- **Lumière indirecte (SSGI)**, `src/ssgi.js` : en qualité haute, la lumière visible à l'écran éclaire les surfaces
+  voisines (flaque verte au pied de l'orgue, lames qui teintent leurs résonateurs…). Un tampon géométrique (normales,
+  couleur de base, profondeur) est rendu une fois et partagé avec l'occlusion ambiante ; à demi-résolution, six rayons
+  par pixel marchent dans la profondeur et récoltent la lumière de l'image, puis un flou respectant les arêtes
+  débruite le résultat. Limite inhérente à la technique : seul ce qui est à l'écran éclaire. Débrayable (case
+  *Lumière indirecte*).
 - **Lumière** : carte d'environnement « studio » générée au démarrage (boîtes à lumière), lumière principale avec
   ombres douces 4K, contre-jours colorés, lampes ponctuelles pilotées par la musique (orgue, cristal, frappes des
   lames), projecteurs à faisceaux volumétriques et bordure de scène qui pulsent avec la grosse caisse.
@@ -82,7 +89,7 @@ Le programme General MIDI donne un indice, les statistiques des notes tranchent 
   fichier image.
 - **Effets** : traînées et étincelles d'impact des billes (déterministes : identiques à chaque passage), éclair de
   bouche des canons, poussières en suspension.
-- **Post-traitement** : rendu HDR anticrénelé (MSAA 4×), occlusion ambiante GTAO, halo, vignettage, aberration
+- **Post-traitement** : rendu HDR anticrénelé (MSAA 4×), lumière indirecte, occlusion ambiante GTAO, halo, vignettage, aberration
   chromatique légère, grain, conversion ACES.
 
 ## Import audio (mp3 → animation)
@@ -121,6 +128,7 @@ l'image suit l'horloge de rendu audio.
 | `src/scene.js` | Scène, qualité ; instancie la vue de chaque instrument |
 | `src/environment.js` | Décor : sol réfléchissant, éclairage, fond, projecteurs volumétriques, poussières |
 | `src/postfx.js` | Post-traitement : MSAA HDR, occlusion ambiante (GTAO), halo, objectif, ACES |
+| `src/ssgi.js` | Tampon géométrique et lumière indirecte en espace écran (SSGI) |
 | `src/materials.js`, `src/parts.js` | Matériaux physiques, textures procédurales, pièces de construction partagées |
 | `src/audio.js` | Tone.js : échantillons GM, synthèse de secours, horloge de référence, capture pour la vidéo |
 | `src/exporter.js` | Export glTF (animation cuite) |
