@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose } from './choreography.js';
+import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose, turretSpin } from './choreography.js';
 import { lowerBound, upperBound } from './util.js';
 import { mat, fx } from './materials.js';
-import { roundedBox, lathe, rod, ringOf, footShadow, V } from './parts.js';
+import { roundedBox, lathe, rod, ringOf, footShadow, gear, Piston, CableBundle, V } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const TRAIL = 6; // fantômes lumineux derrière chaque bille
@@ -131,6 +131,25 @@ export class BallsView {
       inner.rotation.x = Math.PI / 2;
       inner.position.y = 0.215;
       this.content.add(hub, ring, inner);
+
+      // Couronne dentée au centre (avance d'un cran à chaque tir) et ses pignons.
+      const crown = gear(48, R - 0.66, R - 0.72, 0.05, brass);
+      crown.rotation.x = -Math.PI / 2;
+      crown.position.y = 0.235;
+      const dome = lathe([[0, 0.23], [0.24, 0.23], [0.2, 0.29], [0.12, 0.33], [0, 0.34]], 32, chrome);
+      this.crown = crown;
+      this.content.add(crown, dome);
+      this.pinions = [0, 1, 2].map((k) => {
+        const a = (k / 3) * Math.PI * 2 + 0.5;
+        const p = gear(12, 0.11, 0.08, 0.05, steel);
+        p.rotation.x = -Math.PI / 2;
+        const r = R - 0.69 + 0.095;
+        p.position.set(Math.cos(a) * r, 0.30, Math.sin(a) * r);
+        const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.12, 10), chrome);
+        axle.position.set(p.position.x, 0.29, p.position.z);
+        this.content.add(p, axle);
+        return p;
+      });
     }
 
     const L = o.barrelLength;
@@ -204,8 +223,26 @@ export class BallsView {
       barrel.add(tube, band, ring, hole, flash);
       barrel.position.copy(pivot);
       this.content.add(barrel);
-      return { barrel, ringMat, flashMat, flash, pivot };
+      // Collier d'orientation sur la colonne (suit le cap du fût) et vérin d'élévation.
+      const collar = new THREE.Group();
+      const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.03, 10, 24), dark);
+      collarRing.rotation.x = Math.PI / 2;
+      const lug = roundedBox(0.09, 0.1, 0.09, 0.02, dark);
+      lug.position.x = 0.14;
+      collar.add(collarRing, lug);
+      collar.position.set(pivot.x, pivot.y - 0.42, pivot.z);
+      this.content.add(collar);
+      const piston = new Piston(this.content, { radius: 0.03, body: 0.3 });
+      return { barrel, ringMat, flashMat, flash, pivot, collar, piston };
     });
+    // Flexibles d'alimentation : du cœur de la tourelle à la culasse de chaque canon.
+    this.hoses = ch.launchers.length ? new CableBundle(this.content, ch.launchers.length, { radius: 0.028, segments: 12 }) : null;
+    this._a = new THREE.Vector3();
+    this._b = new THREE.Vector3();
+    this._under = new THREE.Vector3();
+    this._h = new THREE.Vector3();
+    this._axis = new THREE.Vector3();
+    this._q2 = new THREE.Quaternion();
 
     // --- Billes (pool instancié) : chrome teinté, légèrement lumineux
     const pool = Math.max(1, ch.maxConcurrent);
@@ -319,11 +356,29 @@ export class BallsView {
     // Canons : visée + recul + éclat de la bouche
     let fire = 0;
     ch.launchers.forEach((L, i) => {
-      const { dir, recoil } = launcherPose(ch, L, t);
+      const { dir, recoil, shake } = launcherPose(ch, L, t);
       const part = this.launcherParts[i];
       this._dir.set(dir[0], dir[1], dir[2]);
       part.barrel.quaternion.setFromUnitVectors(UP, this._dir);
+      // Tremblement après le tir : petite rotation autour de l'axe horizontal du fût.
+      this._h.set(this._dir.x, 0, this._dir.z);
+      if (this._h.lengthSq() < 1e-8) this._h.set(1, 0, 0);
+      this._h.normalize();
+      this._axis.set(-this._h.z, 0, this._h.x);
+      part.barrel.quaternion.premultiply(this._q2.setFromAxisAngle(this._axis, shake));
       part.barrel.position.copy(part.pivot).addScaledVector(this._dir, -0.2 * recoil);
+      // Collier, vérin et flexible suivent le fût.
+      part.collar.rotation.y = Math.atan2(-this._h.z, this._h.x);
+      this._dir.set(0, 1, 0).applyQuaternion(part.barrel.quaternion);
+      this._under.set(0, -1, 0).addScaledVector(this._dir, this._dir.y).normalize();
+      this._a.copy(part.collar.position).addScaledVector(this._h, 0.15);
+      this._b.copy(part.barrel.position).addScaledVector(this._dir, 0.42).addScaledVector(this._under, 0.12);
+      part.piston.update(this._a, this._b);
+      if (this.hoses) {
+        this._a.set(part.pivot.x * 0.17, 0.31, part.pivot.z * 0.17);
+        this._b.copy(part.barrel.position).addScaledVector(this._dir, -0.2).addScaledVector(this._under, 0.02);
+        this.hoses.set(i, this._a, this._b, 0.06);
+      }
       part.ringMat.emissiveIntensity = 0.25 + 5 * recoil;
       part.flash.visible = recoil > 0.02;
       part.flashMat.color.setRGB(1, 0.8, 0.5).multiplyScalar(1.6 * recoil * recoil);
@@ -331,6 +386,12 @@ export class BallsView {
       fire = Math.max(fire, recoil);
     });
     if (this.hubMat) this.hubMat.emissiveIntensity = 2.5 + 5 * fire;
+    this.hoses?.commit();
+    if (this.crown) {
+      const spin = turretSpin(ch, t);
+      this.crown.rotation.z = spin;
+      for (const p of this.pinions) p.rotation.z = -spin * 4;
+    }
 
     // Lames : éclat coloré + léger enfoncement ; les deux frappes les plus vives éclairent alentour.
     const lit = [null, null];

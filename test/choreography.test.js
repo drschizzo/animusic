@@ -60,7 +60,7 @@ test('le canon est aligné sur sa trajectoire au moment du tir', () => {
   const v = ball.v0;
   const l = Math.hypot(...v);
   close(dir, v.map((x) => x / l), 1e-3);
-  assert.ok(recoil > 0.99);
+  assert.ok(recoil > 0.9 * (0.6 + 0.4 * ball.velocity)); // recul maximal au tir, proportionné à la note
 });
 
 test('la lame s\'illumine à l\'impact puis s\'éteint', () => {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { carrierPose, stringVibration } from './strings.js';
 import { mat, fx } from './materials.js';
-import { rod, plinth, roundedBox, V } from './parts.js';
+import { rod, plinth, roundedBox, gear, CableBundle, V } from './parts.js';
 
 /** Rendu de la basse à cordes pincées (voir strings.js). */
 export class StringsView {
@@ -79,6 +79,18 @@ export class StringsView {
     g.add(rod(V(x0, 0.1, railZ), V(x0, o.pickY, railZ), 0.03, dark));
     g.add(rod(V(x1, 0.1, railZ), V(x1, o.pickY, railZ), 0.03, dark));
 
+    // Poulies aux deux bouts du rail (elles tournent avec les chariots) et chaînes porte-câbles.
+    this.pulleyR = 0.09;
+    this.pulleys = [x0, x1].map((x) => {
+      const p = gear(14, this.pulleyR + 0.02, this.pulleyR, 0.05, gold);
+      p.position.set(x, o.pickY, railZ + 0.09);
+      g.add(p);
+      return p;
+    });
+    this.railEnds = [V(x0, o.pickY + 0.02, railZ + 0.02), V(x1, o.pickY + 0.02, railZ + 0.02)];
+    this.chains = new CableBundle(g, model.carriers.length, { radius: 0.02, segments: 16, material: mat.gunmetal() });
+    this._a = new THREE.Vector3();
+
     this.carrierViews = model.carriers.map(() => {
       const c = new THREE.Group();
       const body = roundedBox(0.22, 0.17, 0.17, 0.035, mat.shell());
@@ -122,14 +134,23 @@ export class StringsView {
     }
     this.led.emissiveIntensity = 2.5 + 4 * glow;
     m.carriers.forEach((c, i) => {
-      const { x, z } = carrierPose(m, c, t);
+      const { x, z, sway, tilt } = carrierPose(m, c, t);
       const view = this.carrierViews[i];
       view.c.position.x = x;
       view.c.position.z = z;
+      // Balancement en s'arrêtant, à-coup du médiator au pincement.
+      view.c.rotation.z = -sway;
+      view.c.rotation.x = tilt;
+      if (i < 2) this.pulleys[i].rotation.z = -x / this.pulleyR;
+      // Chaîne porte-câbles : du bout du rail le plus proche jusqu'au chariot.
+      const end = this.railEnds[i % 2];
+      this._a.set(x, m.options.pickY + 0.09, view.c.position.z + 0.45);
+      this.chains.set(i, end, this._a, 0.12 + 0.05 * Math.abs(x - end.x));
       // Le médiator s'illumine au moment du pincement.
       const strike = Math.max(0, 1 - Math.abs(z) / m.options.pickOffset) ** 4;
       view.pickMat.emissiveIntensity = 0.2 + 4 * strike;
       view.eyeMat.emissiveIntensity = 1.5 + 4 * strike;
     });
+    this.chains.commit();
   }
 }

@@ -34,12 +34,17 @@ export function buildPipes(notes, options = {}) {
     p.notes.push({ start: note.time, end: note.time + duration, velocity: note.velocity, track: note.track });
     p.maxDur = Math.max(p.maxDur, duration);
   }
+  // Air consommé (somme des durées jouées jusqu'à t) : sommes cumulées des débuts et fins.
+  const starts = sorted.map((n) => n.time);
+  const ends = sorted.map((n) => n.time + Math.max(0.05, n.duration)).sort((a, b) => a - b);
+  const prefix = (arr) => arr.reduce((acc, v) => (acc.push(acc[acc.length - 1] + v), acc), [0]);
   return {
     options: o,
     origin: o.origin ?? [0, 0, 0],
     yaw: o.yaw ?? 0,
     spacing,
     width: n * spacing + 0.6,
+    air: { starts, ends, sumStarts: prefix(starts), sumEnds: prefix(ends) },
     pipes,
     onsets: sorted.map((n) => n.time),
   };
@@ -80,4 +85,12 @@ export function sustainState(notes, maxDur, o, t) {
 /** État d'un tube à l'instant t : hauteur de la colonne de lumière, valve, piste. */
 export function pipeState(model, pipe, t) {
   return sustainState(pipe.notes, pipe.maxDur, model.options, t);
+}
+
+/** Air consommé jusqu'à t (en « notes·secondes ») : fait tourner la soufflerie. */
+export function airUsed(model, t) {
+  const { starts, ends, sumStarts, sumEnds } = model.air;
+  const a = upperBound(starts, t);
+  const b = upperBound(ends, t);
+  return a * t - sumStarts[a] - (b * t - sumEnds[b]);
 }

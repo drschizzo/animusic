@@ -114,3 +114,131 @@ export function ringOf(count, radius, geometry, material, y = 0) {
   mesh.castShadow = true;
   return mesh;
 }
+
+const gearCache = new Map();
+
+/**
+ * Roue dentée (dans le plan xy, épaisseur selon z, centrée) : `teeth` dents trapézoïdales
+ * entre les rayons `inner` (pied) et `outer` (tête), moyeu percé de `hole`.
+ */
+export function gearGeometry(teeth, outer, inner, thickness, hole = inner * 0.35) {
+  const key = [teeth, outer, inner, thickness, hole].join();
+  if (gearCache.has(key)) return gearCache.get(key);
+  const shape = new THREE.Shape();
+  const step = (Math.PI * 2) / teeth;
+  for (let i = 0; i < teeth; i++) {
+    const a = i * step;
+    const pts = [
+      [inner, a],
+      [outer, a + step * 0.18],
+      [outer, a + step * 0.48],
+      [inner, a + step * 0.66],
+    ];
+    pts.forEach(([r, b], k) => {
+      const x = Math.cos(b) * r;
+      const y = Math.sin(b) * r;
+      if (i === 0 && k === 0) shape.moveTo(x, y);
+      else shape.lineTo(x, y);
+    });
+  }
+  shape.closePath();
+  const holePath = new THREE.Path();
+  holePath.absarc(0, 0, hole, 0, Math.PI * 2, true);
+  shape.holes.push(holePath);
+  const g = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: true, bevelThickness: thickness * 0.15, bevelSize: thickness * 0.12, bevelSegments: 1, curveSegments: 24 });
+  g.translate(0, 0, -thickness / 2);
+  gearCache.set(key, g);
+  return g;
+}
+
+/** Roue dentée prête à poser (tourne autour de son axe z local). */
+export function gear(teeth, outer, inner, thickness, material) {
+  const m = new THREE.Mesh(gearGeometry(teeth, outer, inner, thickness), material);
+  m.castShadow = m.receiveShadow = true;
+  return m;
+}
+
+const pistonBody = new THREE.CylinderGeometry(1, 1, 1, 16);
+pistonBody.translate(0, 0.5, 0); // de 0 à 1 le long de y
+
+/**
+ * Vérin hydraulique entre deux points mobiles : un corps fixé en `a`, une tige chromée
+ * qui coulisse et rejoint `b`. update(a, b) en coordonnées du parent.
+ */
+export class Piston {
+  constructor(parent, { radius = 0.035, body = 0.35, bodyMat = mat.gunmetal(), rodMat = mat.chrome(), capMat = null } = {}) {
+    this.radius = radius;
+    this.length = body;
+    this.body = new THREE.Mesh(pistonBody, bodyMat);
+    this.rod = new THREE.Mesh(pistonBody, rodMat);
+    this.body.castShadow = this.rod.castShadow = true;
+    const capGeo = new THREE.SphereGeometry(radius * 1.25, 12, 8);
+    this.capA = new THREE.Mesh(capGeo, capMat ?? bodyMat);
+    this.capB = new THREE.Mesh(capGeo, capMat ?? bodyMat);
+    parent.add(this.body, this.rod, this.capA, this.capB);
+    this._d = new THREE.Vector3();
+  }
+
+  update(a, b) {
+    const d = this._d.copy(b).sub(a);
+    const len = Math.max(1e-4, d.length());
+    d.divideScalar(len);
+    const body = Math.min(this.length, len * 0.92);
+    this.body.position.copy(a);
+    this.body.quaternion.setFromUnitVectors(UP, d);
+    this.body.scale.set(this.radius, body, this.radius);
+    this.rod.position.copy(b);
+    this.rod.quaternion.setFromUnitVectors(UP, d.negate());
+    this.rod.scale.set(this.radius * 0.45, Math.max(1e-3, len - body * 0.6), this.radius * 0.45);
+    this.capA.position.copy(a);
+    this.capB.position.copy(b);
+  }
+}
+
+/**
+ * Faisceau de câbles souples (gaines, flexibles) : chaque câble est une suite de
+ * segments instanciés le long d'une courbe pendante entre deux points. Un seul appel
+ * de dessin pour tous les câbles d'un instrument. set(i, a, b, sag) puis commit().
+ */
+export class CableBundle {
+  constructor(parent, count, { radius = 0.018, segments = 14, material = mat.rubber() } = {}) {
+    this.segments = segments;
+    this.radius = radius;
+    const geo = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true);
+    geo.translate(0, 0.5, 0);
+    this.mesh = new THREE.InstancedMesh(geo, material, Math.max(1, count * segments));
+    this.mesh.castShadow = true;
+    this.mesh.frustumCulled = false;
+    parent.add(this.mesh);
+    this._m = new THREE.Matrix4();
+    this._q = new THREE.Quaternion();
+    this._s = new THREE.Vector3();
+    this._p = new THREE.Vector3();
+    this._n = new THREE.Vector3();
+    this._d = new THREE.Vector3();
+  }
+
+  /** Point du câble i à l'abscisse u (0..1) : corde + flèche parabolique vers le bas. */
+  point(a, b, sag, u, out) {
+    return out.copy(a).lerp(b, u).setY(a.y + (b.y - a.y) * u - 4 * sag * u * (1 - u));
+  }
+
+  /** Pose le câble i entre a et b (même repère que le parent), avec une flèche `sag`. */
+  set(i, a, b, sag = 0.2) {
+    const n = this.segments;
+    this.point(a, b, sag, 0, this._p);
+    for (let k = 1; k <= n; k++) {
+      this.point(a, b, sag, k / n, this._n);
+      const d = this._d.copy(this._n).sub(this._p);
+      const len = d.length();
+      this._q.setFromUnitVectors(UP, d.divideScalar(Math.max(1e-6, len)));
+      this._s.set(this.radius, len * 1.04, this.radius);
+      this.mesh.setMatrixAt(i * n + k - 1, this._m.compose(this._p, this._q, this._s));
+      this._p.copy(this._n);
+    }
+  }
+
+  commit() {
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+}

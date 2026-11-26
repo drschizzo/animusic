@@ -61,6 +61,8 @@ function upperBound(arr, value) {
   return lo;
 }
 
+import { springSum } from './util.js';
+
 const smoothstep = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 
@@ -159,7 +161,19 @@ export function strikeLift(kit, piece, t) {
 /** Angles absolus des segments du bras (dans son plan vertical) à l'instant t. */
 export function armAngles(kit, piece, t) {
   const h = strikeLift(kit, piece, t);
-  return piece.arm.links.map((l, i) => l.angle0 + h * piece.arm.lifts[i]);
+  const angles = piece.arm.links.map((l, i) => l.angle0 + h * piece.arm.lifts[i]);
+  // Mouvement secondaire : après chaque coup, la baguette fouette et l'épaule encaisse
+  // (ressorts amortis). Nul à l'approche d'une frappe : le contact reste exact.
+  const hits = piece.hits;
+  const i = upperBound(hits, t);
+  const gap = Math.min(i > 0 ? t - hits[i - 1].time : Infinity, i < hits.length ? hits[i].time - t : Infinity);
+  const near = smoothstep(gap / 0.06);
+  if (near > 0) {
+    const last = angles.length - 1;
+    angles[last] += near * springSum(hits, t, { omega: 38, zeta: 0.22, amp: (e) => 0.09 * e.velocity });
+    if (last > 0) angles[0] += near * springSum(hits, t, { omega: 17, zeta: 0.3, amp: (e) => 0.035 * e.velocity });
+  }
+  return angles;
 }
 
 /** Position du bout de la baguette (ou du batteur) pour des angles donnés. */

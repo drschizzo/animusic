@@ -8,7 +8,7 @@
 // Coordonnées locales : x le long du rail, y vers le haut, z vers le centre de
 // la scène (côté médiator). Le placement dans la scène est donné par origin + yaw.
 
-import { upperBound, smoothstep, lerp } from './util.js';
+import { upperBound, smoothstep, lerp, springSum } from './util.js';
 
 export const STRING_DEFAULTS = {
   spacing: 0.32,
@@ -62,6 +62,21 @@ export function buildBassStrings(notes, options = {}) {
     s.hits.push({ time: note.time, duration: note.duration, velocity: note.velocity, track: note.track });
   }
 
+  // Coups de ressort du chariot : il se balance en s'arrêtant devant une corde
+  // (dans le sens du déplacement), et le médiator encaisse chaque pincement.
+  for (const c of carriers) {
+    c.stops = [];
+    c.shots.forEach((shot, i) => {
+      const prev = c.shots[i - 1];
+      if (!prev) return;
+      const dx = shot.x - prev.x;
+      if (Math.abs(dx) < 1e-6) return;
+      const w = Math.min(o.pluckTime, (shot.time - prev.time) * 0.3);
+      c.stops.push({ time: shot.time - w, velocity: Math.sign(dx) * Math.min(1, Math.abs(dx) / 0.6) * 0.22 });
+    });
+    c.plucks = c.shots.map((s) => ({ time: s.time, velocity: s.dir * 0.12 }));
+  }
+
   const width = n * spacing + 0.6;
   return {
     options: o,
@@ -101,7 +116,9 @@ export function carrierPose(model, carrier, t) {
   else if (prev && t <= prev.time + w) z = sweep(prev);
   else if (prev) z = -prev.dir * a;
   else z = next ? next.dir * a : a;
-  return { x, z };
+  const sway = springSum(carrier.stops, t, { omega: 16, zeta: 0.18 });
+  const tilt = springSum(carrier.plucks, t, { omega: 26, zeta: 0.25 });
+  return { x, z, sway, tilt };
 }
 
 /** Amplitude de vibration d'une corde à l'instant t. */

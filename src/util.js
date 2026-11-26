@@ -62,3 +62,44 @@ export function lastHitPulse(hits, t, decay) {
   const since = t - h.time;
   return { pulse: h.velocity * Math.exp(-since * decay), since, track: h.track };
 }
+
+/**
+ * Oscillateur amorti excité par une suite d'impulsions (triées par `time`) : somme
+ * des réponses x(s) = a·e^(−ζωs)·sin(ω_d·s). Nulle à l'instant de chaque impulsion,
+ * donc sans à-coup ; sert à tous les « mouvements secondaires » (tremblement d'un
+ * canon après le tir, baguette qui fouette, chariot qui se balance en s'arrêtant).
+ * `amp(e)` donne l'amplitude signée de chaque impulsion.
+ */
+export function springSum(events, t, { omega = 14, zeta = 0.2, amp = (e) => e.velocity ?? 1 } = {}) {
+  const decay = zeta * omega;
+  const wd = omega * Math.sqrt(Math.max(1e-6, 1 - zeta * zeta));
+  const horizon = t - 6 / decay;
+  let x = 0;
+  for (let i = upperBound(events, t, (e) => e.time) - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.time < horizon) break;
+    const s = t - e.time;
+    x += amp(e) * Math.exp(-decay * s) * Math.sin(wd * s);
+  }
+  return x;
+}
+
+/**
+ * Interpolation 0 → 1 avec anticipation et dépassement (léger recul avant de partir,
+ * puis on dépasse la cible et on revient) : vaut exactement 0 et 1 aux extrémités.
+ */
+export function easeBack(x, s = 0.9) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const c = s * 1.525;
+  const y = 2 * x;
+  return y < 1 ? (y * y * ((c + 1) * y - c)) / 2 : ((y - 2) * (y - 2) * ((c + 1) * (y - 2) + c) + 2) / 2;
+}
+
+/** Cumul lissé de pas réguliers : chaque événement fait avancer la valeur de `step` en `dur` secondes. */
+export function steppedTotal(events, t, step, dur) {
+  const done = upperBound(events, t - dur, (e) => e.time);
+  let v = done * step;
+  for (let i = done; i < events.length && events[i].time <= t; i++) v += step * smoothstep((t - events[i].time) / dur);
+  return v;
+}

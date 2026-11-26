@@ -6,6 +6,8 @@
 // d'impact et la position de la lame ciblée ; on en déduit l'instant de
 // lancement et la vitesse initiale de la bille pour une parabole exacte.
 
+import { easeBack, springSum, steppedTotal } from './util.js';
+
 export const DEFAULTS = {
   gravity: 9.8,
   flightTime: 1.2, // secondes entre le tir et l'impact
@@ -148,7 +150,7 @@ export function buildChoreography(notes, options = {}) {
       dir = norm(v0);
     }
 
-    L.shots.push({ time: launch, dir });
+    L.shots.push({ time: launch, dir, velocity: note.velocity });
     L.lastLaunch = launch;
     bar.hits.push({ time: note.time, velocity: note.velocity, track: note.track });
 
@@ -179,7 +181,8 @@ export function buildChoreography(notes, options = {}) {
   const first = balls.length ? balls[0].launch : 0;
   const last = balls.length ? balls[balls.length - 1].end : 0;
 
-  return { options: o, bars, launchers, balls, radius, arc, maxConcurrent, start: first, duration: last };
+  const shotTimes = balls.map((b) => ({ time: b.launch })).sort((a, b) => a.time - b.time);
+  return { options: o, bars, launchers, balls, radius, arc, maxConcurrent, start: first, duration: last, shotTimes };
 }
 
 /** Position d'une bille à l'instant t (écrite dans out). */
@@ -217,9 +220,11 @@ export function activeBallRange(ch, t) {
   return [start, Math.max(start, end)];
 }
 
-const smoothstep = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
-
-/** Orientation et recul d'un canon à l'instant t. */
+/**
+ * Orientation, recul et tremblement d'un canon à l'instant t. La visée part avec un
+ * léger recul et dépasse un peu la cible avant de s'y caler (pile alignée au tir) ;
+ * après le coup, le fût tremble (ressort amorti), d'autant plus que la note est forte.
+ */
 export function launcherPose(ch, launcher, t) {
   const shots = launcher.shots;
   const i = upperBound(shots, t, (s) => s.time) - 1;
@@ -229,8 +234,8 @@ export function launcherPose(ch, launcher, t) {
 
   if (next) {
     const window = Math.min(ch.options.aimWindow, prev ? next.time - prev.time : Infinity);
-    const s = smoothstep((t - (next.time - window)) / window);
-    if (s > 0) {
+    const s = easeBack((t - (next.time - window)) / window, 0.7);
+    if (s !== 0) {
       dir = norm([
         dir[0] + (next.dir[0] - dir[0]) * s,
         dir[1] + (next.dir[1] - dir[1]) * s,
@@ -238,8 +243,14 @@ export function launcherPose(ch, launcher, t) {
       ]);
     }
   }
-  const recoil = prev ? Math.exp(-(t - prev.time) * 12) : 0;
-  return { dir, recoil };
+  const recoil = prev ? (0.6 + 0.4 * (prev.velocity ?? 1)) * Math.exp(-(t - prev.time) * 12) : 0;
+  const shake = springSum(shots, t, { omega: 34, zeta: 0.16, amp: (e) => 0.05 * (0.4 + (e.velocity ?? 1)) });
+  return { dir, recoil, shake };
+}
+
+/** Rotation (rad) de la couronne dentée de la tourelle : un cran à chaque tir. */
+export function turretSpin(ch, t) {
+  return steppedTotal(ch.shotTimes, t, (2 * Math.PI) / 48, 0.18);
 }
 
 /** Intensité d'éclat d'une lame à l'instant t, et piste de la dernière frappe. */

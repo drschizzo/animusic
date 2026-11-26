@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { pipeState } from './pipes.js';
+import { pipeState, airUsed } from './pipes.js';
 import { mat, fx } from './materials.js';
-import { plinth, lathe } from './parts.js';
+import { plinth, lathe, roundedBox, gear, Piston } from './parts.js';
 
 /** Rendu des tubes d'orgue lumineux (voir pipes.js). */
 export class PipesView {
@@ -63,6 +63,36 @@ export class PipesView {
       return { p, light, lightMat, valve, valveMat };
     });
 
+    // Soufflerie à l'arrière : deux soufflets en opposition, pompés par un volant à
+    // manivelle qui tourne d'autant plus vite que l'orgue consomme d'air.
+    const leather = new THREE.MeshStandardMaterial({ color: 0x3a1c14, roughness: 0.75 });
+    const plate = mat.lacquer(0x1a0d10, 0.3);
+    const bz = -0.72;
+    this.bellows = [-1, 1].map((side) => {
+      const x = side * Math.min(model.width * 0.3, 1.2);
+      const foot = roundedBox(0.62, 0.06, 0.46, 0.015, plate);
+      foot.position.set(x, 0.03, bz);
+      const folds = Array.from({ length: 5 }, () => {
+        const f = roundedBox(0.56, 0.05, 0.4, 0.02, leather);
+        g.add(f);
+        return f;
+      });
+      const top = roundedBox(0.62, 0.05, 0.46, 0.015, plate);
+      g.add(foot, top);
+      return { x, folds, top, side };
+    });
+    this.wheel = gear(24, 0.26, 0.23, 0.05, gold);
+    this.wheel.position.set(0, 0.62, bz - 0.05);
+    const hubAxle = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.3, 12), chrome);
+    hubAxle.rotation.x = Math.PI / 2;
+    hubAxle.position.copy(this.wheel.position);
+    const post = roundedBox(0.12, 0.62, 0.12, 0.02, mat.gunmetal());
+    post.position.set(0, 0.31, bz - 0.17);
+    g.add(this.wheel, hubAxle, post);
+    this.rods = this.bellows.map(() => new Piston(g, { radius: 0.022, body: 0.3, bodyMat: chrome }));
+    this._pin = new THREE.Vector3();
+    this._top = new THREE.Vector3();
+
     // La lumière des tubes éclaire réellement les alentours.
     this.lamp = fx(new THREE.PointLight(0xffffff, 0, 12, 1.6));
     this.lamp.position.set(0, baseH + 1.3, 0.5);
@@ -98,6 +128,23 @@ export class PipesView {
       this.led.emissive.copy(this._c);
     }
     this.lamp.intensity = 9 * energy;
+
+    // Soufflerie : un tour de volant toutes les ~1,5 notes·s, plus une lente rotation de repos.
+    const phase = airUsed(m, t) * 4 + t * 0.6;
+    this.wheel.rotation.z = -phase;
+    const pinR = 0.17;
+    this._pin.set(Math.cos(-phase) * pinR, 0.62 + Math.sin(-phase) * pinR, -0.72 + 0.02);
+    this.bellows.forEach((b, i) => {
+      const h = 0.2 + 0.14 * (0.5 + 0.5 * Math.sin(phase + (b.side > 0 ? Math.PI : 0)));
+      b.folds.forEach((f, k) => {
+        const y = 0.06 + ((k + 0.5) / b.folds.length) * h;
+        f.position.set(b.x, y, -0.72);
+        f.scale.set(1 - 0.12 * (k % 2), 1, 1 - 0.12 * (k % 2));
+      });
+      b.top.position.set(b.x, 0.085 + h, -0.72);
+      this._top.set(b.x * 0.55, 0.11 + h, -0.72 + 0.02);
+      this.rods[i].update(this._pin, this._top);
+    });
     this.led.emissiveIntensity = 2.5 + 4 * energy;
   }
 }
