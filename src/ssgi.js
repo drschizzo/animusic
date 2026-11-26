@@ -49,14 +49,19 @@ export class GBuffer {
       glslVersion: THREE.GLSL3,
       side: THREE.DoubleSide,
       uniforms: { uAlbedo: { value: new THREE.Color() } },
+      // Le découpage par le sol s'applique aussi ici : un instrument encore sous le
+      // plateau ne doit ni occulter ni éclairer quoi que ce soit.
+      clipping: true,
       vertexShader: /* glsl */ `
         #include <common>
+        #include <clipping_planes_pars_vertex>
         varying vec3 vViewNormal;
         void main() {
           #include <beginnormal_vertex>
           #include <defaultnormal_vertex>
           #include <begin_vertex>
           #include <project_vertex>
+          #include <clipping_planes_vertex>
           vViewNormal = normalize(transformedNormal);
         }`,
       fragmentShader: /* glsl */ `
@@ -64,7 +69,9 @@ export class GBuffer {
         layout(location = 1) out highp vec4 gAlbedo;
         uniform vec3 uAlbedo;
         varying vec3 vViewNormal;
+        #include <clipping_planes_pars_fragment>
         void main() {
+          #include <clipping_planes_fragment>
           // Normale dégénérée (triangle aplati) : direction caméra plutôt que NaN.
           float len = length(vViewNormal);
           vec3 n = (len > 1e-6 ? vViewNormal / len : vec3(0.0, 0.0, 1.0)) * (gl_FrontFacing ? 1.0 : -1.0);

@@ -29,6 +29,56 @@ const SanitizeShader = {
     }`,
 };
 
+/**
+ * Profondeur de champ : flou dont le rayon croît avec l'écart à la distance de mise au
+ * point, lu dans la profondeur du tampon géométrique. Un échantillon n'est retenu que
+ * s'il est lui-même flou à cette distance ou s'il est derrière : un premier plan net ne
+ * bave pas sur l'arrière-plan flou.
+ */
+const DofShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    tDepth: { value: null },
+    cameraNear: { value: 0.1 },
+    cameraFar: { value: 250 },
+    uFocus: { value: 10 },
+    uAperture: { value: 0 },
+    uTexel: { value: new THREE.Vector2(1, 1) },
+    uMaxBlur: { value: 10 },
+  },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    #include <packing>
+    uniform sampler2D tDiffuse; uniform sampler2D tDepth;
+    uniform float cameraNear; uniform float cameraFar; uniform float uFocus; uniform float uAperture; uniform float uMaxBlur;
+    uniform vec2 uTexel;
+    varying vec2 vUv;
+    float viewDist(vec2 uv) {
+      return -perspectiveDepthToViewZ(texture2D(tDepth, uv).x, cameraNear, cameraFar);
+    }
+    float coc(float z) {
+      return clamp(uAperture * abs(z - uFocus) / max(z, 0.1) * 18.0, 0.0, uMaxBlur);
+    }
+    void main() {
+      vec4 base = texture2D(tDiffuse, vUv);
+      float z = viewDist(vUv);
+      float c = coc(z);
+      if (c < 0.6) { gl_FragColor = base; return; }
+      vec3 sum = base.rgb;
+      float wsum = 1.0;
+      for (int i = 0; i < 28; i++) {
+        float a = float(i) * 2.39996;
+        float r = sqrt(float(i) + 0.5) / sqrt(28.0) * c;
+        vec2 uv = vUv + vec2(cos(a), sin(a)) * r * uTexel;
+        float zs = viewDist(uv);
+        float w = (coc(zs) >= r * 0.9 || zs > z) ? 1.0 : 0.0;
+        sum += texture2D(tDiffuse, uv).rgb * w;
+        wsum += w;
+      }
+      gl_FragColor = vec4(sum / wsum, base.a);
+    }`,
+};
+
 const LensShader = {
   uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAberration: { value: 0.0016 }, uVignette: { value: 0.42 }, uGrain: { value: 0.035 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -74,6 +124,11 @@ export class PostFX {
     ao.blendIntensity = 0.9;
     composer.addPass(ao);
 
+    // Profondeur de champ (qualité haute : elle lit la profondeur du tampon géométrique).
+    this.dof = new ShaderPass(DofShader);
+    this.dof.uniforms.tDepth.value = this.gbuffer.depthTexture;
+    composer.addPass(this.dof);
+
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.38, 0.6, 1.5);
     composer.addPass(this.bloom);
     this.lens = new ShaderPass(LensShader);
@@ -85,6 +140,17 @@ export class PostFX {
   setSize(w, h) {
     this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(w, h);
+    const ratio = this.renderer.getPixelRatio();
+    this.dof.uniforms.uTexel.value.set(1 / (w * ratio), 1 / (h * ratio));
+    this.dof.uniforms.uMaxBlur.value = 6 * ratio;
+  }
+
+  /** Mise au point : distance (m) et ouverture relative (0 = tout net). */
+  setFocus(distance, aperture) {
+    const u = this.dof.uniforms;
+    u.uFocus.value = distance;
+    // Lissage : la mise au point « glisse » d'un sujet à l'autre au lieu de sauter.
+    u.uAperture.value += (aperture - u.uAperture.value) * 0.1;
   }
 
   /**
@@ -94,13 +160,15 @@ export class PostFX {
   setQuality(level, gi = this.giWanted ?? true) {
     this.giWanted = gi;
     this.enabled = level !== 'low';
-    this.ao.enabled = this.ssgi.enabled = level === 'high';
+    this.ao.enabled = this.ssgi.enabled = this.dof.enabled = level === 'high';
     this.ssgi.gi = gi;
   }
 
   render(wall) {
     if (!this.enabled) return this.renderer.render(this.scene, this.camera);
     this.lens.uniforms.uTime.value = wall;
+    this.dof.uniforms.cameraNear.value = this.camera.near;
+    this.dof.uniforms.cameraFar.value = this.camera.far;
     this.composer.render();
   }
 }

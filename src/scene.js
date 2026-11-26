@@ -150,9 +150,10 @@ export class Stage {
   }
 
   /** Place la caméra (pose calculée par le réalisateur). */
-  setCamera({ position, target }) {
+  setCamera({ position, target, focus, aperture = 0.5 }) {
     this.camera.position.set(...position);
     this.controls.target.set(...target);
+    this.focus = { distance: focus, aperture };
   }
 
   /** Revient au plan d'ensemble initial. */
@@ -211,6 +212,10 @@ export class Stage {
 
   render() {
     this.controls.update();
+    // Mise au point : sujet du plan du réalisateur, sinon le point visé par la souris.
+    const free = this.camera.position.distanceTo(this.controls.target);
+    this.post.setFocus(this.focus?.distance ?? free, this.focus?.aperture ?? 0.3);
+    this.focus = null;
     const wall = performance.now() / 1000;
     this.environment.update(wall, this.pulse, this.mood, this.spots);
     // Les ombres ne dépendent pas de la caméra : calculées au premier rendu de l'image
