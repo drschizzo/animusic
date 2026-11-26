@@ -7,6 +7,7 @@
 // Coordonnées locales : x le long de la console, y vers le haut, z vers le public.
 
 import { sustainState } from './pipes.js';
+import { controlAt } from './util.js';
 
 export const LASER_DEFAULTS = {
   spacing: 0.3,
@@ -43,6 +44,8 @@ export function buildLaserHarp(notes, options = {}) {
     spacing,
     width: n * spacing + 0.8,
     focus: [0, o.focusHeight, 0],
+    // Contrôleurs expressifs par piste : { [track]: { bends, mod } }.
+    controls: o.controls ?? {},
     emitters,
     onsets: sorted.map((n) => n.time),
   };
@@ -67,4 +70,13 @@ export function crystalState(model, t) {
     }
   }
   return { energy: Math.min(1, energy), track };
+}
+
+/**
+ * Expression d'une piste à l'instant t : bend (−1..1, le rayon se courbe) et
+ * modulation (0..1, le rayon ondule).
+ */
+export function laserExpression(model, track, t) {
+  const c = model.controls[track];
+  return { bend: controlAt(c?.bends, t), mod: controlAt(c?.mod, t) };
 }

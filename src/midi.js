@@ -23,9 +23,27 @@ export function parseMidi(arrayBuffer, fileName = 'MIDI') {
           duration: n.duration,
           velocity: n.velocity,
         })),
+        ...controlsOf(t),
       };
     });
   return { name: midi.name || fileName, tracks };
+}
+
+/**
+ * Contrôleurs expressifs d'une piste : pédale de sustain (CC64), molette de
+ * modulation (CC1, 0..1) et pitch bend (−1..1), en événements triés par temps.
+ */
+function controlsOf(t) {
+  const cc = t.controlChanges ?? {};
+  const byTime = (a, b) => a.time - b.time;
+  const sustain = [];
+  for (const e of [...(cc[64] ?? [])].sort(byTime)) {
+    const on = e.value >= 0.5;
+    if (!sustain.length || sustain[sustain.length - 1].on !== on) sustain.push({ time: e.time, on });
+  }
+  const mod = (cc[1] ?? []).map((e) => ({ time: e.time, value: e.value })).sort(byTime);
+  const bends = (t.pitchBends ?? []).map((e) => ({ time: e.time, value: e.value })).sort(byTime);
+  return { sustain, mod, bends };
 }
 
 /** Morceau de démonstration généré (aucun fichier requis). */
@@ -120,6 +138,27 @@ export function demoSong() {
     }
   }
 
+  // Expression : pédale de sustain du piano (enfoncée sur chaque mesure, relevée juste
+  // avant la suivante), coulés de pitch bend et vibrato (modulation) sur le contre-chant.
+  const pianoSustain = [];
+  for (let bar = 1; bar < 8; bar++) {
+    pianoSustain.push({ time: bar * 8 * beat + 0.05, on: true }, { time: (bar + 1) * 8 * beat - 0.08, on: false });
+  }
+  const leadBends = [];
+  const leadMod = [];
+  lead.forEach((n, i) => {
+    // Attaque « par en dessous » sur une note sur deux, chute en fin de note sur les longues.
+    for (let k = 0; k <= 12; k++) {
+      const u = k / 12;
+      if (i % 2 === 0) leadBends.push({ time: n.time + u * 0.3, value: -0.6 * (1 - u) * (1 - u) });
+      if (n.duration > 1.2) leadBends.push({ time: n.time + n.duration - 0.35 + u * 0.35, value: -0.5 * u * u });
+    }
+    leadBends.push({ time: n.time + n.duration + 0.02, value: 0 });
+    for (let k = 0; k <= 10; k++) leadMod.push({ time: n.time + (k / 10) * n.duration, value: Math.min(1, (k / 10) * 1.4) * (n.duration > 1 ? 1 : 0.4) });
+    leadMod.push({ time: n.time + n.duration + 0.01, value: 0 });
+  });
+  leadBends.sort((a, b) => a.time - b.time);
+
   return {
     name: 'Démo',
     tracks: [
@@ -128,8 +167,8 @@ export function demoSong() {
       { name: 'Mélodie', percussion: false, program: 13, notes: melody },
       { name: 'Nappe', percussion: false, program: 19, notes: pad },
       { name: 'Carillon', percussion: false, program: 14, notes: bells },
-      { name: 'Contre-chant', percussion: false, program: 73, notes: lead },
-      { name: 'Piano', percussion: false, program: 0, notes: keys },
+      { name: 'Contre-chant', percussion: false, program: 73, notes: lead, bends: leadBends, mod: leadMod },
+      { name: 'Piano', percussion: false, program: 0, notes: keys, sustain: pianoSustain },
       { name: 'Batterie', percussion: true, program: 0, notes: drums },
     ],
   };

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { keyDepth, keyHammerAngle, tineVibration } from './keys.js';
+import { keyDepth, keyHammerAngle, tineVibration, sustainPedal } from './keys.js';
 import { mat } from './materials.js';
-import { rod, roundedBox, V } from './parts.js';
+import { rod, roundedBox, Piston, V } from './parts.js';
 
 const KEY_TOP = 0.92; // hauteur du dessus des touches blanches
 const WHITE_LEN = 0.62;
@@ -97,6 +97,37 @@ export class KeysView {
       return { k, mesh, material, tine, tineMat, hammer };
     });
     g.add(rod(V(-half + 0.2, combY + 0.04, hammerZ), V(half - 0.2, combY + 0.04, hammerZ), 0.012, dark, 8));
+
+    // Pédale de sustain : la pédale au sol tire, par une tringle, la barre d'étouffoirs
+    // (feutre) qui s'écarte des lames tant qu'elle est enfoncée.
+    const tineTop = Math.min(...model.played.map((k) => k.tine));
+    this.damperY = combY + Math.min(0.32, tineTop * 0.6);
+    this.damperZ = combZ - 0.035;
+    const damper = new THREE.Group();
+    const felt2 = roundedBox(model.width - 0.5, 0.05, 0.04, 0.012, mat.rubber());
+    felt2.material = new THREE.MeshStandardMaterial({ color: 0x6b1420, roughness: 0.9 });
+    const bar = roundedBox(model.width - 0.45, 0.03, 0.03, 0.01, chrome);
+    bar.position.z = -0.03;
+    damper.add(felt2, bar);
+    damper.position.set(0, this.damperY, this.damperZ);
+    this.damper = damper;
+    this.damperLed = mat.glow(0xff4fa3, 0);
+    const damperLed = new THREE.Mesh(new THREE.BoxGeometry(model.width - 0.6, 0.008, 0.008), this.damperLed);
+    damperLed.position.set(0, 0.03, 0);
+    damper.add(damperLed);
+    g.add(damper);
+    const pedal = new THREE.Group();
+    const plate = roundedBox(0.13, 0.025, 0.32, 0.01, mat.brass());
+    plate.position.z = 0.16;
+    pedal.add(plate);
+    pedal.position.set(0.25, 0.09, 0.12);
+    const pedalBox = roundedBox(0.5, 0.08, 0.32, 0.02, dark);
+    pedalBox.position.set(0.25, 0.04, 0.0);
+    this.pedal = pedal;
+    g.add(pedal, pedalBox);
+    this.linkage = new Piston(g, { radius: 0.014, body: 0.5, bodyMat: dark });
+    this._a = new THREE.Vector3();
+    this._b = new THREE.Vector3();
   }
 
   update(t) {
@@ -118,5 +149,11 @@ export class KeysView {
       glow = Math.max(glow, amp);
     }
     this.ledMat.emissiveIntensity = 2.5 + 4 * glow;
+    const p = sustainPedal(m, t);
+    this.pedal.rotation.x = 0.16 * p; // l'avant de la pédale s'enfonce
+    this.damper.position.z = this.damperZ - 0.09 * p;
+    this.damper.position.y = this.damperY + 0.04 * p;
+    this.damperLed.emissiveIntensity = 3 * p;
+    this.linkage.update(this._a.set(0.25, 0.1, 0.0), this._b.set(0.25, this.damper.position.y - 0.02, this.damper.position.z - 0.03));
   }
 }

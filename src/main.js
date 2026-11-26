@@ -6,6 +6,7 @@ import { parseMidi, demoSong } from './midi.js';
 import { isAudioFile, importAudio } from './audioImport.js';
 import { Player } from './audio.js';
 import { Stage } from './scene.js';
+import { sustainedEnd } from './util.js';
 
 const PALETTE = ['#ff8a3d', '#3dc6ff', '#b56bff', '#5cff8f', '#ff5c8a', '#ffe14d', '#4dffe1', '#ff4d4d'];
 
@@ -40,13 +41,21 @@ function rebuild() {
     return;
   }
   showError('');
-  ensemble = buildEnsemble(parts);
+  // Expression (pédale de sustain, pitch bend, modulation) de chaque piste.
+  const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
+  ensemble = buildEnsemble(parts, controls);
   stage.build(ensemble, song.tracks.map((_, i) => colorFor(i)));
   shotPlan = planShots(ensemble);
 
   const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad', bells: 'mallet', laser: 'pad', keys: 'mallet' };
   const notes = Object.keys(voiceOf).flatMap((role) =>
-    parts[role].map((n) => ({ ...n, voice: voiceOf[role], program: song.tracks[n.track].program ?? 0 })),
+    parts[role].map((n) => ({
+      ...n,
+      // La pédale de sustain prolonge le son au-delà du relâché de la touche.
+      duration: sustainedEnd(n, song.tracks[n.track].sustain) - n.time,
+      voice: voiceOf[role],
+      program: song.tracks[n.track].program ?? 0,
+    })),
   );
   const kit = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
   const drumHits = kit ? kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name }))) : [];

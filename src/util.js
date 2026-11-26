@@ -103,3 +103,39 @@ export function steppedTotal(events, t, step, dur) {
   for (let i = done; i < events.length && events[i].time <= t; i++) v += step * smoothstep((t - events[i].time) / dur);
   return v;
 }
+
+/** Valeur d'un contrôleur continu (événements {time, value} triés) à l'instant t. */
+export function controlAt(events, t, fallback = 0) {
+  if (!events?.length) return fallback;
+  const i = upperBound(events, t, (e) => e.time) - 1;
+  return i < 0 ? fallback : events[i].value;
+}
+
+/** Position d'une pédale (événements {time, on} triés) : 0 relevée, 1 enfoncée, transitions de `travel` s. */
+export function pedalAt(events, t, travel = 0.08) {
+  if (!events?.length) return 0;
+  const i = upperBound(events, t, (e) => e.time) - 1;
+  if (i < 0) return 0;
+  const from = i > 0 && events[i - 1].on ? 1 : 0;
+  const to = events[i].on ? 1 : 0;
+  return lerp(from, to, smoothstep((t - events[i].time) / travel));
+}
+
+/** Fusionne les événements de plusieurs pistes (tri par temps). */
+export function mergeEvents(lists) {
+  return lists.filter(Boolean).flat().sort((a, b) => a.time - b.time);
+}
+
+/**
+ * Fin réellement entendue d'une note : si la pédale de sustain est enfoncée quand la
+ * touche est relâchée, le son tient jusqu'à ce qu'elle remonte.
+ */
+export function sustainedEnd(note, sustain = []) {
+  const end = note.time + note.duration;
+  let down = false;
+  let i = 0;
+  for (; i < sustain.length && sustain[i].time <= end; i++) down = sustain[i].on;
+  if (!down) return end;
+  for (; i < sustain.length; i++) if (!sustain[i].on) return Math.max(end, sustain[i].time);
+  return end + 4;
+}

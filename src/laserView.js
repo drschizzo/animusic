@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { laserState } from './laser.js';
+import { laserState, laserExpression } from './laser.js';
 import { mat, fx } from './materials.js';
 import { rod, plinth, lathe, V } from './parts.js';
 
@@ -73,8 +73,25 @@ export class LaserView {
     this.lamp.position.copy(focus);
     g.add(this.halo, this.sky, this.lamp);
 
-    const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true);
+    // Rayon subdivisé sur sa longueur : il se courbe avec le pitch bend et ondule avec la modulation.
+    const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 32, true);
     beamGeo.translate(0, 0.5, 0);
+    const bendable = (material) => {
+      const u = (material.userData.uniforms = { uBend: { value: 0 }, uWave: { value: 0 }, uTime: { value: 0 } });
+      material.onBeforeCompile = (shader) => {
+        Object.assign(shader.uniforms, u);
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nuniform float uBend; uniform float uWave; uniform float uTime;')
+          .replace(
+            '#include <begin_vertex>',
+            `#include <begin_vertex>
+            float arch = 4.0 * position.y * (1.0 - position.y);
+            transformed.x += uBend * arch + uWave * arch * sin(position.y * 38.0 - uTime * 24.0);`,
+          );
+      };
+      material.customProgramCacheKey = () => 'laser-beam';
+      return material;
+    };
     const turret = [
       [0.1, 0],
       [0.1, 0.06],
@@ -106,8 +123,8 @@ export class LaserView {
       const stem = rod(V(p.x, 0, p.z - 0.05), head.position, 0.03 * s, chrome, 10);
       g.add(head, ball, stem);
 
-      const coreMat = mat.light(0x000000);
-      const sheathMat = mat.light(0x000000);
+      const coreMat = bendable(mat.light(0x000000));
+      const sheathMat = bendable(mat.light(0x000000));
       const core = fx(new THREE.Mesh(beamGeo, coreMat));
       const sheath = fx(new THREE.Mesh(beamGeo, sheathMat));
       for (const b of [core, sheath]) {
@@ -142,6 +159,17 @@ export class LaserView {
         v.sheathMat.color.copy(color).multiplyScalar(0.9 * level * flicker);
         const w = 0.6 + 0.4 * level;
         v.sheath.scale.set(0.045 * w, v.len, 0.045 * w);
+        // Courbure (en mètres, au milieu du rayon) ramenée à l'échelle locale de chaque gaine.
+        const { bend, mod } = laserExpression(m, track, t);
+        const arc = bend * 0.45;
+        const wave = mod * 0.05;
+        for (const [mesh, material] of [[v.core, v.coreMat], [v.sheath, v.sheathMat]]) {
+          const u = material.userData.uniforms;
+          u.uBend.value = arc / mesh.scale.x;
+          u.uWave.value = wave / mesh.scale.x;
+          u.uTime.value = t;
+        }
+        v.irisMat.emissiveIntensity += 1.5 * Math.abs(bend);
       }
       energy += level;
       if (level > best) {

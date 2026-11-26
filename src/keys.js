@@ -6,7 +6,7 @@
 // Coordonnées locales : x le long du clavier, y vers le haut, z vers le public
 // (le bord avant des touches est côté +z).
 
-import { upperBound, smoothstep, lerp, strikeLift } from './util.js';
+import { upperBound, smoothstep, lerp, strikeLift, sustainedEnd, pedalAt } from './util.js';
 
 export const KEY_DEFAULTS = {
   whiteWidth: 0.118,
@@ -48,9 +48,13 @@ export function buildKeyboard(notes, options = {}) {
     keys.push({ index: keys.length, midi, black, x, u: (midi - lo) / (hi - lo), notes: [], hits: [] });
     if (!black) w++;
   }
+  const sustain = o.sustain ?? [];
   for (const note of sorted) {
     const k = keys[note.midi - lo];
-    k.notes.push({ start: note.time, end: note.time + Math.max(o.minHold, note.duration), velocity: note.velocity, track: note.track });
+    const end = note.time + Math.max(o.minHold, note.duration);
+    // ring : fin du son (la pédale de sustain le prolonge après le relâché de la touche).
+    const ring = Math.max(end, sustainedEnd(note, sustain));
+    k.notes.push({ start: note.time, end, ring, velocity: note.velocity, track: note.track });
     k.hits.push({ time: note.time, velocity: note.velocity, track: note.track });
   }
   for (const k of keys) {
@@ -69,6 +73,7 @@ export function buildKeyboard(notes, options = {}) {
     width: whites * keyWidth + 0.5,
     low: lo,
     keys,
+    sustain,
     played: keys.filter((k) => k.hits.length),
     onsets: sorted.map((n) => n.time),
   };
@@ -105,6 +110,11 @@ export function tineVibration(model, key, t) {
   const n = key.notes[i];
   const since = t - n.start;
   let amp = n.velocity * Math.exp(-since * o.damp);
-  if (t > n.end) amp *= Math.exp(-(t - n.end) * o.release);
+  if (t > n.ring) amp *= Math.exp(-(t - n.ring) * o.release);
   return { amp, since, track: n.track };
+}
+
+/** Pédale de sustain : 0 relevée, 1 enfoncée (les étouffoirs s'écartent des lames). */
+export function sustainPedal(model, t) {
+  return pedalAt(model.sustain, t);
 }

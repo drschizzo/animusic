@@ -8,6 +8,7 @@ import { buildPipes } from './pipes.js';
 import { buildBells } from './bells.js';
 import { buildLaserHarp } from './laser.js';
 import { buildKeyboard } from './keys.js';
+import { mergeEvents } from './util.js';
 
 export const ROLES = {
   balls: 'Billes',
@@ -110,9 +111,11 @@ const facing = ([x, , z], audienceZ) => Math.atan2(-x, audienceZ - z);
 /**
  * Construit tous les instruments.
  * @param parts { balls, bass, pads, drums, bells, laser, keys } : notes {midi,time,duration,velocity,track} par rôle
+ * @param controls contrôleurs expressifs par piste : [{ sustain, bends, mod }] (voir midi.js)
  * @returns { instruments: [{kind, model, onsets, focus:{center,radius}, start, end}], start, end, radius }
  */
-export function buildEnsemble(parts) {
+export function buildEnsemble(parts, controls = []) {
+  const tracksOf = (notes) => [...new Set((notes ?? []).map((n) => n.track))];
   const instruments = [];
   const balls = buildChoreography(parts.balls ?? []);
   const R = balls.radius;
@@ -198,7 +201,8 @@ export function buildEnsemble(parts) {
   }
   if (parts.laser?.length) {
     const origin = back(parts.bells?.length ? backAngle : 0);
-    const model = buildLaserHarp(parts.laser, { origin, yaw: facing(origin, 0) });
+    const ctl = Object.fromEntries(tracksOf(parts.laser).map((tr) => [tr, { bends: controls[tr]?.bends, mod: controls[tr]?.mod }]));
+    const model = buildLaserHarp(parts.laser, { origin, yaw: facing(origin, 0), controls: ctl });
     instruments.push({
       kind: 'laser',
       model,
@@ -213,7 +217,8 @@ export function buildEnsemble(parts) {
   // Clavier au premier plan, vu du côté du pianiste.
   if (parts.keys?.length) {
     const origin = [0, 0, R * 0.42];
-    const model = buildKeyboard(parts.keys, { origin, yaw: 0 });
+    const sustain = mergeEvents(tracksOf(parts.keys).map((tr) => controls[tr]?.sustain));
+    const model = buildKeyboard(parts.keys, { origin, yaw: 0, sustain });
     instruments.push({
       kind: 'keys',
       model,
