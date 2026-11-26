@@ -148,7 +148,7 @@ export class KeysView {
       v.tine.rotation.x = amp > 0.002 ? amp * 0.05 * Math.sin(since * 75) : 0;
       glow = Math.max(glow, amp);
     }
-    this.ledMat.emissiveIntensity = 2.5 + 4 * glow;
+    this.ledMat.emissiveIntensity = 0.25 + 3 * glow;
     const p = sustainPedal(m, t);
     this.pedal.rotation.x = 0.16 * p; // l'avant de la pédale s'enfonce
     this.damper.position.z = this.damperZ - 0.09 * p;

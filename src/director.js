@@ -35,6 +35,17 @@ export const DIRECTOR_DEFAULTS = {
   clearance: 0.6, // marge (m) au-dessus d'un instrument survolé
 };
 
+/**
+ * Objectif de chaque type de plan (champ vertical, degrés). Les distances des plans sont
+ * réglées pour 40° ; un plan à l'objectif plus long recule d'autant (même cadrage du
+ * sujet, arrière-plan écrasé et plus flou), un plan au grand-angle s'approche.
+ */
+export const LENS = { wide: 40, close: 30, low: 48, dolly: 35, crane: 40, duo: 34, follow: 40 };
+const REFERENCE_FOV = 40;
+const half = (fov) => Math.tan((fov * Math.PI) / 360);
+/** Facteur de recul pour garder le cadrage de référence avec l'objectif d'un type de plan. */
+const pullBack = (type) => half(REFERENCE_FOV) / half(LENS[type]);
+
 /** Familles mélodiques : celles qui peuvent porter la mélodie. */
 const MELODIC = new Set(['balls', 'keys', 'plucked', 'bowed', 'winds', 'laser', 'bells']);
 
@@ -200,17 +211,21 @@ export function planShots(ensemble, options = {}) {
     const { center, radius } = ins.focus;
     const cam = { distScale: 1.7, minHeight: 0, allowLow: true, ...ins.camera };
     const r = random();
-    const dist = radius * cam.distScale + 1.5;
+    const type = cam.allowLow && r < 0.22 ? 'low' : r < 0.42 ? 'dolly' : r < 0.58 ? 'crane' : 'close';
+    // Distance pour 40°, puis recul (ou approche) propre à l'objectif du plan : le champ
+    // libre est vérifié depuis la position réelle de la caméra.
+    const framing = radius * cam.distScale + 1.5;
+    const dist = (type === 'low' ? radius * 1.3 + 1.5 : type === 'dolly' ? framing * 0.9 : framing) * pullBack(type);
     const height = Math.max(cam.minHeight, radius * 0.45 + 0.8);
     const angle = clearAngle(k, center, (ins.front ?? 0) + (random() - 0.5) * 1.1, dist, height, duration);
-    const base = { subject: k, center, angle };
-    if (cam.allowLow && r < 0.22) return { ...base, type: 'low', dist: radius * 1.3 + 1.5, height: 0.6 - center[1] * 0.5 };
-    if (r < 0.42) return { ...base, type: 'dolly', dist: dist * 0.9, height, travel: (random() < 0.5 ? -1 : 1) * Math.min(3.5, radius * 1.4) };
-    if (r < 0.58) {
+    const base = { subject: k, center, angle, type, dist, fov: LENS[type] };
+    if (type === 'low') return { ...base, height: 0.6 - center[1] * 0.5 };
+    if (type === 'dolly') return { ...base, height, travel: (random() < 0.5 ? -1 : 1) * Math.min(3.5, radius * 1.4) };
+    if (type === 'crane') {
       const up = random() < 0.5;
-      return { ...base, type: 'crane', dist, height: up ? Math.max(cam.minHeight, 0.4) : height + 2.2, height2: up ? height + 2.2 : Math.max(cam.minHeight, height * 0.7) };
+      return { ...base, height: up ? Math.max(cam.minHeight, 0.4) : height + 2.2, height2: up ? height + 2.2 : Math.max(cam.minHeight, height * 0.7) };
     }
-    return { ...base, type: 'close', dist, height };
+    return { ...base, height };
   };
 
   /** Dialogue : deux instruments cadrés ensemble, de face, à mi-chemin. */
@@ -221,10 +236,12 @@ export function planShots(ensemble, options = {}) {
     const sep = Math.hypot(ca[0] - cb[0], ca[2] - cb[2]);
     const span = sep + Math.max(inst[a].focus.radius, inst[b].focus.radius) * 1.2;
     // Champ horizontal ≈ 1,2 × la distance (objectif 40°, image 16:9) : les deux tiennent.
-    const dist = Math.max(6, span / 1.1 + 1);
+    const framing = Math.max(6, span / 1.1 + 1);
+    const dist = framing * pullBack('duo');
+    const height = framing * 0.32 + 1;
     const toAudience = Math.atan2(-center[0], R * 0.8 - center[2]);
-    const angle = clearAngle(a, center, toAudience + (random() - 0.5) * 0.4, dist, dist * 0.32 + 1, duration);
-    return { type: 'duo', subject: a, partner: b, center, angle, dist, height: dist * 0.32 + 1 };
+    const angle = clearAngle(a, center, toAudience + (random() - 0.5) * 0.4, dist, height, duration);
+    return { type: 'duo', subject: a, partner: b, center, angle, dist, height, fov: LENS.duo };
   };
 
   // --- Écoute : ligne mélodique, phrases et réponses.
@@ -475,7 +492,7 @@ function shotPose(plan, shot, t) {
     // Caméra à l'intérieur de l'arc, dans l'axe de la bille, un peu de côté et en hauteur.
     const a = Math.atan2(target[0], -target[2]) + shot.side * 0.35;
     const r = ch.radius * 0.42;
-    return { position: [Math.sin(a) * r, 2.1 + target[1] * 0.3, -Math.cos(a) * r], target, aperture: 1 };
+    return { position: [Math.sin(a) * r, 2.1 + target[1] * 0.3, -Math.cos(a) * r], target, aperture: 1, fov: LENS.follow };
   }
   const [cx, cy, cz] = shot.center;
   // Rotation lente, mais pas mécanique : elle démarre et s'achève en douceur (moitié
@@ -496,7 +513,7 @@ function shotPose(plan, shot, t) {
     height = lerp(shot.height, shot.height2, smoothstep(u));
   }
   const aperture = shot.type === 'wide' ? 0.25 : shot.type === 'duo' ? 0.35 : shot.type === 'low' ? 0.9 : 0.7;
-  return { position: [px, cy + height, pz], target, aperture };
+  return { position: [px, cy + height, pz], target, aperture, fov: shot.fov ?? REFERENCE_FOV };
 }
 
 /**
@@ -505,7 +522,7 @@ function shotPose(plan, shot, t) {
  */
 export function cameraAt(plan, t) {
   const { shots, options } = plan;
-  if (!shots.length) return { position: [0, 8, 14], target: [0, 1, 0], focus: 15, aperture: 0 };
+  if (!shots.length) return { position: [0, 8, 14], target: [0, 1, 0], focus: 15, aperture: 0, fov: REFERENCE_FOV };
   let i = shots.findIndex((s) => t < s.end);
   if (i < 0) i = shots.length - 1;
   let pose = shotPose(plan, shots[i], t);
@@ -514,7 +531,8 @@ export function cameraAt(plan, t) {
     const prev = shotPose(plan, shots[i - 1], t);
     const s = smoothstep((t - shots[i].start) / options.blend);
     const mix = (a, b) => a.map((v, k) => lerp(v, b[k], s));
-    pose = { position: mix(prev.position, pose.position), target: mix(prev.target, pose.target), aperture: lerp(prev.aperture, pose.aperture, s) };
+    // L'objectif glisse avec le reste : un zoom lent accompagne le changement de plan.
+    pose = { position: mix(prev.position, pose.position), target: mix(prev.target, pose.target), aperture: lerp(prev.aperture, pose.aperture, s), fov: lerp(prev.fov, pose.fov, s) };
   }
   // Caméra portée : steadicam (dérive lente) ou épaule (plus nerveuse), selon le plan.
   {

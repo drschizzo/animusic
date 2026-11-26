@@ -4,12 +4,15 @@
 //
 // 1. Tampon géométrique : un rendu de la scène avec un matériau unique, qui écrit
 //    la normale et la couleur de base de chaque surface opaque (deux sorties).
-//    Il sert aussi à l'occlusion ambiante (GTAO), qui n'a plus à le calculer.
 // 2. Pour chaque pixel (à demi-résolution), quelques rayons partent dans l'hémisphère
 //    de la surface et marchent dans le tampon de profondeur ; quand un rayon passe
 //    derrière une surface visible, on récolte la lumière de l'image à cet endroit.
 // 3. Débruitage par flous successifs qui respectent les arêtes (profondeur, normale).
 // 4. Ajout à l'image : lumière récoltée × couleur de base de la surface.
+//
+// Les mêmes rayons donnent l'occlusion ambiante : un rayon arrêté tout près de son
+// départ signale un creux (pied posé au sol, jonction de deux pièces). Elle voyage dans
+// la quatrième composante, est débruitée avec la lumière et assombrit l'image à l'étape 4.
 
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
@@ -29,7 +32,11 @@ const geometry = /* glsl */ `
   }
 `;
 
-/** Tampon géométrique : normales (espace caméra), couleur de base et profondeur. */
+/**
+ * Tampon géométrique : normales (espace caméra), couleur de base, vitesse à l'écran et
+ * profondeur. La vitesse est l'écart entre la position projetée d'une surface et celle
+ * qu'elle avait à l'image précédente (objet et caméra) ; elle sert au flou de mouvement.
+ */
 export class GBuffer {
   constructor(scene, camera) {
     this.scene = scene;
@@ -37,7 +44,7 @@ export class GBuffer {
     this.depthTexture = new THREE.DepthTexture(1, 1);
     this.depthTexture.type = THREE.UnsignedIntType;
     this.target = new THREE.WebGLRenderTarget(1, 1, {
-      count: 2,
+      count: 3,
       type: THREE.HalfFloatType,
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
@@ -45,17 +52,27 @@ export class GBuffer {
     });
     this.normalTexture = this.target.textures[0];
     this.albedoTexture = this.target.textures[1];
+    this.velocityTexture = this.target.textures[2];
+    this.dt = 0; // temps musical écoulé depuis l'image précédente (s), pour les vitesses par instance
+    this.viewProjection = new THREE.Matrix4();
+    this.primed = false;
+    const previous = new WeakMap(); // objet → sa matrice monde à l'image précédente
     const material = (this.material = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       side: THREE.DoubleSide,
-      uniforms: { uAlbedo: { value: new THREE.Color() } },
+      uniforms: { uAlbedo: { value: new THREE.Color() }, uPrevModel: { value: new THREE.Matrix4() }, uPrevViewProjection: { value: new THREE.Matrix4() }, uDt: { value: 0 } },
       // Le découpage par le sol s'applique aussi ici : un instrument encore sous le
       // plateau ne doit ni occulter ni éclairer quoi que ce soit.
       clipping: true,
       vertexShader: /* glsl */ `
         #include <common>
         #include <clipping_planes_pars_vertex>
+        uniform mat4 uPrevModel; uniform mat4 uPrevViewProjection; uniform float uDt;
+        // Vitesse propre de chaque instance (m/s, repère du maillage) ; nulle si absente.
+        attribute vec3 instanceVelocity;
         varying vec3 vViewNormal;
+        varying vec4 vClipNow;
+        varying vec4 vClipBefore;
         void main() {
           #include <beginnormal_vertex>
           #include <defaultnormal_vertex>
@@ -63,12 +80,22 @@ export class GBuffer {
           #include <project_vertex>
           #include <clipping_planes_vertex>
           vViewNormal = normalize(transformedNormal);
+          vec4 before = vec4(transformed, 1.0);
+          #ifdef USE_INSTANCING
+          before = instanceMatrix * before;
+          #endif
+          before.xyz -= instanceVelocity * uDt;
+          vClipBefore = uPrevViewProjection * uPrevModel * before;
+          vClipNow = gl_Position;
         }`,
       fragmentShader: /* glsl */ `
         layout(location = 0) out highp vec4 gNormal;
         layout(location = 1) out highp vec4 gAlbedo;
+        layout(location = 2) out highp vec4 gVelocity;
         uniform vec3 uAlbedo;
         varying vec3 vViewNormal;
+        varying vec4 vClipNow;
+        varying vec4 vClipBefore;
         #include <clipping_planes_pars_fragment>
         void main() {
           #include <clipping_planes_fragment>
@@ -77,6 +104,9 @@ export class GBuffer {
           vec3 n = (len > 1e-6 ? vViewNormal / len : vec3(0.0, 0.0, 1.0)) * (gl_FrontFacing ? 1.0 : -1.0);
           gNormal = vec4(n * 0.5 + 0.5, 1.0);
           gAlbedo = vec4(uAlbedo, 1.0);
+          // Déplacement depuis l'image précédente, en fraction d'écran (nul si elle était derrière la caméra).
+          vec2 moved = vClipBefore.w > 1e-4 ? (vClipNow.xy / vClipNow.w - vClipBefore.xy / vClipBefore.w) * 0.5 : vec2(0.0);
+          gVelocity = vec4(moved, 0.0, 1.0);
         }`,
     }));
     material.isGBufferMaterial = true;
@@ -84,6 +114,7 @@ export class GBuffer {
     // Appelé par le moteur avant de dessiner chaque objet : pendant le rendu du tampon,
     // on transmet la couleur de base de l'objet au matériau unique.
     const albedo = material.uniforms.uAlbedo.value;
+    const prevModel = material.uniforms.uPrevModel.value;
     this.hook = function (renderer, scene, camera, geo, mat) {
       if (!mat.isGBufferMaterial) return;
       const own = this.material;
@@ -94,6 +125,10 @@ export class GBuffer {
       // lumière des instruments n'y laisserait aucune trace visible.
       const boost = this.userData.giAlbedo ?? 0.05;
       albedo.copy(own.color ?? WHITE).multiplyScalar(weight).addScalar(boost);
+      let before = previous.get(this);
+      if (!before) previous.set(this, (before = this.matrixWorld.clone()));
+      prevModel.copy(before);
+      before.copy(this.matrixWorld);
       mat.uniformsNeedUpdate = true;
     };
   }
@@ -113,6 +148,11 @@ export class GBuffer {
         hidden.push(o);
       } else if (o.isMesh && o.onBeforeRender !== this.hook) o.onBeforeRender = this.hook;
     });
+    const u = this.material.uniforms;
+    if (!this.primed) this.viewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    this.primed = true;
+    u.uPrevViewProjection.value.copy(this.viewProjection);
+    u.uDt.value = this.dt;
     const previous = renderer.getRenderTarget();
     const background = this.scene.background;
     const override = this.scene.overrideMaterial;
@@ -122,6 +162,7 @@ export class GBuffer {
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
     renderer.render(this.scene, this.camera);
+    this.viewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
     this.scene.overrideMaterial = override;
     this.scene.background = background;
     renderer.setRenderTarget(previous);
@@ -138,7 +179,8 @@ export class SSGIPass extends Pass {
     super();
     this.gbuffer = gbuffer;
     this.camera = camera;
-    this.gi = true; // false : seul le tampon géométrique est rendu (pour l'occlusion ambiante)
+    this.gi = true; // false : occlusion ambiante seule
+    this.intensity = 2.4;
     const options = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
     this.a = new THREE.WebGLRenderTarget(1, 1, options);
     this.b = new THREE.WebGLRenderTarget(1, 1, options);
@@ -153,17 +195,17 @@ export class SSGIPass extends Pass {
     this.trace = new FullScreenQuad(
       new THREE.ShaderMaterial({
         defines: { RAYS: 6, STEPS: 10 },
-        uniforms: { ...shared, tColor: { value: null }, uRadius: { value: 3.2 }, uThickness: { value: 0.35 }, uClamp: { value: 8 } },
+        uniforms: { ...shared, tColor: { value: null }, uRadius: { value: 3.2 }, uThickness: { value: 0.35 }, uClamp: { value: 8 }, uAoRadius: { value: 0.9 } },
         vertexShader: quadVertex,
         fragmentShader: /* glsl */ `
           ${geometry}
-          uniform sampler2D tColor; uniform float uRadius; uniform float uThickness; uniform float uClamp;
+          uniform sampler2D tColor; uniform float uRadius; uniform float uThickness; uniform float uClamp; uniform float uAoRadius;
           varying vec2 vUv;
           // Bruit « à gradient entrelacé » : réparti régulièrement, donc facile à débruiter.
           float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
           void main() {
             float depth = texture2D(tDepth, vUv).x;
-            if (depth >= 1.0) { gl_FragColor = vec4(0.0); return; }
+            if (depth >= 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
             vec3 P = viewPosition(vUv, depth);
             vec3 N = viewNormal(vUv);
             vec3 T = normalize(abs(N.z) < 0.99 ? cross(N, vec3(0.0, 0.0, 1.0)) : vec3(1.0, 0.0, 0.0));
@@ -171,6 +213,7 @@ export class SSGIPass extends Pass {
             float noise = ign(gl_FragCoord.xy);
             vec3 origin = P + N * (0.02 + 0.004 * -P.z);
             vec3 sum = vec3(0.0);
+            float occlusion = 0.0;
             for (int i = 0; i < RAYS; i++) {
               // Direction tirée selon le cosinus : chaque rayon compte autant.
               float u1 = fract(noise + float(i) * 0.61803399);
@@ -195,11 +238,14 @@ export class SSGIPass extends Pass {
                   // Seule une surface tournée vers nous peut nous éclairer.
                   float facing = step(0.0, -dot(viewNormal(uv), dir));
                   sum += min(texture2D(tColor, uv).rgb, vec3(uClamp)) * facing;
+                  // Occlusion : totale au contact, nulle au-delà de uAoRadius.
+                  float open = min(1.0, dist / uAoRadius);
+                  occlusion += 1.0 - open * open;
                   break;
                 }
               }
             }
-            gl_FragColor = vec4(sum / float(RAYS), 1.0);
+            gl_FragColor = vec4(sum / float(RAYS), 1.0 - occlusion / float(RAYS));
           }`,
         depthTest: false,
         depthWrite: false,
@@ -216,10 +262,10 @@ export class SSGIPass extends Pass {
           varying vec2 vUv;
           void main() {
             float depth = texture2D(tDepth, vUv).x;
-            if (depth >= 1.0) { gl_FragColor = vec4(0.0); return; }
+            if (depth >= 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
             float z = viewPosition(vUv, depth).z;
             vec3 n = viewNormal(vUv);
-            vec3 sum = vec3(0.0);
+            vec4 sum = vec4(0.0);
             float total = 0.0;
             for (int k = -4; k <= 4; k++) {
               vec2 uv = vUv + uStep * float(k);
@@ -228,10 +274,10 @@ export class SSGIPass extends Pass {
               // Un voisin ne compte que s'il est sur la même surface (même profondeur, même orientation).
               float dz = abs(viewPosition(uv, d).z - z) / (0.04 + 0.03 * -z);
               float w = exp(-0.12 * float(k * k)) * exp(-dz * dz) * pow(max(0.0, dot(n, viewNormal(uv))), 8.0);
-              sum += texture2D(tInput, uv).rgb * w;
+              sum += texture2D(tInput, uv) * w;
               total += w;
             }
-            gl_FragColor = vec4(sum / max(total, 1e-4), 1.0);
+            gl_FragColor = total > 1e-4 ? sum / total : vec4(0.0, 0.0, 0.0, 1.0);
           }`,
         depthTest: false,
         depthWrite: false,
@@ -240,15 +286,18 @@ export class SSGIPass extends Pass {
 
     this.compose = new FullScreenQuad(
       new THREE.ShaderMaterial({
-        uniforms: { tColor: { value: null }, tGi: { value: this.a.texture }, tAlbedo: { value: gbuffer.albedoTexture }, uIntensity: { value: 2.4 } },
+        uniforms: { tColor: { value: null }, tGi: { value: this.a.texture }, tAlbedo: { value: gbuffer.albedoTexture }, uIntensity: { value: 2.4 }, uAo: { value: 1 }, uAoPower: { value: 1.6 } },
         vertexShader: quadVertex,
         fragmentShader: /* glsl */ `
-          uniform sampler2D tColor; uniform sampler2D tGi; uniform sampler2D tAlbedo; uniform float uIntensity;
+          uniform sampler2D tColor; uniform sampler2D tGi; uniform sampler2D tAlbedo; uniform float uIntensity; uniform float uAo; uniform float uAoPower;
           varying vec2 vUv;
           void main() {
             vec4 base = texture2D(tColor, vUv);
             vec4 albedo = texture2D(tAlbedo, vUv);
-            gl_FragColor = vec4(base.rgb + texture2D(tGi, vUv).rgb * albedo.rgb * albedo.a * uIntensity, base.a);
+            vec4 gi = texture2D(tGi, vUv);
+            // Hors des surfaces opaques (fond, vitres seules), albedo.a est nul : ni ombre ni lumière.
+            float ao = mix(1.0, pow(clamp(gi.a, 0.0, 1.0), uAoPower), uAo * albedo.a);
+            gl_FragColor = vec4(base.rgb * ao + gi.rgb * albedo.rgb * albedo.a * uIntensity, base.a);
           }`,
         depthTest: false,
         depthWrite: false,
@@ -267,8 +316,6 @@ export class SSGIPass extends Pass {
 
   render(renderer, writeBuffer, readBuffer) {
     this.gbuffer.render(renderer);
-    this.needsSwap = this.gi;
-    if (!this.gi) return;
     this.shared.uProjection.value.copy(this.camera.projectionMatrix);
     this.shared.uProjectionInverse.value.copy(this.camera.projectionMatrixInverse);
 
@@ -290,6 +337,7 @@ export class SSGIPass extends Pass {
     blur(this.b, this.a, 0, 2.5);
 
     const c = this.compose.material.uniforms;
+    c.uIntensity.value = this.gi ? this.intensity : 0;
     c.tColor.value = this.debug ? null : readBuffer.texture;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.compose.render(renderer);

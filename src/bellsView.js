@@ -90,6 +90,6 @@ export class BellsView {
       v.tubeMat.emissiveIntensity = pulse * 1.6;
       glow = Math.max(glow, pulse);
     }
-    this.led.emissiveIntensity = 2.5 + 4 * glow;
+    this.led.emissiveIntensity = 0.25 + 3 * glow;
   }
 }

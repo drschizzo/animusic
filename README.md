@@ -26,7 +26,7 @@ change à chaque section et un réalisateur filme le tout comme un concert.
   Plusieurs pistes peuvent partager le même instrument.
 - **Caméra** : *Réalisateur* (plans automatiques), *Orbite*, ou *Libre* (souris). Toucher la vue passe en libre.
 - **Barre de lecture** pour naviguer dans le morceau ; **Retard image** pour corriger une latence audio mal
-  annoncée (Bluetooth) ; **Qualité** *Auto* part de *Haute* (reflets du sol, ombres 4K, lumière indirecte, occlusion ambiante, halo) et descend d'un cran
+  annoncée (Bluetooth) ; **Qualité** *Auto* part de *Haute* (reflets du sol, ombres portées, lumière indirecte, occlusion ambiante, flou de mouvement, profondeur de champ, faisceaux dans la brume, halo) et descend d'un cran
   si l'animation rame.
 - **Sons réalistes** : lecteur SoundFont (SpessaSynth) avec la banque General MIDI *MuseScore General* : boucles, couches de vélocité, pédale de sustain, pitch bend, volume, panoramique et autres contrôleurs du fichier MIDI. Sinon synthèse.
 - **⏺ Vidéo** : rejoue le morceau et l'enregistre (image + son) en MP4 ou WebM.
@@ -142,28 +142,43 @@ La famille du programme General MIDI décide du mécanisme, les statistiques des
 
 ## Rendu
 
-- **Sol** : plateau poli dont la rugosité varie ; il reflète la scène par un rendu miroir anticrénelé, puis une
-  pyramide de flous gaussiens (quatre niveaux, chacun deux fois plus flou) entre lesquels le sol interpole selon sa
-  rugosité : reflets nets là où il est lisse, diffus ailleurs, sans effet de blocs.
+- **Lieu** : une conque de scène en lattes de noyer ferme l'image derrière l'orchestre ; une rampe à son pied la
+  lèche dans les teintes de la section. Au-dessus, un gril de perches porte le pont circulaire des projecteurs
+  (poutre triangulée, suspendue par élingues). La caméra libre reste dans le lieu.
+- **Plancher** : lames peintes filant vers le public, chacune avec sa nuance et son poli, usure par plaques. Il
+  reflète la scène par un rendu miroir à demi-résolution, puis une pyramide de flous gaussiens (quatre niveaux) entre
+  lesquels il interpole selon sa rugosité : un reflet satiné, sans effet de blocs.
+- **Lumière** : une lumière d'ensemble faible et deux **poursuites** à ombres portées, accrochées au pont, qui
+  visent les instruments les plus actifs et montent quand ils jouent. Chaque section a un blanc de poursuite et un
+  seul accent ; les couleurs vives restent aux notes (couleurs de piste). Les liserés des socles ne s'allument que
+  quand l'instrument joue.
+- **Faisceaux dans la brume**, `src/volumetric.js` : en qualité haute, le rayon de vue de chaque pixel (au quart de
+  la résolution) est coupé exactement par le cône de chaque projecteur ; les poursuites y lisent leur carte d'ombres.
+  En qualité moyenne, des cônes lumineux les remplacent.
 - **Sonde de reflets dynamique** : une caméra à six faces, au-dessus du centre de la scène, filme en continu ce qui
   l'entoure ; l'image, préfiltrée par niveaux de rugosité, sert d'environnement à tous les matériaux. Les chromes et
-  les cuivres reflètent donc la scène réelle (l'orgue ou le laser qui s'allument), et plus un décor fixe. Deux faces
-  par image en qualité haute (tour complet toutes les trois images), une en moyenne, décor fixe en basse.
-- **Lumière indirecte (SSGI)**, `src/ssgi.js` : en qualité haute, la lumière visible à l'écran éclaire les surfaces
-  voisines (flaque verte au pied de l'orgue, lames qui teintent leurs résonateurs…). Un tampon géométrique (normales,
-  couleur de base, profondeur) est rendu une fois et partagé avec l'occlusion ambiante ; à demi-résolution, six rayons
-  par pixel marchent dans la profondeur et récoltent la lumière de l'image, puis un flou respectant les arêtes
-  débruite le résultat. Limite inhérente à la technique : seul ce qui est à l'écran éclaire. Débrayable (case
-  *Lumière indirecte*).
-- **Lumière** : boîtes à lumière de studio visibles dans les seuls reflets, lumière principale avec
-  ombres douces 4K, contre-jours colorés, lampes ponctuelles pilotées par la musique (orgue, cristal, frappes des
-  lames), projecteurs à faisceaux volumétriques et bordure de scène qui pulsent avec la grosse caisse.
-- **Matériaux** physiques (laque sous vernis, métal brossé, verre, bois veiné) à textures procédurales : aucun
-  fichier image.
-- **Effets** : traînées et étincelles d'impact des billes (déterministes : identiques à chaque passage), éclair de
-  bouche des canons, poussières en suspension.
-- **Post-traitement** : rendu HDR anticrénelé (MSAA 4×), lumière indirecte, occlusion ambiante GTAO, halo, vignettage, aberration
-  chromatique légère, grain, conversion ACES.
+  les cuivres reflètent donc la scène réelle (l'orgue ou le laser qui s'allument), et plus un décor fixe. Une face
+  par image, décor fixe en qualité basse.
+- **Lumière indirecte et occlusion ambiante (SSGI)**, `src/ssgi.js` : en qualité haute, la lumière visible à l'écran
+  éclaire les surfaces voisines (flaque verte au pied de l'orgue, lames qui teintent leurs résonateurs…). Un tampon
+  géométrique (normales, couleur de base, vitesse, profondeur) est rendu une fois ; à demi-résolution, six rayons par
+  pixel marchent dans la profondeur et récoltent la lumière de l'image, et un rayon arrêté tout près de son départ
+  compte comme occlusion. Limite inhérente : seul ce qui est à l'écran éclaire. La lumière indirecte est débrayable
+  (case *Lumière indirecte*).
+- **Flou de mouvement**, `src/motionblur.js` : obturateur à 1/48 s. La vitesse des billes est exacte (tirée de leur
+  trajectoire), celle des autres pièces et de la caméra vient de l'image précédente. Coupé en pause, sur un saut dans
+  le morceau et sur une coupe franche. En qualité moyenne et basse, des fantômes lumineux suivent les billes.
+- **Caméra** : un objectif par type de plan (gros plan 30°, travelling 35°, dialogue 34°, contre-plongée 48°, les
+  autres 40°), la caméra reculant d'autant pour garder le cadrage ; profondeur de champ où les points lumineux
+  forment des disques ; mise au point qui glisse d'un sujet à l'autre.
+- **Matériaux** physiques (laque sous vernis, fonte peinte, métal brossé, verre, bois débité sur dosse, peaux
+  marquées par les frappes) à textures procédurales, aucun fichier image. Un **grain de surface** partagé (relief
+  fin, poli inégal) est projeté dans le repère de chaque pièce.
+- **Effets** : étincelles d'impact des billes (déterministes : identiques à chaque passage), éclair de bouche des
+  canons, poussières en suspension.
+- **Post-traitement**, `src/postfx.js` : rendu HDR anticrénelé (MSAA 4×) résolu une seule fois, puis lumière
+  indirecte, flou de mouvement, profondeur de champ, faisceaux, halo, et une dernière passe (vignettage, courbe AgX,
+  étalonnage, sRVB, grain). En qualité basse : rendu direct, courbe ACES.
 
 ## Import audio (mp3 → animation)
 
@@ -200,9 +215,10 @@ l'image suit l'horloge de rendu audio.
 | `src/director.js` | **Pur** : plans caméra et pose de la caméra (et mise au point) à l'instant t |
 | `src/*View.js` | Rendu Three.js de chaque instrument |
 | `src/scene.js` | Scène, qualité ; instancie la vue de chaque instrument |
-| `src/environment.js` | Décor : sol réfléchissant, éclairage, fond, projecteurs volumétriques, poussières |
-| `src/postfx.js` | Post-traitement : MSAA HDR, occlusion ambiante (GTAO), profondeur de champ, halo, objectif, ACES |
-| `src/ssgi.js` | Tampon géométrique et lumière indirecte en espace écran (SSGI) |
+| `src/environment.js` | Décor : conque, gril et pont, plancher réfléchissant, éclairage et poursuites, poussières |
+| `src/postfx.js` | Post-traitement : rendu HDR, profondeur de champ, halo, passe finale (AgX, étalonnage) |
+| `src/ssgi.js` | Tampon géométrique (normales, couleur, vitesse), lumière indirecte et occlusion ambiante |
+| `src/motionblur.js`, `src/volumetric.js` | Flou de mouvement ; faisceaux des projecteurs dans la brume |
 | `src/materials.js`, `src/parts.js` | Matériaux physiques, textures procédurales, pièces de construction partagées |
 | `src/audio.js` | Tone.js : horloge de référence, synthèse de secours, capture pour la vidéo |
 | `src/soundfont.js`, `src/synthEvents.js` | Lecteur SoundFont (SpessaSynth) piloté par le transport Tone : un canal MIDI par piste |

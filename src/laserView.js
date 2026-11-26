@@ -188,7 +188,7 @@ export class LaserView {
     this.skyMat.color.copy(this._c).multiplyScalar(0.3 * energy);
     this.lamp.color.copy(best > 0 ? this._c : WHITE);
     this.lamp.intensity = 10 * energy;
-    this.led.emissiveIntensity = 2.5 + 4 * energy;
+    this.led.emissiveIntensity = 0.25 + 3 * energy;
   }
 }
 

@@ -193,6 +193,6 @@ export class WindsView {
     this.lamp.color.copy(this._c);
     this.lamp.intensity = 8 * energy;
     if (best > 0) this.led.emissive.copy(this._c);
-    this.led.emissiveIntensity = 2 + 4 * energy;
+    this.led.emissiveIntensity = 0.25 + 3 * energy;
   }
 }

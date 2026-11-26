@@ -80,7 +80,8 @@ export class PipesView {
       if (level <= 0.003) v.lightMat.color.setRGB(0, 0, 0);
       else if (color) {
         // Cœur presque blanc à pleine puissance, couleur de la piste autour (halo).
-        v.lightMat.color.copy(color).lerp(WHITE, 0.25 * level).multiplyScalar(0.6 + 2.6 * level);
+        // Assez vive pour rayonner, pas au point de blanchir : la colonne garde la couleur de sa piste.
+        v.lightMat.color.copy(color).lerp(WHITE, 0.1 * level).multiplyScalar(0.4 + 1.1 * level);
       }
       if (color) v.valveMat.emissive.copy(color);
       v.light.scale.y = Math.max(0.001, level * (v.p.height - 0.14));
@@ -98,6 +99,7 @@ export class PipesView {
       this.led.emissive.copy(this._c);
     }
     this.lamp.intensity = 9 * energy;
+    this.led.emissiveIntensity = 0.25 + 3 * energy;
 
   }
 }

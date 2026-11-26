@@ -179,11 +179,11 @@ export class BowedView {
         v.eyeMat.emissive.copy(color);
       }
       v.hairMat.emissiveIntensity = 2.5 * playing * press;
-      v.eyeMat.emissiveIntensity = 1 + 3 * playing;
+      v.eyeMat.emissiveIntensity = 0.3 + 3 * playing;
     }
     this.lamp.color.copy(this._c);
     this.lamp.intensity = 7 * glow;
-    this.ledMat.emissiveIntensity = 2 + 4 * glow;
+    this.ledMat.emissiveIntensity = 0.25 + 3 * glow;
     if (glow > 0) this.ledMat.emissive.copy(this._c);
   }
 }

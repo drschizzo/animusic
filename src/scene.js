@@ -19,12 +19,19 @@ import { freezeStatic } from './freeze.js';
 
 /** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
 const PIXEL_BUDGET = {
-  high: { cap: 2, budget: 2560 * 1440 },
+  // Haute : tous les effets plein écran se paient au pixel ; 2,4 Mpx, adoucis par le flou
+  // de mouvement et la profondeur de champ, valent mieux qu'une image plus fine et saccadée.
+  high: { cap: 2, budget: 2048 * 1152 },
   medium: { cap: 1.5, budget: 1920 * 1080 },
   low: { cap: 1, budget: 1920 * 1080 },
 };
 
 const LAMP_POOL = 4;
+
+/** Temps de pose du flou de mouvement : 1/48 s, l'obturateur à 180° d'une caméra à 24 images/s. */
+const SHUTTER = 1 / 48;
+/** Focale de référence (champ vertical, degrés) : celle des cadrages du réalisateur et de la vue libre. */
+const BASE_FOV = 40;
 
 const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, bowed: BowedView, winds: WindsView, plucked: StringsView, keys: KeysView };
 
@@ -111,8 +118,10 @@ export class Stage {
     const renderer = (this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    // AgX : les hautes lumières saturées (lames, rayons, tubes) pâlissent vers le blanc au
+    // lieu de virer au fluo comme avec ACES.
+    renderer.toneMapping = THREE.AgXToneMapping;
+    renderer.toneMappingExposure = 1.5;
     // Tout ce qui passe sous le sol est découpé : les instruments en sortent à leur entrée.
     renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.001)];
     container.appendChild(renderer.domElement);
@@ -128,8 +137,10 @@ export class Stage {
 
     // Décor (sol réfléchissant, lumières, projecteurs) et post-traitement.
     this.environment = new Environment(renderer, scene);
-    this.post = new PostFX(renderer, scene, this.camera);
+    this.post = new PostFX(renderer, scene, this.camera, this.environment);
     this.pulse = 0;
+    this.time = 0;
+    this._last = { wall: 0, time: 0, eye: new THREE.Vector3() };
 
     this.content = new THREE.Group();
     scene.add(this.content);
@@ -190,6 +201,14 @@ export class Stage {
     this.lifts.forEach((lift, k) => lift.traverse((o) => o.userData.lamp && this.lamps.push({ o, k })));
     this.mood = sectionAt(this.song, 0);
     this.spots = ensemble.instruments.map((inst) => ({ center: new THREE.Vector3(...inst.focus.center), level: 0 }));
+    this.showTrails();
+    // La colonne de lumière de la harpe laser s'arrête sous le gril (elle mesure 16 m).
+    const base = new THREE.Vector3();
+    for (const view of this.views) {
+      if (!view.sky) continue;
+      view.sky.getWorldPosition(base);
+      view.sky.scale.y = Math.min(1, Math.max(0.1, (this.environment.grilY - 0.6 - base.y) / 16));
+    }
 
     this.resetView();
     this.controls.update();
@@ -213,23 +232,36 @@ export class Stage {
     }
   }
 
-  /** Place la caméra (pose calculée par le réalisateur). */
-  setCamera({ position, target, focus, aperture = 0.5 }) {
+  /** Place la caméra (pose calculée par le réalisateur) ; `fov` = champ vertical de l'objectif. */
+  setCamera({ position, target, focus, aperture = 0.5, fov = BASE_FOV }) {
     this.camera.position.set(...position);
     this.controls.target.set(...target);
-    this.focus = { distance: focus, aperture };
+    this.setLens(fov);
+    // À cadrage égal, une longue focale est plus loin et écrase davantage l'arrière-plan :
+    // son flou grandit avec le rapport des focales (racine : au-delà, un grand instrument
+    // net seulement en son centre prend un air de maquette).
+    const tele = Math.tan(THREE.MathUtils.degToRad(BASE_FOV / 2)) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
+    this.focus = { distance: focus, aperture: aperture * Math.sqrt(tele) };
+  }
+
+  setLens(fov) {
+    if (Math.abs(this.camera.fov - fov) < 1e-3) return;
+    this.camera.fov = fov;
+    this.camera.updateProjectionMatrix();
   }
 
   /** Revient au plan d'ensemble initial. */
   resetView() {
     // Comme le plan d'ensemble du réalisateur : tout l'amphithéâtre, de face.
     const S = this.ensemble?.stageRadius ?? 14.2;
+    this.setLens(BASE_FOV);
     this.controls.target.set(0, 1.5, -S * 0.42);
     this.camera.position.set(0, 1.5 + S * 0.42 + 3, S * 0.73 + 4);
   }
 
   /** Pose tous les objets à l'instant musical t. */
   update(t) {
+    this.time = t;
     const instruments = this.ensemble?.instruments ?? [];
     (this.views ?? []).forEach((v, k) => {
       const d = deployAt(this.song, k, t);
@@ -246,7 +278,7 @@ export class Stage {
       if (halo) {
         const rising = d > 0 && d < 1 ? Math.sin(Math.PI * Math.min(1, d)) : 0;
         halo.visible = d > 0;
-        halo.material.uniforms.uIntensity.value = 2.5 * rising + (d >= 1 ? 0.3 + 0.9 * activity : 0);
+        halo.material.uniforms.uIntensity.value = 2.5 * rising + (d >= 1 ? 0.05 + 0.35 * activity : 0);
       }
     });
     this.assignLamps();
@@ -272,19 +304,32 @@ export class Stage {
   }
 
   /**
-   * Niveau de qualité : 'high' (tout : ombres 4K, reflets, lumière indirecte, occlusion ambiante, halo),
+   * Niveau de qualité : 'high' (tout : ombres 2K, reflets, lumière indirecte, occlusion ambiante, halo),
    * 'medium' (sans occlusion, reflets et ombres allégés), 'low' (rendu direct, résolution 1).
    */
   setQuality(level) {
     this.quality = level;
+    // Qualité basse : rendu direct, sans passe d'étalonnage. ACES porte son propre
+    // contraste ; AgX, plus doux, compte sur l'étalonnage de la dernière passe.
+    this.renderer.toneMapping = level === 'low' ? THREE.ACESFilmicToneMapping : THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = level === 'low' ? 2.6 : 1.5;
     this.renderer.shadowMap.enabled = level !== 'low';
     this.environment.setQuality(level);
     this.post.setQuality(level);
+    this.showTrails();
     // Les matériaux doivent être recompilés quand les ombres changent.
     this.scene.traverse((o) => {
       if (o.material) [].concat(o.material).forEach((m) => (m.needsUpdate = true));
     });
     this.resize();
+  }
+
+  /**
+   * Fantômes lumineux derrière les billes : ils tiennent lieu de flou de mouvement en
+   * qualité moyenne et basse ; en haute, le vrai flou les remplace.
+   */
+  showTrails() {
+    for (const view of this.views ?? []) if (view.trails) view.trails.visible = this.quality !== 'high';
   }
 
   /** Active ou coupe la lumière indirecte (SSGI), effective en qualité haute. */
@@ -294,16 +339,30 @@ export class Stage {
 
   render() {
     this.controls.update();
-    // Mise au point : sujet du plan du réalisateur, sinon le point visé par la souris.
-    const free = this.camera.position.distanceTo(this.controls.target);
-    this.post.setFocus(this.focus?.distance ?? free, this.focus?.aperture ?? 0.3);
-    this.focus = null;
+    // La caméra reste dans le lieu : ni derrière la conque, ni au-dessus du gril.
+    this.environment.confine(this.camera.position);
     const wall = performance.now() / 1000;
+    // Flou de mouvement : mesuré d'une image à la suivante, donc coupé quand elles ne se
+    // suivent pas (première image, saut dans le morceau, coupe franche de la caméra).
+    const last = this._last;
+    const frame = wall - last.wall;
+    const dt = this.time - last.time;
+    const steady = frame > 1e-3 && frame < 0.25 && Math.abs(dt) < 0.25 && this.camera.position.distanceTo(last.eye) / frame < 60;
+    this.post.setMotion(steady ? Math.min(2.5, SHUTTER / frame) : 0, steady ? Math.max(0, dt) : 0);
+    // Mise au point : sujet du plan du réalisateur, sinon le point visé par la souris. Elle
+    // glisse d'un sujet à l'autre, sauf sur une coupe franche où elle est faite d'emblée.
+    const free = this.camera.position.distanceTo(this.controls.target);
+    this.post.setFocus(this.focus?.distance ?? free, this.focus?.aperture ?? 0.3, !steady);
+    this.focus = null;
+    last.wall = wall;
+    last.time = this.time;
+    last.eye.copy(this.camera.position);
     this.environment.update(wall, this.pulse, this.mood, this.spots);
     // Les ombres ne dépendent pas de la caméra : calculées au premier rendu de l'image
     // (sonde ou reflet), elles resservent pour tous les suivants.
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
+    this.environment.scheduleShadows();
     this.environment.renderProbe();
     this.environment.renderReflection(this.renderer, this.camera);
     this.post.render(wall);

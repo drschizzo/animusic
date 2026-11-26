@@ -7,6 +7,7 @@ import { roundedBox, lathe, rod, ringOf, footShadow, channelGeometry, V, lamp } 
 const UP = new THREE.Vector3(0, 1, 0);
 const TRAIL = 6; // fantômes lumineux derrière chaque bille
 const TRAIL_STEP = 0.016; // écart (s) entre deux fantômes
+const VELOCITY_STEP = 1 / 120; // pas (s) de la différence qui donne la vitesse d'une bille
 const SPARKS = 9; // étincelles par impact
 const SPARK_LIFE = 0.55;
 
@@ -42,7 +43,8 @@ export class BallsView {
     this.barMeshes = ch.bars.map((bar) => {
       const material = mat.wood();
       material.emissive = new THREE.Color(0x000000);
-      const mesh = roundedBox(bar.length, o.barThickness, bar.width, 0.028, material);
+      // Arêtes juste cassées, comme une lame usinée (un grand arrondi lui donne l'air d'un jouet).
+      const mesh = roundedBox(bar.length, o.barThickness, bar.width, 0.012, material);
       mesh.position.set(...bar.position);
       mesh.rotation.y = Math.PI / 2 - bar.angle;
       this.content.add(mesh);
@@ -225,6 +227,10 @@ export class BallsView {
     };
     const balls = new THREE.InstancedMesh(new THREE.SphereGeometry(o.ballRadius, 32, 20), ballMat, pool);
     balls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pool * 3), 3);
+    // Vitesse de chaque bille (m/s), lue par le tampon géométrique pour le flou de mouvement :
+    // les billes changent de rang dans le réservoir, on ne peut pas comparer deux images.
+    this.velocity = new THREE.InstancedBufferAttribute(new Float32Array(pool * 3), 3);
+    balls.geometry.setAttribute('instanceVelocity', this.velocity);
     balls.castShadow = true;
     balls.frustumCulled = false;
     balls.count = 0;
@@ -268,7 +274,7 @@ export class BallsView {
       channel.castShadow = channel.receiveShadow = true;
       this.content.add(channel);
       // Liseré lumineux le long des bords de la gouttière.
-      const edgeMat = mat.glow(0xffc46b, 1.2);
+      const edgeMat = mat.glow(0xffc46b, 0.35);
       this.portMats.push(edgeMat);
       for (const side of [-1, 1]) {
         const edge = trough.map((p, i) => {
@@ -306,7 +312,7 @@ export class BallsView {
       funnel.position.set(f.x, f.neck, f.z);
       funnel.castShadow = true;
       this.content.add(funnel);
-      const rimMat = mat.glow(0xffc46b, 1.5);
+      const rimMat = mat.glow(0xffc46b, 0.4);
       this.portMats.push(rimMat);
       const rim = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.014, 8, 40), rimMat);
       rim.rotation.x = Math.PI / 2;
@@ -360,13 +366,13 @@ export class BallsView {
       loader.position.set(L.x, 0, L.z);
       loader.castShadow = loader.receiveShadow = true;
       this.content.add(loader);
-      const mouthMat = mat.glow(0xffc46b, 2);
+      const mouthMat = mat.glow(0xffc46b, 0.5);
       this.portMats.push(mouthMat);
       const mouth = new THREE.Mesh(new THREE.TorusGeometry(rt + 0.02, 0.024, 8, 24), mouthMat);
       mouth.position.copy(port);
       mouth.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), out2);
       this.content.add(mouth);
-      const capMat = mat.glow(0xffc46b, 1.5);
+      const capMat = mat.glow(0xffc46b, 0.4);
       this.portMats.push(capMat);
       const cap = new THREE.Mesh(new THREE.TorusGeometry(L.radius - 0.03, 0.012, 8, 32), capMat);
       cap.rotation.x = Math.PI / 2;
@@ -396,6 +402,12 @@ export class BallsView {
       this._m.compose(this._v, this._q, this._s);
       this.balls.setMatrixAt(n, this._m);
       this.balls.setColorAt(n, color);
+      // Vitesse exacte : écart de trajectoire sur 1/120 s (nulle avant le tir).
+      const before = t - VELOCITY_STEP;
+      if (before >= b.launch) {
+        ballPosition(ch, b, before, this._tmp);
+        this.velocity.setXYZ(n, (this._v.x - this._tmp[0]) / VELOCITY_STEP, (this._v.y - this._tmp[1]) / VELOCITY_STEP, (this._v.z - this._tmp[2]) / VELOCITY_STEP);
+      } else this.velocity.setXYZ(n, 0, 0, 0);
       n++;
       for (let j = 1; j <= TRAIL && k < maxTrail; j++) {
         const tj = t - j * TRAIL_STEP;
@@ -413,6 +425,7 @@ export class BallsView {
     this.balls.count = n;
     this.balls.instanceMatrix.needsUpdate = true;
     this.balls.instanceColor.needsUpdate = true;
+    this.velocity.needsUpdate = true;
     this.trails.count = k;
     this.trails.instanceMatrix.needsUpdate = true;
     this.trails.instanceColor.needsUpdate = true;
@@ -465,11 +478,11 @@ export class BallsView {
       part.barrel.position.copy(part.pivot).addScaledVector(this._dir, -0.2 * recoil);
       part.ringMat.emissiveIntensity = 0.25 + 5 * recoil;
       part.flash.visible = recoil > 0.02;
-      part.flashMat.color.setRGB(1, 0.8, 0.5).multiplyScalar(1.6 * recoil * recoil);
+      part.flashMat.color.setRGB(1, 0.8, 0.5).multiplyScalar(0.9 * recoil * recoil);
       part.flash.scale.setScalar(0.5 + recoil);
       fire = Math.max(fire, recoil);
     });
-    if (this.hubMat) this.hubMat.emissiveIntensity = 2.5 + 5 * fire;
+    if (this.hubMat) this.hubMat.emissiveIntensity = 0.4 + 5 * fire;
 
     // Lames : éclat coloré + léger enfoncement ; les deux frappes les plus vives éclairent alentour.
     const lit = [null, null];
@@ -477,7 +490,8 @@ export class BallsView {
       const { pulse, track, since } = barPulse(ch, bar, t);
       const mesh = this.barMeshes[i];
       if (track >= 0) mesh.material.emissive.copy(this.trackColors[track]);
-      mesh.material.emissiveIntensity = pulse * 3.2;
+      // La lame s'illumine à l'impact sans se noyer : on doit encore voir le bois.
+      mesh.material.emissiveIntensity = pulse * 1.2;
       const wobble = pulse > 0.001 ? Math.sin(since * 60) * pulse : 0;
       mesh.position.y = bar.position[1] - 0.04 * pulse;
       mesh.rotation.z = 0.02 * wobble;

@@ -3,6 +3,12 @@ import { armAngles, hitPulse } from './drums.js';
 import { mat } from './materials.js';
 import { lathe, ringOf, rod, V } from './parts.js';
 
+/** Boulon d'ancrage des colonnes. */
+const anchorGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.01, 6);
+
+/** Tête de vis des flasques d'articulation. */
+const boltGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.006, 6);
+
 /** Segment de bras caréné le long de +x, de 0 à length. */
 function linkGeometry(length, r0, r1) {
   const g = new THREE.CylinderGeometry(r1, r0, length, 20);
@@ -80,7 +86,7 @@ export class DrumKitView {
       joint: mat.gunmetal(),
       rubber: mat.rubber(),
       stick: mat.paleWood(),
-      accent: mat.glow(0x49d8ff, 3.2),
+      collar: mat.steel(),
     });
     const lugGeo = new THREE.CapsuleGeometry(0.012, 0.05, 4, 8);
 
@@ -216,12 +222,14 @@ export class DrumKitView {
       return { segments: [beater] };
     }
 
-    // Colonne + bras à deux segments, articulations soulignées d'un anneau lumineux.
+    // Colonne + bras à deux segments ; articulations : moyeu serré entre deux colliers
+    // d'acier, flasques boulonnés.
     const base = p.arm.base;
     const pillar = lathe(
       [
         [0.26, 0],
-        [0.26, 0.04],
+        [0.26, 0.035],
+        [0.19, 0.035],
         [0.14, 0.09],
         [0.1, 0.16],
         [0.08, root[1] - 0.08],
@@ -232,9 +240,13 @@ export class DrumKitView {
     );
     pillar.position.set(base[0], 0, base[2]);
     this.group.add(pillar);
+    // Bride de la colonne boulonnée au plateau : six têtes posées sur son rebord plat.
+    const anchors = ringOf(6, 0.225, anchorGeo, m.chrome, 0.035 + 0.005);
+    anchors.position.set(base[0], 0, base[2]);
+    this.group.add(anchors);
 
     const jointRing = (radius) => {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.012, 8, 28), m.accent);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.012, 8, 28), m.collar);
       const hubCap = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.8, radius * 0.8, radius * 2.3, 20), m.joint);
       hubCap.rotation.x = Math.PI / 2;
       const group = new THREE.Group();
@@ -243,6 +255,13 @@ export class DrumKitView {
       ring2.position.z = -radius * 1.15;
       hubCap.castShadow = true;
       group.add(hubCap, ring, ring2);
+      // Six têtes de vis posées sur chaque flasque du moyeu.
+      for (const side of [-1, 1]) {
+        const bolts = ringOf(6, radius * 0.52, boltGeo, m.chrome);
+        bolts.rotation.x = Math.PI / 2;
+        bolts.position.z = side * (radius * 1.15 + 0.003);
+        group.add(bolts);
+      }
       return group;
     };
     rootGroup.add(jointRing(0.1));

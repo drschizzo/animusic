@@ -121,7 +121,7 @@ export class StringsView {
       v.coreMat.emissiveIntensity = amp * 3;
       glow = Math.max(glow, amp);
     }
-    this.led.emissiveIntensity = 2.5 + 4 * glow;
+    this.led.emissiveIntensity = 0.25 + 3 * glow;
     m.carriers.forEach((c, i) => {
       const { x, z, sway, tilt } = carrierPose(m, c, t);
       const view = this.carrierViews[i];
@@ -133,7 +133,7 @@ export class StringsView {
       // Le médiator s'illumine au moment du pincement.
       const strike = Math.max(0, 1 - Math.abs(z) / m.options.pickOffset) ** 4;
       view.pickMat.emissiveIntensity = 0.2 + 4 * strike;
-      view.eyeMat.emissiveIntensity = 1.5 + 4 * strike;
+      view.eyeMat.emissiveIntensity = 0.3 + 4 * strike;
     });
   }
 }

@@ -24,20 +24,49 @@ export function roundedBox(w, h, d, radius = 0.02, material) {
   return m;
 }
 
+const KICK = 0.07; // hauteur de la plinthe en retrait au pied des socles et des estrades
+const screwGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.004, 8);
+
 /**
- * Socle : bloc laqué ceinturé d'un filet lumineux. Occupe y ∈ [bottom, bottom + height].
+ * Corps d'un meuble de scène posé au sol : au-dessus de 30 cm, il repose sur une plinthe
+ * en retrait (ombre portée au pied, comme un vrai meuble) ; plus bas, c'est un bloc.
+ * Occupe y ∈ [bottom, bottom + height], sans dépasser width × depth.
+ */
+function cabinet(width, depth, height, bottom, radius) {
+  const parts = [];
+  const kick = height >= 0.3 ? KICK : 0;
+  if (kick) {
+    const base = roundedBox(width - 0.06, kick, depth - 0.06, 0.008, mat.rubber());
+    base.position.y = bottom + kick / 2;
+    parts.push(base);
+  }
+  const body = roundedBox(width, height - kick, depth, radius, mat.gunmetal());
+  body.position.y = bottom + kick + (height - kick) / 2;
+  parts.push(body);
+  return parts;
+}
+
+/**
+ * Socle : bloc laqué ceinturé d'un filet lumineux, plaque de facteur en laiton sur la
+ * face avant (+z) quand il est assez haut. Occupe y ∈ [bottom, bottom + height].
  * @returns { group, led } led = matériau du filet, à faire pulser depuis la vue
  */
 export function plinth(width, depth, height, { bottom = 0, color = 0x49d8ff } = {}) {
   const group = new THREE.Group();
-  const body = roundedBox(width, height, depth, 0.03, mat.gunmetal());
-  body.position.y = bottom + height / 2;
-  const led = mat.glow(color, 3);
+  group.add(...cabinet(width, depth, height, bottom, 0.03));
+  if (height >= 0.3 && width >= 0.8) {
+    // Plaque posée contre la face (3 mm d'épaisseur), sous le filet lumineux.
+    const plate = roundedBox(0.18, 0.055, 0.003, 0.001, mat.brass());
+    plate.position.set(width / 2 - 0.22, bottom + KICK + (height - KICK) * 0.42, depth / 2 + 0.0015);
+    plate.castShadow = false;
+    group.add(plate);
+  }
+  const led = mat.glow(color, 0.3);
   const strip = new THREE.Mesh(new THREE.BoxGeometry(width + 0.012, 0.022, depth + 0.012), led);
   strip.position.y = bottom + height - Math.min(0.08, height * 0.3);
   const top = roundedBox(width - 0.06, 0.03, depth - 0.06, 0.012, mat.lacquer(0x14161c, 0.4));
   top.position.y = bottom + height + 0.012;
-  group.add(body, strip, top);
+  group.add(strip, top);
   return { group, led };
 }
 
@@ -65,16 +94,19 @@ export function lamp(color = 0xffffff, intensity = 0, distance = 8, decay = 1.6)
  */
 export function riserBlock(halfX, halfZ, h, color) {
   const group = new THREE.Group();
-  const body = roundedBox(2 * halfX, h, 2 * halfZ, 0.04, mat.gunmetal());
-  body.position.y = h / 2;
-  body.castShadow = body.receiveShadow = true;
+  group.add(...cabinet(2 * halfX, 2 * halfZ, h, 0, 0.04));
+  // Plateau vissé aux quatre coins (têtes posées sur le plateau, hors de l'emprise de l'instrument).
+  const screws = new THREE.InstancedMesh(screwGeo, mat.chrome(), 4);
+  const m = new THREE.Matrix4();
+  [-1, 1].forEach((sx, i) => [-1, 1].forEach((sz, j) => screws.setMatrixAt(i * 2 + j, m.makeTranslation(sx * (halfX - 0.1), h + 0.004, sz * (halfZ - 0.1)))));
+  group.add(screws);
   const top = roundedBox(2 * halfX - 0.08, 0.03, 2 * halfZ - 0.08, 0.012, mat.lacquer(0x14161c, 0.4));
   top.position.y = h - 0.013; // affleure (2 mm) : l'instrument se pose juste dessus
   top.receiveShadow = true;
-  const led = mat.glow(color, 1.6);
+  const led = mat.glow(color, 0.3);
   const strip = new THREE.Mesh(new THREE.BoxGeometry(2 * halfX + 0.012, 0.02, 2 * halfZ + 0.012), led);
   strip.position.y = h - 0.06;
-  group.add(body, top, strip);
+  group.add(top, strip);
   return group;
 }
 
