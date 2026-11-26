@@ -50,6 +50,7 @@ function rebuild() {
     .flatMap((p) =>
       p.notes.map((n) => ({
         ...n,
+        held: n.duration,
         // La pédale de sustain prolonge le son au-delà du relâché de la touche.
         duration: sustainedEnd(n, song.tracks[n.track].sustain) - n.time,
         voice: voiceOf[p.kind],
@@ -60,22 +61,21 @@ function rebuild() {
   const drumHits = kit ? kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name }))) : [];
   duration = ensemble.end;
   // Pré-roll : laisse le temps à la première bille de voler / au premier bras de se lever.
-  player.load(notes, drumHits, Math.max(0, -ensemble.start) + 0.5, song.audio ?? null);
+  player.load(notes, drumHits, Math.max(0, -ensemble.start) + 0.5, song.audio ?? null, song.tracks);
   if (song.audio) player.setListenOriginal($('listen').value === 'original');
   $('seek').max = duration.toFixed(2);
   $('seek').value = 0;
-  loadSounds(notes, drumHits.length > 0);
+  loadSounds();
 
   $('trackSummary').textContent = `${song.tracks.length} pistes → ${ensemble.instruments.length} instruments`;
 }
 
-/** Charge (en arrière-plan) les échantillons des instruments utilisés. */
-async function loadSounds(notes, drums) {
+/** Charge (en arrière-plan, une seule fois) le lecteur SoundFont. */
+async function loadSounds() {
   if (!player.useSamples) return;
-  const programs = [...new Set(notes.map((n) => n.program))];
-  $('sound').textContent = 'Chargement des sons…';
-  const ok = await player.prepareSamples(programs, drums);
-  $('sound').textContent = ok ? '' : 'Certains sons n\u2019ont pas pu être chargés : synthèse utilisée.';
+  if (!player.soundfont.ready) $('sound').textContent = 'Chargement des sons (40 Mo la première fois)…';
+  const ok = await player.prepareSounds();
+  $('sound').textContent = ok ? '' : 'Les sons réalistes n\u2019ont pas pu être chargés : synthèse utilisée.';
 }
 
 function loadSong(s) {

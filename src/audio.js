@@ -1,29 +1,7 @@
 import * as Tone from 'tone';
 
-// Échantillons générés par tools/make-samples.mjs ; index.json liste les notes disponibles.
-const SAMPLES_URL = `${import.meta.env?.BASE_URL ?? './'}samples/`;
-let sampleIndex = null;
-function getSampleIndex() {
-  sampleIndex ??= fetch(`${SAMPLES_URL}index.json`).then((r) => {
-    if (!r.ok) throw new Error(`index des échantillons : HTTP ${r.status}`);
-    return r.json();
-  });
-  return sampleIndex;
-}
-
-function loadSampler(baseUrl, notes, output, options = {}) {
-  return new Promise((resolve, reject) => {
-    const urls = Object.fromEntries(notes.map((n) => [n, `${n}.mp3`]));
-    const sampler = new Tone.Sampler({
-      urls,
-      baseUrl,
-      release: 0.5,
-      ...options,
-      onload: () => resolve(sampler),
-      onerror: reject,
-    }).connect(output);
-  });
-}
+import { SoundFontEngine } from './soundfont.js';
+import { buildSynthEvents, controllerStateAt } from './synthEvents.js';
 
 /** Synthés de batterie, un par élément (voir drums.js). */
 function createDrumSynths() {
@@ -129,25 +107,37 @@ export class Player {
     this.lead = 0;
     this.playing = false;
     this.lastDrum = new Map();
-    // Échantillons General MIDI (FluidR3) : un sampler par programme, chargé à la demande.
+    // Lecteur SoundFont (banque General MIDI complète) ; les synthés ci-dessus servent
+    // tant qu'il n'est pas chargé, en cas d'échec, ou si l'utilisateur le désactive.
     this.useSamples = true;
-    this.sampleBus = new Tone.Volume(-4).connect(this.reverb);
-    this.sampleDry = new Tone.Volume(-4).toDestination();
-    this.samplers = new Map(); // programme | 'drums' → Promise<Sampler>
-    this.ready = new Map(); // programme | 'drums' → Sampler chargé
+    this.limiter = new Tone.Limiter(-1).toDestination();
+    this.soundfont = new SoundFontEngine(this.limiter);
+    this.sf = { channels: [], frames: [] };
     // Retard supplémentaire (s) réglable par l'utilisateur si le son arrive encore après l'image.
     this.manualOffset = 0;
-    this.transport.on('stop', () => this.lastDrum.clear());
+    this.transport.on('stop', () => {
+      this.lastDrum.clear();
+      this.soundfont.silence();
+      this.soundfont.setup(this.sf.channels);
+    });
+    this.transport.on('pause', () => this.soundfont.silence());
+  }
+
+  /** Le lecteur SoundFont joue-t-il (sinon : synthèse de secours) ? */
+  get soundfontOn() {
+    return this.useSamples && this.soundfont.ready;
   }
 
   /**
-   * @param notes notes mélodiques [{midi,time,duration,velocity,voice,program}]
-   *   voice (mallet | bass | pad) : son de synthèse de secours ; program : échantillons General MIDI
+   * @param notes notes mélodiques [{track,midi,time,duration,held,velocity,voice}]
+   *   voice (mallet | bass | pad) : son de synthèse de secours ; duration inclut la pédale,
+   *   held est la durée réelle de la touche (le lecteur SoundFont gère la pédale lui-même)
    * @param drumHits frappes [{piece,midi,time,velocity}]
    * @param lead avance (s) laissée avant la première note
    * @param audio AudioBuffer de l'enregistrement original (import audio), ou null
+   * @param tracks pistes du morceau (programme General MIDI, contrôleurs, bends)
    */
-  load(notes, drumHits, lead, audio = null) {
+  load(notes, drumHits, lead, audio = null, tracks = []) {
     this.stop();
     this.parts.forEach((p) => p.dispose());
     this.lead = lead;
@@ -165,13 +155,14 @@ export class Player {
     // Les synthés monophoniques refusent deux attaques au même instant (ex. 38 + 40 → caisse claire).
     const last = this.lastDrum;
     last.clear();
+    this.sf = buildSynthEvents(notes, drumHits, tracks, lead);
+    this.soundfont.setup(this.sf.channels);
     this.parts = [
+      new Tone.Part((time, frame) => {
+        if (this.soundfontOn) this.soundfont.send(frame.msgs, time);
+      }, this.sf.frames).start(0),
       new Tone.Part((time, ev) => {
-        const sampler = this.useSamples && this.ready.get(ev.program);
-        if (sampler) {
-          sampler.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), Math.max(0.05, ev.duration), time, ev.velocity);
-          return;
-        }
+        if (this.soundfontOn) return;
         const synth = this.voices[ev.voice] ?? this.synth;
         const dur = ev.voice === 'mallet' ? 0.4 : Math.max(0.05, ev.duration);
         synth.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), dur, time, ev.velocity);
@@ -179,14 +170,10 @@ export class Player {
       new Tone.Part((time, ev) => {
         // Si le navigateur prend du retard, Tone ramène les attaques passées à « maintenant » :
         // on décale légèrement pour garder des instants strictement croissants par synthé.
+        if (this.soundfontOn) return;
         const t = Math.max(time, Tone.now(), (last.get(ev.piece) ?? -1) + 0.005);
         last.set(ev.piece, t);
         try {
-          const kit = this.useSamples && this.ready.get('drums');
-          if (kit && this.drumNotes?.has(ev.midi)) {
-            kit.triggerAttackRelease(Tone.Frequency(ev.midi, 'midi').toFrequency(), 2, t, ev.velocity);
-            return;
-          }
           this.playDrum(ev.piece, t, ev.velocity);
         } catch (err) {
           console.warn('Frappe ignorée :', err.message);
@@ -203,38 +190,30 @@ export class Player {
     if (this.original) this.original.mute = !this.listenOriginal;
   }
 
-  /**
-   * Charge les échantillons des programmes General MIDI utilisés (et de la batterie).
-   * Les sons de synthèse servent tant qu'un instrument n'est pas chargé ou en cas d'échec.
-   */
-  async prepareSamples(programs, drums) {
-    const keys = [...new Set(programs)];
-    if (drums) keys.push('drums');
-    const jobs = keys.map((key) => {
-      if (!this.samplers.has(key)) {
-        const promise = getSampleIndex().then((index) => {
-          const notes = key === 'drums' ? index.drums : index.programs[key];
-          if (!notes?.length) throw new Error('aucune note');
-          if (key === 'drums') this.drumNotes = new Set(notes);
-          return key === 'drums'
-            ? loadSampler(`${SAMPLES_URL}drums/`, notes, this.sampleDry, { release: 1 })
-            : loadSampler(`${SAMPLES_URL}gm/${key}/`, notes, this.sampleBus);
-        });
-        this.samplers.set(
-          key,
-          promise.then((s) => this.ready.set(key, s)).catch((err) => {
-            console.warn(`Échantillons indisponibles (${key}), synthèse utilisée :`, err?.message ?? err);
-          }),
-        );
-      }
-      return this.samplers.get(key);
-    });
-    await Promise.all(jobs);
-    return keys.filter((k) => this.ready.has(k)).length === keys.length;
+  /** Charge le lecteur SoundFont ; renvoie false (synthèse de secours) en cas d'échec. */
+  async prepareSounds() {
+    try {
+      await this.soundfont.load();
+    } catch (err) {
+      console.warn('Lecteur SoundFont indisponible, synthèse utilisée :', err?.message ?? err);
+      return false;
+    }
+    this.soundfont.setup(this.sf.channels);
+    this.restoreControllers();
+    return true;
+  }
+
+  /** Renvoie au synthé l'état des contrôleurs (volume, pédale, bend…) à la position actuelle. */
+  restoreControllers() {
+    const msgs = controllerStateAt(this.sf.frames, this.transport.seconds);
+    if (!msgs.length) return;
+    // Après les messages déjà en file (dont la pédale relevée par silence()).
+    this.soundfont.send(msgs, Math.max(Tone.now(), this.rawContext.currentTime, (this.soundfont.queuedUntil ?? 0) + 0.002) + 0.003);
   }
 
   async play() {
     await Tone.start();
+    this.restoreControllers();
     this.transport.start('+0.05');
     this.playing = true;
   }
@@ -251,6 +230,8 @@ export class Player {
   seek(t) {
     this.transport.seconds = Math.max(0, t + this.lead);
     this.lastDrum.clear();
+    this.soundfont.silence();
+    this.restoreControllers();
   }
 
   stop() {

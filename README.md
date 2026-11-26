@@ -26,7 +26,7 @@ change à chaque section et un réalisateur filme le tout comme un concert.
 - **Barre de lecture** pour naviguer dans le morceau ; **Retard image** pour corriger une latence audio mal
   annoncée (Bluetooth) ; **Qualité** *Auto* part de *Haute* (reflets du sol, ombres 4K, lumière indirecte, occlusion ambiante, halo) et descend d'un cran
   si l'animation rame.
-- **Sons réalistes** : échantillons General MIDI (SoundFont FluidR3), sinon synthèse.
+- **Sons réalistes** : lecteur SoundFont (SpessaSynth) avec la banque General MIDI *MuseScore General* : boucles, couches de vélocité, pédale de sustain, pitch bend, volume, panoramique et autres contrôleurs du fichier MIDI. Sinon synthèse.
 - **⏺ Vidéo** : rejoue le morceau et l'enregistre (image + son) en MP4 ou WebM.
 - **⇩ Blender** : exporte l'animation complète en glTF (`.glb`).
 
@@ -202,12 +202,13 @@ l'image suit l'horloge de rendu audio.
 | `src/postfx.js` | Post-traitement : MSAA HDR, occlusion ambiante (GTAO), profondeur de champ, halo, objectif, ACES |
 | `src/ssgi.js` | Tampon géométrique et lumière indirecte en espace écran (SSGI) |
 | `src/materials.js`, `src/parts.js` | Matériaux physiques, textures procédurales, pièces de construction partagées |
-| `src/audio.js` | Tone.js : échantillons GM, synthèse de secours, horloge de référence, capture pour la vidéo |
+| `src/audio.js` | Tone.js : horloge de référence, synthèse de secours, capture pour la vidéo |
+| `src/soundfont.js`, `src/synthEvents.js` | Lecteur SoundFont (SpessaSynth) piloté par le transport Tone : un canal MIDI par piste |
 | `src/exporter.js` | Export glTF (animation cuite) |
 | `src/audioImport.js`, `src/transcribe.js`, `src/drumDetect.js`, `src/audioArrange.js` | Import d'un enregistrement : décodage, transcription, batterie, répartition |
 | `src/main.js` | Interface et boucle de rendu |
 
-Outils : `tools/make-samples.mjs` (génère les échantillons avec FluidSynth), `tools/bench.mjs`, `tools/collide.mjs`,
+Outils : `tools/bench.mjs`, `tools/collide.mjs`,
 `tools/smoke.mjs`, `tools/shot.mjs` (captures d'écran à un instant donné), `tools/stress-midi.mjs` (fichiers MIDI de stress), `tools/audio-bench.cjs` (précision de l'import
 audio : `node tools/audio-bench.cjs morceau.mp3` à côté de `morceau.mid`, ffmpeg requis).
 
@@ -222,14 +223,10 @@ début de l'animation est indiqué dans le message d'export et dans les proprié
 
 ## Sons et modèles
 
-Les échantillons de `public/samples/` sont extraits du SoundFont *Fluid (R3) General MIDI* de Frank Wen,
-sous licence MIT (voir `public/samples/LICENSE.txt`). Le modèle de transcription de `public/models/basic-pitch/`
-est celui de Basic Pitch (Spotify), sous licence Apache-2.0. Pour régénérer les échantillons :
-
-```bash
-sudo apt-get install fluidsynth fluid-soundfont-gm ffmpeg
-npm run samples
-```
+La banque `public/soundfonts/MuseScore_General.sf3` (MuseScore General, dérivée de *Fluid (R3) General MIDI*
+de Frank Wen) est sous licence MIT (voir `public/soundfonts/LICENSE.md`). Le lecteur SoundFont est SpessaSynth,
+sous licence Apache-2.0. Le modèle de transcription de `public/models/basic-pitch/` est celui de Basic Pitch
+(Spotify), sous licence Apache-2.0.
 
 ## Déploiement
 

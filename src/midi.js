@@ -31,7 +31,8 @@ export function parseMidi(arrayBuffer, fileName = 'MIDI') {
 
 /**
  * Contrôleurs expressifs d'une piste : pédale de sustain (CC64), molette de
- * modulation (CC1, 0..1) et pitch bend (−1..1), en événements triés par temps.
+ * modulation (CC1, 0..1) et pitch bend (−1..1), en événements triés par temps,
+ * plus la liste brute de tous les contrôleurs.
  */
 function controlsOf(t) {
   const cc = t.controlChanges ?? {};
@@ -43,7 +44,13 @@ function controlsOf(t) {
   }
   const mod = (cc[1] ?? []).map((e) => ({ time: e.time, value: e.value })).sort(byTime);
   const bends = (t.pitchBends ?? []).map((e) => ({ time: e.time, value: e.value })).sort(byTime);
-  return { sustain, mod, bends };
+  // Tous les contrôleurs bruts (0..127), rejoués tels quels par le lecteur SoundFont :
+  // volume, panoramique, expression, pédale, réglages RPN (étendue du bend)…
+  const ccs = Object.values(cc)
+    .flat()
+    .map((e) => ({ time: e.time, number: e.number, value: Math.round(e.value * 127) }))
+    .sort(byTime);
+  return { sustain, mod, bends, ccs };
 }
 
 /** Morceau de démonstration généré (aucun fichier requis). */
