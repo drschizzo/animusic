@@ -251,15 +251,19 @@ export class BallsView {
 
   buildReturns(ch, { steel, chrome, dark }) {
     const o = ch.options;
-    const lift = 0.06; // l'axe de la gouttière est un peu au-dessus du centre des billes
-    const rc = o.ballRadius + lift + 0.02;
+    // La bille repose au fond de la gouttière (rayon = bille + jeu) et roule au centre des tubes.
+    const lift = 0.06;
+    const rc = o.ballRadius + lift;
+    const rt = o.ballRadius + 0.05; // rayon intérieur des tubes de verre
     const channelMat = mat.brass();
     channelMat.side = THREE.DoubleSide;
+    const funnelMat = steel.clone();
+    funnelMat.side = THREE.DoubleSide;
     const glass = mat.glass();
     this.portMats = [];
     for (const path of ch.returns) {
-      const pts = path.points.map(([x, y, z]) => V(x, y + lift, z));
-      const trough = pts.slice(0, path.troughSteps + 1);
+      const pts = path.points.map(([x, y, z]) => V(x, y, z));
+      const trough = pts.slice(0, path.troughSteps + 1).map((p) => p.clone().setY(p.y + lift));
       const channel = new THREE.Mesh(channelGeometry(trough, rc), channelMat);
       channel.castShadow = channel.receiveShadow = true;
       this.content.add(channel);
@@ -277,44 +281,97 @@ export class BallsView {
         this.content.add(lip);
       }
       // Pieds de la gouttière.
-      for (let i = 0; i <= path.troughSteps; i += Math.max(4, Math.round(path.troughSteps / 6))) {
+      // (pas sous l'extrémité : la bille y bascule dans l'entonnoir)
+      for (let i = 0; i <= path.troughSteps - 3; i += Math.max(4, Math.round(path.troughSteps / 6))) {
         const p = trough[i];
         this.content.add(rod(V(p.x, 0, p.z), V(p.x, p.y - rc, p.z), 0.025, dark, 10));
         const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.03, 14), dark);
         foot.position.set(p.x, 0.015, p.z);
         this.content.add(foot);
       }
-      // Entonnoir au bout de la gouttière, au-dessus de la chute.
-      const drop = pts[path.troughSteps + 1];
-      const funnel = lathe([[rc * 0.95, -0.12], [rc * 1.05, -0.02], [rc * 2.1, 0.22], [rc * 2.2, 0.25]], 32, steel);
-      funnel.material = steel.clone();
-      funnel.material.side = THREE.DoubleSide;
-      const end = pts[path.troughSteps];
-      funnel.position.set((end.x + drop.x) / 2, end.y - 0.12, (end.z + drop.z) / 2);
+      // Entonnoir : axe vertical sous l'arrivée de la gouttière ; son goulot coiffe le tube.
+      const f = path.funnel;
+      const h = f.top - f.neck;
+      const funnel = lathe(
+        [
+          [rt + 0.015, -0.06],
+          [rt + 0.015, 0.16],
+          [rt + 0.04, 0.2],
+          [0.47, h - 0.02],
+          [0.5, h],
+        ],
+        40,
+        funnelMat,
+      );
+      funnel.position.set(f.x, f.neck, f.z);
+      funnel.castShadow = true;
       this.content.add(funnel);
-      // Tube de verre : de l'entonnoir jusqu'au flanc de la tourelle.
-      const tubePts = pts.slice(path.troughSteps + 1);
-      tubePts[0] = funnel.position.clone().setY(funnel.position.y - 0.1);
-      const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(tubePts), tubePts.length * 3, rc, 20), glass);
+      const rimMat = mat.glow(0xffc46b, 1.5);
+      this.portMats.push(rimMat);
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.014, 8, 40), rimMat);
+      rim.rotation.x = Math.PI / 2;
+      rim.position.set(f.x, f.top, f.z);
+      this.content.add(rim);
+      // Trois pieds, tournés à l'opposé du tube (qui part vers la tourelle).
+      const out = Math.atan2(f.x, -f.z); // direction radiale vers l'extérieur
+      for (const da of [0, 1.3, -1.3]) {
+        const a = out + da;
+        const dir = [Math.sin(a), -Math.cos(a)];
+        const top = V(f.x + dir[0] * 0.46, f.top - 0.05, f.z + dir[1] * 0.46);
+        const bottom = V(f.x + dir[0] * 0.72, 0, f.z + dir[1] * 0.72);
+        this.content.add(rod(bottom, top, 0.022, dark, 8));
+        const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 0.03, 12), dark);
+        foot.position.set(bottom.x, 0.015, bottom.z);
+        this.content.add(foot);
+      }
+      // Tube de verre : exactement le trajet des billes, du goulot jusqu'au chargeur.
+      const L = path.loader;
+      const out2 = V(Math.sin(L.angle), 0, -Math.cos(L.angle));
+      const port = V(L.x, o.tubeY, L.z).addScaledVector(out2, L.radius);
+      const tubePts = pts.slice(path.tubeStart).filter((p) => Math.hypot(p.x - L.x, p.z - L.z) > L.radius + 0.02);
+      tubePts.push(port);
+      const curve = new THREE.CatmullRomCurve3(tubePts);
+      const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, tubePts.length * 3, rt, 20), glass);
       tube.renderOrder = 2;
       this.content.add(tube);
-      // Bagues chromées régulières sur le tube, et bouche lumineuse à l'arrivée.
-      const curve = new THREE.CatmullRomCurve3(tubePts);
-      const ringGeo = new THREE.TorusGeometry(rc + 0.012, 0.016, 8, 24);
+      // Bagues chromées régulières sur le tube.
+      const ringGeo = new THREE.TorusGeometry(rt + 0.012, 0.014, 8, 24);
       const len = curve.getLength();
-      for (let d = 0.4; d < len - 0.2; d += 0.9) {
+      for (let d = 0.6; d < len - 0.3; d += 0.9) {
         const u = d / len;
         const ring = new THREE.Mesh(ringGeo, chrome);
         ring.position.copy(curve.getPointAt(u));
         ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), curve.getTangentAt(u));
         this.content.add(ring);
       }
+      // Chargeur : boîtier opaque au pied de la tourelle, la bille y entre par un col lumineux.
+      const loader = lathe(
+        [
+          [0, 0],
+          [L.radius, 0],
+          [L.radius, 0.5],
+          [L.radius - 0.06, 0.56],
+          [0, 0.56],
+        ],
+        32,
+        dark,
+      );
+      loader.name = 'chargeur';
+      loader.position.set(L.x, 0, L.z);
+      loader.castShadow = loader.receiveShadow = true;
+      this.content.add(loader);
       const mouthMat = mat.glow(0xffc46b, 2);
       this.portMats.push(mouthMat);
-      const mouth = new THREE.Mesh(new THREE.TorusGeometry(rc + 0.02, 0.022, 8, 24), mouthMat);
-      mouth.position.copy(curve.getPointAt(1));
-      mouth.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), curve.getTangentAt(1));
+      const mouth = new THREE.Mesh(new THREE.TorusGeometry(rt + 0.02, 0.024, 8, 24), mouthMat);
+      mouth.position.copy(port);
+      mouth.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), out2);
       this.content.add(mouth);
+      const capMat = mat.glow(0xffc46b, 1.5);
+      this.portMats.push(capMat);
+      const cap = new THREE.Mesh(new THREE.TorusGeometry(L.radius - 0.03, 0.012, 8, 32), capMat);
+      cap.rotation.x = Math.PI / 2;
+      cap.position.set(L.x, 0.56, L.z);
+      this.content.add(cap);
     }
   }
 

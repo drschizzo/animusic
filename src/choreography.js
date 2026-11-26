@@ -32,13 +32,16 @@ export const DEFAULTS = {
   aimWindow: 0.35, // durée de la visée avant un tir
 
   // Récupération : gouttière en arc derrière les lames, puis tubes de retour vers la tourelle.
-  exitTime: 0.5, // vol de la dernière lame à la gouttière
-  troughGap: 0.95, // distance gouttière ↔ lames
-  troughY: 0.78, // hauteur (centre de bille) au milieu de la gouttière
-  troughSlope: 0.28, // descente (m/rad) vers les extrémités
+  exitTime: 0.5, // vol minimal de la dernière lame à la gouttière (allongé pour franchir la lame)
+  troughGap: 1.4, // distance gouttière ↔ lames (au-delà du bout des lames les plus longues)
+  troughY: 1.22, // hauteur (centre de bille) au milieu de la gouttière
+  troughEndY: 1.05, // … et à ses extrémités, au-dessus des entonnoirs
   rollSpeed: 2.4, // vitesse dans la gouttière
   tubeSpeed: 4.2, // vitesse dans les tubes
   tubeY: 0.2, // hauteur des tubes au sol (centre de bille)
+  funnelDepth: 0.42, // de l'arrivée de la gouttière au bas du goulot de l'entonnoir
+  loaderGap: 0.95, // chargeur (où rentrent les billes) : distance au-delà des canons
+  loaderRadius: 0.3,
 };
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -204,13 +207,14 @@ export function buildChoreography(notes, options = {}) {
   const returns = buildReturnPaths(o, radius, arc);
   for (const b of balls) {
     const bar = bars[b.lastBar];
-    // Saut de la lame vers la gouttière, juste derrière elle.
-    const exit = o.exitTime;
+    // Rebond de la lame vers la gouttière, juste derrière elle : assez haut pour
+    // franchir le bout de la lame (la bille ne doit jamais la traverser).
     const landAngle = bar.angle;
     const side = landAngle > 1e-6 ? 1 : landAngle < -1e-6 ? 0 : b.launcher % 2;
     const path = returns[side];
     const s0 = path.troughAt(Math.abs(landAngle));
     const land = path.pointAt(s0);
+    const exit = exitTime(o, bar, land);
     b.segs.push({ t0: b.lastImpact, p: bar.target, v: aim(bar.target, land, exit) });
     const t0 = b.lastImpact + exit;
     b.path = { t0, side, s0, t1: t0 + path.timeBetween(s0, path.length) };
@@ -235,6 +239,35 @@ export function buildChoreography(notes, options = {}) {
 }
 
 /**
+ * Durée du saut d'une lame vers la gouttière : la plus courte (≥ exitTime) pour que la
+ * bille ne touche ni le bout de la lame ni le bord intérieur de la gouttière (elle y
+ * plonge par le haut). Recherche numérique dans le plan radial-vertical.
+ */
+function exitTime(o, bar, land) {
+  const D = Math.hypot(land[0] - bar.target[0], land[2] - bar.target[2]);
+  const dy = land[1] - bar.target[1];
+  const r = o.ballRadius;
+  const g = o.gravity;
+  // Coins à éviter (x horizontal depuis le départ, y relatif) et distance minimale.
+  const corners = [
+    [bar.length / 2, -r - 0.03, r + 0.04], // bout de la lame (arête supérieure)
+    [D - r - 0.06, dy + 0.06, r + 0.045], // lèvre intérieure de la gouttière
+  ];
+  for (let T = o.exitTime; T < 3; T += 0.02) {
+    const vy = (dy + 0.5 * g * T * T) / T;
+    let ok = true;
+    for (let k = 1; k <= 40 && ok; k++) {
+      const t = (k / 40) * T;
+      const x = (D * t) / T;
+      const y = vy * t - 0.5 * g * t * t;
+      for (const [cx, cy, min] of corners) if (Math.hypot(x - cx, y - cy) < min) ok = false;
+    }
+    if (ok) return T;
+  }
+  return 3;
+}
+
+/**
  * Chemins de retour (gauche, droite), en coordonnées de centre de bille : gouttière en
  * arc qui descend vers l'extrémité, chute dans un tube, course au sol jusqu'au pied de
  * la tourelle, montée dans le plateau. Polyligne aux angles adoucis, paramétrée par
@@ -244,7 +277,7 @@ export function buildReturnPaths(o, radius, arc) {
   const Rt = radius + o.troughGap;
   const endA = arc / 2 + 0.14;
   const steps = Math.max(8, Math.ceil(endA / 0.03));
-  const troughY = (a) => o.troughY - o.troughSlope * a;
+  const troughY = (a) => o.troughY - ((o.troughY - o.troughEndY) * a) / endA;
   return [-1, 1].map((sign) => {
     const at = (a, r, y) => [Math.sin(sign * a) * r, y, -Math.cos(sign * a) * r];
     const trough = [];
@@ -252,15 +285,17 @@ export function buildReturnPaths(o, radius, arc) {
       const a = (i / steps) * endA;
       trough.push(at(a, Rt, troughY(a)));
     }
-    // Au bout de la gouttière : entonnoir, chute verticale, puis le tube file au sol vers la tourelle.
+    // Au bout de la gouttière, la bille tombe dans un entonnoir (axe vertical), descend
+    // dans son goulot puis dans un tube de verre qui file au sol, droit vers la tourelle,
+    // et entre dans le chargeur (boîtier opaque où elle disparaît).
     const yEnd = troughY(endA);
-    const drop = at(endA + 0.2 / Rt, Rt, yEnd - 0.05);
-    const hubA = Math.min(endA, arc * 0.4 + 0.5);
-    const rHub = o.launcherRadius + 0.75;
-    let tube = [drop, at(endA + 0.2 / Rt, Rt, o.tubeY + 0.3), at(endA + 0.2 / Rt, Rt - 0.3, o.tubeY)];
-    tube.push(at(hubA, rHub + 0.5, o.tubeY), at(hubA, rHub, o.tubeY + 0.05));
+    const dropA = endA + 0.25 / Rt;
+    const drop = at(dropA, Rt, yEnd - 0.04);
+    const neck = at(dropA, Rt, yEnd - 0.04 - o.funnelDepth);
+    const rLoader = o.launcherRadius + o.loaderGap;
+    let tube = [neck, at(dropA, Rt, o.tubeY), at(dropA, Rt - 0.6, o.tubeY), at(dropA, rLoader + 0.6, o.tubeY), at(dropA, rLoader, o.tubeY)];
     tube = chaikin(tube, 3);
-    const points = [...trough, ...tube.slice(1)];
+    const points = [...trough, drop, ...tube];
     const cum = [0];
     for (let i = 1; i < points.length; i++) {
       const [a, b] = [points[i - 1], points[i]];
@@ -268,11 +303,19 @@ export function buildReturnPaths(o, radius, arc) {
     }
     const troughEnd = cum[steps];
     const length = cum[cum.length - 1];
+    const [fx, , fz] = drop;
+    const [lx, , lz] = at(dropA, rLoader, 0);
     return {
       side: sign,
       points,
       cum,
       troughSteps: steps,
+      /** Entonnoir : axe (x, z), haut (sous l'arrivée de la gouttière), bas du goulot. */
+      funnel: { x: fx, z: fz, top: yEnd - o.ballRadius - 0.02, neck: neck[1] },
+      /** Points du tube de verre (à partir du goulot). */
+      tubeStart: steps + 2,
+      /** Chargeur : boîtier cylindrique au pied de la tourelle, où rentrent les billes. */
+      loader: { x: lx, z: lz, angle: sign * dropA, radius: o.loaderRadius },
       troughEnd,
       length,
       /** Abscisse du point de la gouttière à l'angle a (rad, ≥ 0). */
@@ -346,11 +389,10 @@ export function ballPosition(ch, ball, t, out = [0, 0, 0]) {
   return out;
 }
 
-/** Échelle d'une bille : elle rétrécit en entrant dans la tourelle. */
+/** Échelle d'une bille : 1 pendant toute sa vie (elle finit cachée dans le chargeur). */
 export function ballScale(ball, t) {
-  const fadeOut = 0.15;
-  if (t < ball.launch || t > ball.end) return 0;
-  return Math.min(1, (ball.end - t) / fadeOut);
+  if (t < ball.launch || t >= ball.end) return 0;
+  return 1;
 }
 
 /** Intervalle [start, end) des billes (triées par tir) potentiellement visibles à t. */
