@@ -233,6 +233,38 @@ function check(name, song, style) {
     return { grid, list, box };
   });
   const p = new THREE.Vector3();
+  // 2 bis. Réseau de tuyaux contre chaque instrument, dans les deux sens.
+  if (mounted.trunkView) {
+    const grid = new Map();
+    const list = [];
+    collectTriangles(mounted.trunkView.group, 'réseau', grid, list);
+    const box = new THREE.Box3();
+    for (const e of list) box.expandByPoint(e.tri.a).expandByPoint(e.tri.b).expandByPoint(e.tri.c);
+    const net = { grid, list, box };
+    const probe = (A, B, label) => {
+      const zone = B.box.clone().expandByScalar(0.02);
+      const found = new Map();
+      for (const e of A.list) {
+        const { a: v0, b: v1, c: v2 } = e.tri;
+        if (!zone.intersectsBox(new THREE.Box3().setFromPoints([v0, v1, v2]))) continue;
+        const L = Math.max(v0.distanceTo(v1), v1.distanceTo(v2), v2.distanceTo(v0));
+        const n = Math.min(40, Math.max(1, Math.ceil(L / 0.05)));
+        for (let i = 0; i <= n; i++)
+          for (let j = 0; j <= n - i; j++) {
+            p.set(0, 0, 0).addScaledVector(v0, i / n).addScaledVector(v1, j / n).addScaledVector(v2, (n - i - j) / n);
+            if (!zone.containsPoint(p)) continue;
+            const hit = sphereHit(B.grid, p, 0.008);
+            if (hit && !found.has(hit.e.name)) found.set(hit.e.name, `${e.name} ↔ ${hit.e.name}, ex. ${fmt(p)}`);
+          }
+      }
+      for (const at of found.values()) problems.push(`${label} : ${at}`);
+    };
+    views.forEach((v, k) => {
+      const before = problems.length;
+      probe(net, solids[k], `réseau ↔ ${v.inst.kind}#${k}`);
+      if (problems.length === before) probe(solids[k], net, `${v.inst.kind}#${k} ↔ réseau`);
+    });
+  }
   for (let a = 0; a < views.length; a++)
     for (let b = 0; b < views.length; b++) {
       if (a === b) continue;

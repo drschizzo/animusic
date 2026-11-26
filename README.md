@@ -74,6 +74,11 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
 - **Notes tenues à billes** (orgue, vents, harpe laser) : une bille ne tient pas un son, alors elle tombe dans une
   **coupelle à poussoir** ; son poids ouvre la valve, la soupape ou l'iris tant qu'elle y repose, puis le poussoir
   remonte d'un coup sec et l'éjecte vers un cornet à la fin de la note.
+- **Une seule machine** (`src/trunks.js`) : près de la tourelle du marimba, une tour de colonnes de verre ; de
+  chacune part en hauteur un tuyau d'alimentation qui redescend dans la rampe d'un instrument, et un tuyau de retour
+  revient de son collecteur. Les billes y circulent à 5 m/s, en avance sur la musique : chacune arrive au bout de sa
+  rampe juste à temps pour être tirée, si bien que le rythme d'un instrument se lit d'avance dans son tuyau. Les
+  tuyaux sont étagés (jamais deux à la même hauteur) et les passes les évitent.
 - **Échanges de billes** (`src/passes.js`) : par moments (le début d'une section sur deux), un **canon de passe**
   dressé derrière un instrument tire la bille d'une note de l'instrument situé derrière lui, d'un long lob ; à
   défaut de voisin bien placé, c'est le canon central de la tourelle du marimba qui tire, à travers toute la scène.

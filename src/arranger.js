@@ -9,6 +9,7 @@
 import { buildChoreography } from './choreography.js';
 import { buildDrumKit } from './drums.js';
 import { planPasses } from './passes.js';
+import { planTrunks, scheduleTrunks } from './trunks.js';
 import { buildBassStrings } from './strings.js';
 import { buildPipes } from './pipes.js';
 import { buildBells } from './bells.js';
@@ -630,6 +631,11 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
   );
   const ensemble = { instruments, start, end, radius: R, stageRadius };
   // Échanges de billes entre instruments voisins (voir passes.js).
-  if (style === 'balls') ensemble.passes = planPasses(ensemble, passOptions);
+  // Réseau de tuyaux qui relie les instruments à la tour (voir trunks.js) ; les passes l'évitent.
+  if (style === 'balls') {
+    ensemble.trunks = planTrunks(ensemble);
+    ensemble.passes = planPasses(ensemble, { ...passOptions, trunks: ensemble.trunks });
+    scheduleTrunks(ensemble.trunks, ensemble);
+  }
   return ensemble;
 }

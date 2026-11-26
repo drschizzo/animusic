@@ -10,6 +10,7 @@ import { KeysView } from './keysView.js';
 import { BowedView } from './bowedView.js';
 import { WindsView } from './windsView.js';
 import { PassesView } from './passesView.js';
+import { TrunksView } from './trunksView.js';
 import { Environment } from './environment.js';
 import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
@@ -111,7 +112,9 @@ export function mountInstruments(ensemble, trackColors, content, { freeze = true
   });
   // Canons de passe : montés après la fusion (leurs fûts bougent), sur l'élévateur de l'instrument qui tire.
   const passView = ensemble.passes?.cannons.length ? new PassesView(ensemble.passes, trackColors, lifts, content) : null;
-  return { lifts, views, hatches, frozen, passView };
+  // Réseau de tuyaux de verre qui relie les instruments à la tour : fixe, dans le repère de la scène.
+  const trunkView = ensemble.trunks?.lines.length ? new TrunksView(ensemble.trunks, trackColors, content) : null;
+  return { lifts, views, hatches, frozen, passView, trunkView };
 }
 
 /** Scène Three.js : construit les objets à partir d'une chorégraphie et les pose à l'instant t. */
@@ -285,6 +288,7 @@ export class Stage {
       }
     });
     this.passView?.update(t);
+    this.trunkView?.update(t);
     this.assignLamps();
     if (this.song) this.mood = sectionAt(this.song, t);
     // Battue du morceau (grosse caisse) : le décor respire avec elle.

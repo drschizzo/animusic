@@ -81,7 +81,7 @@ export async function exportGLTF(stage, ensemble, plan, options) {
   const pools = ballsView ? makeBallPools(ballsView, trackColors, root) : [];
   if (ballsView) ballsView.balls.visible = false;
   // Billes des stations (batterie à billes) : pas encore exportées ; masquées plutôt que figées en l'air.
-  const stationBalls = [...stage.views.filter((v) => v.pool || v.rowView).map((v) => (v.pool ?? v.rowView.pool).balls), ...(stage.passView?.pools ?? []).map((p) => p.pool.balls)];
+  const stationBalls = [...stage.views.filter((v) => v.pool || v.rowView).map((v) => (v.pool ?? v.rowView.pool).balls), ...(stage.passView?.pools ?? []).map((p) => p.pool.balls), ...(stage.trunkView?.pools ?? []).map((p) => p.balls)];
   for (const b of stationBalls) b.visible = false;
   // Les purs effets lumineux (halos, étincelles, traînées, rayons) ne sont pas exportés.
   const effects = [];

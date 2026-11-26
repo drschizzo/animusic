@@ -12,6 +12,7 @@
 import { GRAVITY, buildStation, stationBall, maxConcurrent } from './ballistics.js';
 import { analyzeSong, deployAt } from './sections.js';
 import { activeBallRange, ballPosition, ballScale } from './choreography.js';
+import { trunkDistance } from './trunks.js';
 
 export const PASS_DEFAULTS = {
   barrel: 0.6, // longueur du fût, de la rotule à la bouche
@@ -126,8 +127,9 @@ export function solvePass({ pivot, axis, y, rho, caught, restitution, barrel }) 
  * le tir n'est pas propre : rebond trop rasant, entrée de biais dans le cornet, lob qui
  * frôle la rampe des buses ou le bord de l'estrade.
  */
-/** Vrai si le point p (scène) survole de trop près l'un des encombrements. */
+/** Vrai si le point p (scène) survole de trop près l'un des encombrements, ou frôle un tuyau du réseau. */
 function tooLow(p, obstacles) {
+  if (obstacles.trunks && trunkDistance(obstacles.trunks, p) < 0.3) return true;
   for (const g of obstacles) {
     const ox = p[0] - g.center[0];
     const oz = p[2] - g.center[1];
@@ -308,6 +310,7 @@ export function planPasses(ensemble, options = {}) {
 
     // Rotule à la plus petite hauteur d'où la plupart des cibles sont atteignables.
     const obstacles = inst.filter((other, i) => other.footprint && i !== k && i !== best.j).map((other) => other.footprint);
+    obstacles.trunks = o.trunks;
     let stations = null;
     for (const above of best.hub ? [o.hubHeight] : o.pivotAbove) {
       best.pivot = [best.x, (inst[best.j].riser ?? 0) + above, best.z];
