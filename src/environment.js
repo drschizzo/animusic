@@ -816,7 +816,8 @@ export class Environment {
     // montent quand l'instrument suivi joue et retombent (sans s'éteindre) entre deux phrases.
     for (const f of this.follows) {
       const h = this.heads[f.head];
-      f.level += (h.level - f.level) * 0.08;
+      // Attaque franche, retombée lente : la lumière monte avec la note, pas après elle.
+      f.level += (h.level - f.level) * (h.level > f.level ? 0.5 : 0.06);
       f.light.position.copy(this.rig.position).add(h.pivot.position);
       f.light.target.position.copy(h.target);
       f.light.intensity = this.followGain * (0.35 + 0.65 * Math.min(1, f.level * 1.6));

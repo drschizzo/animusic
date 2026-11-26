@@ -204,6 +204,9 @@ L'image est calée sur l'échantillon **réellement en train de sortir des haut-
 programmation de Tone.js qui a ~0,1 s d'avance. Pendant un enregistrement vidéo, le son étant capté à la source,
 l'image suit l'horloge de rendu audio.
 
+En lecture, l'image est en outre dessinée **en avance d'un intervalle d'image** (mesuré et lissé, 50 ms au plus) :
+une image calculée maintenant n'apparaît qu'au rafraîchissement suivant, et ce retard grandit quand la cadence baisse.
+
 ## Architecture
 
 | Fichier | Rôle |

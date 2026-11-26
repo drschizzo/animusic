@@ -157,10 +157,7 @@ export class DrumKitView {
           [r * 0.6, 0.013],
           [r, 0],
         ];
-        const cymbalMat = mat.brass();
-        cymbalMat.side = THREE.DoubleSide;
-        cymbalMat.roughness = 0.5;
-        cymbalMat.emissive = new THREE.Color(0x000000);
+        const cymbalMat = mat.cymbal();
         const cymbal = lathe(profile, 72, cymbalMat);
         cymbal.position.y = -0.02;
         const nut = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.05, 10), m.chrome);

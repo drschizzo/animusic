@@ -231,14 +231,77 @@ function detail(material, { scale = 8, bump = 0.2, rough = 0.1 } = {}) {
   return material;
 }
 
+/**
+ * Verre : presque invisible de face, de plus en plus présent vers les bords, où le regard
+ * le traverse en biais. C'est ce contour qui fait lire un tube comme un tube de verre et
+ * non comme un voile uniforme.
+ */
+function rimmed(material, edge = 0.7) {
+  const uniforms = { uRim: { value: edge } };
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uRim;')
+      .replace(
+        '#include <opaque_fragment>',
+        `float rimGlance = 1.0 - saturate(abs(dot(normalize(vViewPosition), normal)));
+        diffuseColor.a = mix(diffuseColor.a, uRim, rimGlance * rimGlance * rimGlance);
+        #include <opaque_fragment>`,
+      );
+  };
+  material.userData.freezable = true;
+  return material;
+}
+
+/**
+ * Métal tourné (cymbales) : sillons concentriques autour de l'axe y de la pièce. Ils
+ * étirent les reflets en éventail, comme sur une vraie cymbale, et se fondent en un
+ * simple satiné quand ils deviennent plus fins que le pixel.
+ * @param pitch écart entre deux sillons (m)
+ */
+function lathed(material, pitch = 0.006) {
+  const uniforms = { uLathe: { value: new THREE.Vector2((2 * Math.PI) / pitch, 0.38) } };
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLatheP; varying mat3 vLatheBasis;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLatheP = position;\nvLatheBasis = normalMatrix;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec2 uLathe;\nvarying vec3 vLatheP; varying mat3 vLatheBasis;')
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        float latheR = length(vLatheP.xz);
+        float lathePhase = latheR * uLathe.x;
+        float latheSharp = 1.0 - smoothstep(0.8, 2.4, fwidth(lathePhase));
+        // Sillons trop fins pour l'écran : leur effet moyen est une surface plus mate.
+        roughnessFactor = clamp(roughnessFactor + 0.16 * (1.0 - latheSharp), 0.04, 1.0);
+        // Bandes larges : le tour laisse des zones plus ou moins polies.
+        roughnessFactor = clamp(roughnessFactor + 0.07 * sin(latheR * 71.0) * sin(latheR * 23.0 + 1.3), 0.04, 1.0);`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        vec3 latheOut = vLatheBasis * vec3(vLatheP.x, 0.0, vLatheP.z);
+        vec3 latheBent = normal - latheOut / max(length(latheOut), 1e-5) * cos(lathePhase) * uLathe.y * latheSharp;
+        normal = latheBent / max(length(latheBent), 1e-4);`,
+      );
+  };
+  material.userData.freezable = true;
+  return material;
+}
+
 /** Fabriques de matériaux : chaque appel rend un matériau neuf (textures partagées). */
 export const mat = {
   chrome: () => detail(S({ color: 0xdfe3ec, roughness: 0.12, metalness: 1 }), { scale: 3, bump: 0, rough: 0.07 }),
-  steel: () => S({ color: 0x9aa1b2, roughness: 0.5, metalness: 1, roughnessMap: brushedTexture() }),
+  /** Métaux brossés : stries (carte de rugosité), traces de doigts et micro-relief par-dessus. */
+  steel: () => detail(S({ color: 0x9aa1b2, roughness: 0.5, metalness: 1, roughnessMap: brushedTexture() }), { scale: 6, bump: 0.035, rough: 0.1 }),
   /** Fonte peinte au four : grain de poudre, poli inégal. */
   gunmetal: () => detail(S({ color: 0x23262f, roughness: 0.55, metalness: 0.9, roughnessMap: brushedTexture() }), { scale: 4.5, bump: 0.14, rough: 0.14 }),
-  brass: () => S({ color: 0xe0ac4a, roughness: 0.42, metalness: 1, roughnessMap: brushedTexture() }),
-  copper: () => S({ color: 0xd9825a, roughness: 0.3, metalness: 1, roughnessMap: brushedTexture() }),
+  brass: () => detail(S({ color: 0xe0ac4a, roughness: 0.42, metalness: 1, roughnessMap: brushedTexture() }), { scale: 6, bump: 0.035, rough: 0.12 }),
+  /** Bronze de cymbale, tourné : sillons concentriques autour de l'axe de la pièce. */
+  cymbal: () => lathed(S({ color: 0xd8a445, roughness: 0.38, metalness: 1, emissive: 0x000000, side: THREE.DoubleSide })),
+  copper: () => detail(S({ color: 0xd9825a, roughness: 0.3, metalness: 1, roughnessMap: brushedTexture() }), { scale: 6, bump: 0.035, rough: 0.12 }),
   gold: () => detail(S({ color: 0xffcf6a, roughness: 0.16, metalness: 1 }), { scale: 3, bump: 0, rough: 0.07 }),
   /** Laque sous vernis (fûts de batterie, carrosserie) : vernis tendu, poli marbré dessous. */
   lacquer: (color, metalness = 0.55) =>
@@ -253,7 +316,7 @@ export const mat = {
   ivory: () => detail(P({ color: 0xc9c5b8, roughness: 0.3, clearcoat: 0.6, clearcoatRoughness: 0.2, emissive: 0x000000 }), { scale: 6, bump: 0, rough: 0.12 }),
   ebony: () => detail(P({ color: 0x0c0c0f, roughness: 0.28, clearcoat: 0.8, clearcoatRoughness: 0.12, emissive: 0x000000 }), { scale: 6, bump: 0, rough: 0.12 }),
   glass: () =>
-    P({
+    rimmed(P({
       color: 0xbfd0ff,
       roughness: 0.04,
       metalness: 0,
@@ -264,7 +327,7 @@ export const mat = {
       clearcoat: 1,
       clearcoatRoughness: 0.03,
       envMapIntensity: 2.2,
-    }),
+    })),
   /** Surface lumineuse (éteinte par défaut) : l'intensité est pilotée par la vue. */
   glow: (color = 0xffffff, intensity = 0) => S({ color: 0x050506, roughness: 0.4, emissive: color, emissiveIntensity: intensity }),
   /** Lumière pure additive (rayons, halos), ignorée par les ombres et l'occlusion. */

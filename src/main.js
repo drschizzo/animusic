@@ -485,9 +485,22 @@ const fmt = (s) => {
   return `${Math.floor(v / 60)}:${String(Math.floor(v % 60)).padStart(2, '0')}`;
 };
 
-function frame() {
+// Avance de l'image : une image calculée maintenant n'apparaît à l'écran qu'au
+// rafraîchissement suivant, au plus tôt. On la dessine donc en avance d'un intervalle
+// d'image (mesuré, lissé) : sans cela elle retarde sur le son, d'autant plus que la
+// cadence est basse (30 ms à 35 images/s). Pas pendant une vidéo : l'image y est captée
+// à la source, comme le son.
+const pacing = { last: 0, interval: 1 / 60 };
+function displayLead(now) {
+  const dt = (now - pacing.last) / 1000;
+  pacing.last = now;
+  if (dt > 0 && dt < 0.1) pacing.interval += (dt - pacing.interval) * 0.1;
+  return player.playing && !recorder ? Math.min(0.05, pacing.interval) : 0;
+}
+
+function frame(now = performance.now()) {
   if (ensemble) {
-    const t = player.currentTime();
+    const t = player.currentTime() + displayLead(now);
     stage.update(t);
     if (camMode === 'director' && shotPlan) stage.setCamera(cameraAt(shotPlan, t));
     $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
