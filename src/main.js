@@ -66,9 +66,7 @@ function rebuild() {
   $('seek').value = 0;
   loadSounds(notes, drumHits.length > 0);
 
-  $('stats').textContent = ensemble.instruments
-    .map((i) => `${ROLES[i.kind].toLowerCase()} (${i.tracks.map((t) => song.tracks[t].name.trim()).join(', ')}) : ${i.onsets.length} notes`)
-    .join(' · ');
+  $('trackSummary').textContent = `${song.tracks.length} pistes → ${ensemble.instruments.length} instruments`;
 }
 
 /** Charge (en arrière-plan) les échantillons des instruments utilisés. */

@@ -175,3 +175,19 @@ body.busy #panel select {
   pointer-events: none;
   opacity: 0.5;
 }
+/* Liste des pistes repliée par défaut : un clic sur le résumé la déplie. */
+#trackBox {
+  margin: 4px 0 8px;
+}
+#trackBox summary {
+  cursor: pointer;
+  color: #8b93b0;
+  padding: 4px 0;
+  user-select: none;
+}
+#trackBox summary:hover {
+  color: inherit;
+}
+#trackBox[open] summary {
+  margin-bottom: 4px;
+}
