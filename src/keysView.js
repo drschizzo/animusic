@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { keyDepth, keyHammerAngle, tineVibration, sustainPedal } from './keys.js';
 import { mat } from './materials.js';
 import { rod, roundedBox, Piston, V } from './parts.js';
+import { attachRow } from './ballRowView.js';
 
 const KEY_TOP = 0.92; // hauteur du dessus des touches blanches
 const WHITE_LEN = 0.62;
@@ -128,10 +129,12 @@ export class KeysView {
     this.linkage = new Piston(g, { radius: 0.014, body: 0.5, bodyMat: dark });
     this._a = new THREE.Vector3();
     this._b = new THREE.Vector3();
+    attachRow(this, model, trackColors, g);
   }
 
   update(t) {
     const m = this.model;
+    this.rowView?.update(t);
     let glow = 0;
     for (const v of this.keyViews) {
       if (!v.tine) continue;

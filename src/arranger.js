@@ -299,31 +299,32 @@ const leadOf = (model, fallback) => (model.row ? Math.max(fallback, model.row.be
  * Place d'un instrument joué par une rangée de billes : l'estrade doit couvrir la rampe
  * des buses, en avant de l'instrument (l'estrade est centrée, d'où le facteur 2).
  */
-const rowSeat = (model) => (model.row ? { seat: { depth: 2 * (model.row.extent.maxZ + 0.3) } } : {});
+const rowSeat = (model, kind) =>
+  model.row ? { seat: { depth: Math.max(SEATS[kind].depth, 2 * (model.row.extent.maxZ + 0.3)), height: Math.max(SEATS[kind].height, model.row.extent.top + 0.1) } } : {};
 
 const FACTORIES = {
   bass: (notes, ctx) => {
     const model = buildBassStrings(notes, { player: ctx.style === 'balls' ? 'balls' : 'picks' });
-    return { model, focusY: 1.6, ...rowSeat(model), busy: spansOf(notes, leadOf(model, 0.3), 1), start: model.onsets[0] - leadOf(model, 0.3), end: lastEnd(notes) + 1 };
+    return { model, focusY: 1.6, ...rowSeat(model, 'bass'), busy: spansOf(notes, leadOf(model, 0.3), 1), start: model.onsets[0] - leadOf(model, 0.3), end: lastEnd(notes) + 1 };
   },
   plucked: (notes, ctx) => {
     // Guitare, shamisen, harpe : cordes plus courtes, autant de médiators que d'accords serrés.
     const carriers = clamp(Math.ceil(trackStats(notes).polyphony) + 1, 2, 4);
     const model = buildBassStrings(notes, { lenLow: 2.1, lenHigh: 0.9, spacing: 0.24, maxWidth: 4.2, bottom: 0.55, pickY: 0.9, carriers, player: ctx.style === 'balls' ? 'balls' : 'picks' });
     model.style = 'plucked';
-    return { model, focusY: 1.3, ...rowSeat(model), busy: spansOf(notes, leadOf(model, 0.3), 1), start: model.onsets[0] - leadOf(model, 0.3), end: lastEnd(notes) + 1 };
+    return { model, focusY: 1.3, ...rowSeat(model, 'plucked'), busy: spansOf(notes, leadOf(model, 0.3), 1), start: model.onsets[0] - leadOf(model, 0.3), end: lastEnd(notes) + 1 };
   },
-  pads: (notes) => {
-    const model = buildPipes(notes);
+  pads: (notes, ctx) => {
+    const model = buildPipes(notes, { player: ctx.style === 'balls' ? 'balls' : 'valves' });
     const o = model.options;
-    return { model, focusY: 1.6, busy: spansOf(notes, o.anticipation, o.release), start: model.onsets[0] - o.anticipation, end: lastEnd(notes) + o.release };
+    return { model, focusY: 1.6, ...rowSeat(model, 'pads'), busy: spansOf(notes, leadOf(model, o.anticipation), o.release), start: model.onsets[0] - leadOf(model, o.anticipation), end: lastEnd(notes) + o.release + (model.row ? 1 : 0) };
   },
   bells: (notes, ctx) => {
     const model = buildBells(notes, { player: ctx.style === 'balls' ? 'balls' : 'hammers' });
     const o = model.options;
     return {
       model,
-      ...rowSeat(model),
+      ...rowSeat(model, 'bells'),
       focusY: 2.3,
       camera: { distScale: 1.5, minHeight: 0.6, allowLow: false },
       busy: spansOf(notes, leadOf(model, 0.6), 3),
@@ -344,38 +345,41 @@ const FACTORIES = {
     };
   },
   laser: (notes, ctx) => {
-    const model = buildLaserHarp(notes, { controls: ctx.controlsFor(['bends', 'mod']) });
+    const model = buildLaserHarp(notes, { controls: ctx.controlsFor(['bends', 'mod']), player: ctx.style === 'balls' ? 'balls' : 'iris' });
     const o = model.options;
     return {
       model,
+      ...rowSeat(model, 'laser'),
       focusY: 1.9,
       camera: { distScale: 1.5, minHeight: 0.6, allowLow: false },
-      busy: spansOf(notes, o.anticipation, o.release),
-      start: model.onsets[0] - o.anticipation,
-      end: lastEnd(notes) + o.release,
+      busy: spansOf(notes, leadOf(model, o.anticipation), o.release),
+      start: model.onsets[0] - leadOf(model, o.anticipation),
+      end: lastEnd(notes) + o.release + (model.row ? 1 : 0),
     };
   },
   winds: (notes, ctx) => {
-    const model = buildWinds(notes, { style: windStyle(ctx.program), controls: ctx.controlsFor(['mod']) });
+    const model = buildWinds(notes, { style: windStyle(ctx.program), controls: ctx.controlsFor(['mod']), player: ctx.style === 'balls' ? 'balls' : 'valves' });
     const o = model.options;
     return {
       model,
+      ...rowSeat(model, 'winds'),
       focusY: 1.2,
       camera: { distScale: 1.4, minHeight: 0.7, allowLow: false },
-      busy: spansOf(notes, o.anticipation, o.release),
-      start: model.onsets[0] - o.anticipation,
-      end: lastEnd(notes) + o.release,
+      busy: spansOf(notes, leadOf(model, o.anticipation), o.release),
+      start: model.onsets[0] - leadOf(model, o.anticipation),
+      end: lastEnd(notes) + o.release + (model.row ? 1 : 0),
     };
   },
   keys: (notes, ctx) => {
     const sustain = mergeEvents(ctx.tracks.map((tr) => ctx.controls[tr]?.sustain));
-    const model = buildKeyboard(notes, { sustain });
+    const model = buildKeyboard(notes, ctx.style === 'balls' ? { sustain, player: 'balls', press: 0.04 } : { sustain });
     return {
       model,
+      ...rowSeat(model, 'keys'),
       focusY: 1.1,
       camera: { distScale: 1.2, minHeight: 2.2, allowLow: false },
-      busy: spansOf(notes, 0.4, 1),
-      start: model.onsets[0] - model.options.strikeTime * 2,
+      busy: spansOf(notes, leadOf(model, 0.4), 1),
+      start: model.onsets[0] - leadOf(model, model.options.strikeTime * 2),
       end: lastEnd(notes) + 1,
     };
   },

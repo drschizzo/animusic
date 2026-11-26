@@ -8,6 +8,7 @@
 
 import { sustainState } from './pipes.js';
 import { controlAt } from './util.js';
+import { buildCupRow } from './ballRow.js';
 
 export const LASER_DEFAULTS = {
   spacing: 0.3,
@@ -18,6 +19,9 @@ export const LASER_DEFAULTS = {
   attack: 0.035,
   release: 0.16,
   anticipation: 0.22,
+  player: 'iris', // 'iris' = l'iris s'ouvre seul, 'balls' = une bille dans une coupelle tient la note
+  cupY: 1.0,
+  cupAhead: 0.75, // distance des coupelles devant l'émetteur le plus avancé
 };
 
 export function buildLaserHarp(notes, options = {}) {
@@ -37,7 +41,7 @@ export function buildLaserHarp(notes, options = {}) {
     e.notes.push({ start: note.time, end: note.time + duration, velocity: note.velocity, track: note.track });
     e.maxDur = Math.max(e.maxDur, duration);
   }
-  return {
+  const model = {
     options: o,
     origin: o.origin ?? [0, 0, 0],
     yaw: o.yaw ?? 0,
@@ -49,6 +53,12 @@ export function buildLaserHarp(notes, options = {}) {
     emitters,
     onsets: sorted.map((n) => n.time),
   };
+  if (o.player === 'balls') {
+    o.anticipation = 0.03;
+    const ahead = Math.max(...emitters.map((e) => e.position[2]));
+    model.row = buildCupRow(emitters.map((e) => ({ x: e.position[0], notes: e.notes })), { y: o.cupY, z: ahead + o.cupAhead }, spacing);
+  }
+  return model;
 }
 
 /** État d'un émetteur : level (intensité du rayon), valve (ouverture de l'iris), track. */

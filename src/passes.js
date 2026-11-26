@@ -126,8 +126,74 @@ export function solvePass({ pivot, axis, y, rho, caught, restitution, barrel }) 
  * le tir n'est pas propre : rebond trop rasant, entrée de biais dans le cornet, lob qui
  * frôle la rampe des buses ou le bord de l'estrade.
  */
+/** Vrai si le point p (scène) survole de trop près l'un des encombrements. */
+function tooLow(p, obstacles) {
+  for (const g of obstacles) {
+    const ox = p[0] - g.center[0];
+    const oz = p[2] - g.center[1];
+    const gc = Math.cos(g.yaw);
+    const gs = Math.sin(g.yaw);
+    if (p[1] < g.top + 0.4 && Math.abs(gc * ox - gs * oz) < g.halfW + 0.3 && Math.abs(gs * ox + gc * oz) < g.halfD + 0.3) return true;
+  }
+  return false;
+}
+
+/**
+ * Station de passe vers une coupelle (rangées de notes tenues) : le lob y tombe à 45°
+ * environ, la bille y reste le temps de la note, puis elle est éjectée vers son cornet
+ * comme une bille de la rampe. Pas de rebond : seule la durée du lob est à choisir.
+ */
+function cupPassStation(pivot, receiver, target, o, obstacles) {
+  const row = receiver.inst.model.row;
+  const f = receiver.frame;
+  const hit = f.toWorld(target.hit);
+  const ramp = row.loop[row.loop.length - 1];
+  const nozzle = target.mouth;
+  let best = null;
+  for (let T = 0.55; T <= 2.6; T += 0.05) {
+    let dir = unit(sub(hit, pivot));
+    let v0;
+    let mouth;
+    for (let it = 0; it < 4; it++) {
+      mouth = add(pivot, dir, o.barrel);
+      v0 = [(hit[0] - mouth[0]) / T, (hit[1] - mouth[1] + 0.5 * GRAVITY * T * T) / T, (hit[2] - mouth[2]) / T];
+      dir = unit(v0);
+    }
+    const vIn = [v0[0], v0[1] - GRAVITY * T, v0[2]];
+    const slope = Math.atan2(Math.hypot(vIn[0], vIn[2]), -vIn[1]); // angle d'arrivée, depuis la verticale
+    if (slope < 0.6 || slope > 1.0 || f.toLocal(add(hit, vIn, -0.1))[2] * row.sign < f.toLocal(hit)[2] * row.sign) continue;
+    let ok = true;
+    const p = [0, 0, 0];
+    for (let s = 0.02; s < T && ok; s += 0.01) {
+      p[0] = hit[0] - vIn[0] * s;
+      p[1] = hit[1] - vIn[1] * s - 0.5 * GRAVITY * s * s;
+      p[2] = hit[2] - vIn[2] * s;
+      const q = f.toLocal(p);
+      if (tooLow(p, obstacles) || Math.hypot(q[1] - ramp[1], q[2] - ramp[2]) < 0.26 || Math.hypot(q[1] - nozzle[1], q[2] - nozzle[2]) < 0.19) ok = false;
+    }
+    if (ok && (!best || Math.abs(slope - 0.78) < Math.abs(best.slope - 0.78))) best = { T, v0, mouth, vIn, dir, slope };
+  }
+  if (!best) return o.debug?.('coupelle hors d\'atteinte') ?? null;
+  const strike = {
+    hit,
+    normal: [0, 1, 0],
+    vIn: best.vIn,
+    v0: best.v0,
+    mouth: best.mouth,
+    vOut: f.dirToWorld(target.vOut),
+    catch: f.toWorld(target.catch),
+    vCatch: f.dirToWorld(target.vCatch),
+    flightIn: best.T,
+    flightOut: target.flightOut,
+  };
+  const station = buildStation(strike, { ballRadius: row.ballRadius, feed: [pivot, best.mouth], drain: target.drain.points.map(f.toWorld), hide: o.hide, hideOut: target.hideOut });
+  Object.assign(station, { cup: true, cupTravel: target.cupTravel, out0: f.toWorld(target.out0), dir: best.dir });
+  return station;
+}
+
 function passStation(pivot, receiver, target, o, obstacles = []) {
   const row = receiver.inst.model.row;
+  if (row.kind === 'cups') return cupPassStation(pivot, receiver, target, o, obstacles);
   const f = receiver.frame;
   const local = target.hit; // centre de la bille du tir habituel : sur l'axe, à rho devant
   const rho = local[2];
@@ -155,13 +221,7 @@ function passStation(pivot, receiver, target, o, obstacles = []) {
     p[2] = strike.hit[2] - strike.vIn[2] * s;
     const q = f.toLocal(p);
     // Le lob survole franchement les instruments qu'il croise.
-    for (const g of obstacles) {
-      const ox = p[0] - g.center[0];
-      const oz = p[2] - g.center[1];
-      const gc = Math.cos(g.yaw);
-      const gs = Math.sin(g.yaw);
-      if (p[1] < g.top + 0.4 && Math.abs(gc * ox - gs * oz) < g.halfW + 0.3 && Math.abs(gs * ox + gc * oz) < g.halfD + 0.3) return o.debug?.('survol') ?? null;
-    }
+    if (tooLow(p, obstacles)) return o.debug?.('survol') ?? null;
     if (q[2] < 0) return o.debug?.('derrière') ?? null;
     if (q[2] < ramp[2] + 0.7 && (Math.hypot(q[1] - ramp[1], q[2] - ramp[2]) < 0.26 || Math.hypot(q[1] - nozzle[1], q[2] - nozzle[2]) < 0.19)) return o.debug?.('rampe') ?? null;
     if (q[2] < row.extent.maxZ + 0.9 && q[1] < 0.5) return o.debug?.(`bord ${q[2].toFixed(2)} ${q[1].toFixed(2)}`) ?? null;
@@ -199,7 +259,8 @@ export function planPasses(ensemble, options = {}) {
 
   inst.forEach((recv, k) => {
     const row = recv.model.row;
-    if (!row) return;
+    // Les touches d'un clavier, plates, renverraient la bille de travers : il ne reçoit pas de passes.
+    if (!row || row.kind === 'keys') return;
     const frame = frameOf(recv);
     const receiver = { inst: recv, frame };
     const mid = (row.stations[0].hit[0] + row.stations[row.stations.length - 1].hit[0]) / 2;
@@ -281,16 +342,16 @@ export function planPasses(ensemble, options = {}) {
     const p = [0, 0, 0];
     const q = [0, 0, 0];
     const ch = best.hub ? inst[hub].model : null;
-    const clear = (station, time) => {
+    const clear = (station, time, hold) => {
       const need = 2 * row.ballRadius * o.clearance;
       const others = [
         ...row.shots.filter((s) => Math.abs(s.time - time) < 3 && s.time !== time).map((s) => ({ ...s, local: true })),
         ...cannon.shots.filter((s) => Math.abs(s.time - time) < 3),
       ];
-      for (let dt = -station.before; dt < station.after; dt += 1 / 120) {
-        stationBall(station, dt, p);
+      for (let dt = -station.before; dt < station.after + hold; dt += 1 / 120) {
+        stationBall(station, dt, p, hold);
         for (const other of others) {
-          if (!stationBall(other.station, time + dt - other.time, q)) continue;
+          if (!stationBall(other.station, time + dt - other.time, q, other.hold ?? 0)) continue;
           const w = other.local ? frame.toWorld(q) : q;
           if (Math.hypot(p[0] - w[0], p[1] - w[1], p[2] - w[2]) < need) return false;
         }
@@ -314,19 +375,21 @@ export function planPasses(ensemble, options = {}) {
       // Les deux instruments sont en place du tir à la capture.
       const live = (i, t) => deployAt(song, i, t) >= 1;
       if (!live(best.j, launch - o.aimWindow) || !live(k, launch - 0.2) || !live(k, shot.time + 0.5)) continue;
-      if (!clear(station, shot.time)) continue;
+      if (!clear(station, shot.time, shot.hold ?? 0)) continue;
       mount.launches.push({ time: launch, dir: station.dir, velocity: shot.velocity });
-      cannon.shots.push({ time: shot.time, track: shot.track, velocity: shot.velocity, station, index: shot.index });
-      // La buse habituelle ne tire pas cette note.
+      cannon.shots.push({ time: shot.time, track: shot.track, velocity: shot.velocity, station, index: shot.index, hold: shot.hold ?? 0 });
+      // La buse habituelle ne tire pas cette note. Une coupelle garde la frappe en mémoire
+      // (elle s'enfonce aussi sous une bille de passe), marquée pour que sa buse ne s'allume pas.
       row.shots.splice(row.shots.indexOf(shot), 1);
       const own = row.stations[shot.index].shots;
       const i = own.findIndex((h) => h.time === shot.time);
-      if (i >= 0) own.splice(i, 1);
+      if (i >= 0 && row.kind === 'cups') own[i].pass = true;
+      else if (i >= 0) own.splice(i, 1);
     }
     if (!cannon.shots.length) return;
     const used = cannon.shots.map((s) => s.station);
     cannon.before = Math.max(...used.map((s) => s.before));
-    cannon.after = Math.max(...used.map((s) => s.after));
+    cannon.after = Math.max(...cannon.shots.map((s) => s.station.after + s.hold));
     cannon.maxBalls = maxConcurrent(cannon.shots);
     cannons.push(cannon);
   });

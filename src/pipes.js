@@ -6,6 +6,7 @@
 // Coordonnées locales : x le long de la rangée, z vers le centre de la scène.
 
 import { upperBound, lerp } from './util.js';
+import { buildCupRow } from './ballRow.js';
 
 export const PIPE_DEFAULTS = {
   spacing: 0.42,
@@ -15,6 +16,9 @@ export const PIPE_DEFAULTS = {
   attack: 0.08,
   release: 0.45,
   anticipation: 0.18,
+  player: 'valves', // 'valves' = la valve s'ouvre seule, 'balls' = une bille dans une coupelle tient la note
+  cupY: 1.0, // hauteur des billes posées dans les coupelles
+  cupZ: 0.85, // … et leur distance devant les tubes
 };
 
 export function buildPipes(notes, options = {}) {
@@ -34,7 +38,7 @@ export function buildPipes(notes, options = {}) {
     p.notes.push({ start: note.time, end: note.time + duration, velocity: note.velocity, track: note.track });
     p.maxDur = Math.max(p.maxDur, duration);
   }
-  return {
+  const model = {
     options: o,
     origin: o.origin ?? [0, 0, 0],
     yaw: o.yaw ?? 0,
@@ -43,6 +47,12 @@ export function buildPipes(notes, options = {}) {
     pipes,
     onsets: sorted.map((n) => n.time),
   };
+  if (o.player === 'balls') {
+    // La valve ne s'ouvre plus d'avance : c'est le poids de la bille qui l'ouvre.
+    o.anticipation = 0.03;
+    model.row = buildCupRow(pipes, { y: o.cupY, z: o.cupZ }, spacing);
+  }
+  return model;
 }
 
 /**

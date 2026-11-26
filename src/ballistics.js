@@ -154,17 +154,39 @@ export function buildStation(strike, { ballRadius, feed, drain, hide = 0.3, hide
 }
 
 /**
+ * Coupelle à poussoir (stations `cup`) : décalage vertical de la coupelle, et de la bille
+ * qu'elle porte, dt secondes après l'arrivée d'une bille tenue `hold` secondes. Le poids
+ * de la bille l'enfonce (rebond amorti) ; à la fin de la note elle remonte d'un coup sec
+ * et éjecte la bille.
+ */
+export function cupLift(station, dt, hold) {
+  const D = station.cupTravel;
+  if (dt < 0) return 0;
+  if (dt >= hold) return 0.4 * D * Math.exp(-(dt - hold) * 25);
+  const settle = -D * (1 - Math.exp(-30 * dt) * Math.cos(38 * dt));
+  const w = Math.min(0.05, hold / 2);
+  const x = (dt - (hold - w)) / w;
+  const pop = x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
+  return settle * (1 - pop) + 0.4 * D * pop;
+}
+
+/**
  * Centre de la bille d'une station, dt secondes après (ou avant, dt < 0) sa frappe.
+ * @param hold durée pendant laquelle la bille reste posée sur sa cible (coupelles : la durée de la note)
  * @returns false hors de sa vie (bille cachée dans le tuyau ou le cornet)
  */
-export function stationBall(station, dt, out = [0, 0, 0]) {
-  if (dt < -station.before || dt >= station.after) return false;
+export function stationBall(station, dt, out = [0, 0, 0], hold = 0) {
+  if (dt < -station.before || dt >= hold + station.after) return false;
   if (dt < -station.flightIn) {
     // Dans le tuyau : vitesse de sortie constante, le long de son axe.
     station.feed.pointAt(station.feed.length - (-station.flightIn - dt) * station.speedIn, out);
   } else if (dt < 0) ballistic(station.mouth, station.v0, dt + station.flightIn, out);
-  else if (dt < station.flightOut) ballistic(station.hit, station.vOut, dt, out);
-  else station.drain.pointAt((dt - station.flightOut) * station.speedOut, out);
+  else if (dt < hold) {
+    out[0] = station.hit[0];
+    out[1] = station.hit[1] + cupLift(station, dt, hold);
+    out[2] = station.hit[2];
+  } else if (dt - hold < station.flightOut) ballistic(station.out0 ?? station.hit, station.vOut, dt - hold, out);
+  else station.drain.pointAt((dt - hold - station.flightOut) * station.speedOut, out);
   return true;
 }
 
@@ -205,7 +227,7 @@ export function assignShots(station, hits) {
 /** Nombre maximal de billes en vie en même temps, pour des listes de { time, station }. */
 export function maxConcurrent(shots) {
   const events = [];
-  for (const s of shots) events.push([s.time - s.station.before, 1], [s.time + s.station.after, -1]);
+  for (const s of shots) events.push([s.time - s.station.before, 1], [s.time + (s.hold ?? 0) + s.station.after, -1]);
   events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   let alive = 0;
   let max = 0;

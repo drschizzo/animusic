@@ -12,6 +12,7 @@
 
 import { lerp, controlAt } from './util.js';
 import { sustainState } from './pipes.js';
+import { buildCupRow } from './ballRow.js';
 
 export const WIND_DEFAULTS = {
   spacing: 0.34,
@@ -21,6 +22,10 @@ export const WIND_DEFAULTS = {
   attack: 0.05,
   release: 0.16,
   anticipation: 0.15,
+  player: 'valves', // 'valves' = la soupape s'ouvre seule, 'balls' = une bille dans une coupelle tient la note
+  cupY: 1.0,
+  cupFront: 0.65, // flûtes : coupelles devant les tuyaux
+  cupBack: -0.95, // cors et anches : derrière, du côté des pistons (le pavillon occupe l'avant)
 };
 
 /** Style visuel d'après le programme General MIDI de la piste principale. */
@@ -47,7 +52,7 @@ export function buildWinds(notes, options = {}) {
     p.notes.push({ start: note.time, end: note.time + duration, velocity: note.velocity, track: note.track });
     p.maxDur = Math.max(p.maxDur, duration);
   }
-  return {
+  const model = {
     options: o,
     origin: o.origin ?? [0, 0, 0],
     yaw: o.yaw ?? 0,
@@ -58,6 +63,12 @@ export function buildWinds(notes, options = {}) {
     controls: o.controls ?? {},
     onsets: sorted.map((x) => x.time),
   };
+  if (o.player === 'balls') {
+    o.anticipation = 0.03;
+    const flute = model.style === 'flute';
+    model.row = buildCupRow(pipes, { y: o.cupY, z: flute ? o.cupFront : o.cupBack }, spacing, { sign: flute ? 1 : -1 });
+  }
+  return model;
 }
 
 /** État d'un tuyau : souffle (level 0..1), soupape (valve 0..1), piste, vibrato (modulation). */

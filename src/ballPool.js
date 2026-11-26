@@ -63,18 +63,19 @@ export class BallPool {
       const shot = shots[i];
       const st = shot.station;
       const dt = t - shot.time;
-      if (!stationBall(st, dt, this._p)) continue;
+      const hold = shot.hold ?? 0;
+      if (!stationBall(st, dt, this._p, hold)) continue;
       const color = trackColors[shot.track];
       // Vitesse exacte : écart de trajectoire sur 1/120 s (nulle à la naissance).
-      if (stationBall(st, dt - VELOCITY_STEP, this._q)) for (let c = 0; c < 3; c++) this._v[c] = (this._p[c] - this._q[c]) / VELOCITY_STEP;
+      if (stationBall(st, dt - VELOCITY_STEP, this._q, hold)) for (let c = 0; c < 3; c++) this._v[c] = (this._p[c] - this._q[c]) / VELOCITY_STEP;
       else this._v[0] = this._v[1] = this._v[2] = 0;
       this.add(this._p, this._v, color);
       // Pas de fantôme dans les tuyaux : il brillerait à travers le métal.
-      if (dt >= st.flightOut) continue;
+      if (dt >= hold + st.flightOut || (dt >= 0 && dt < hold)) continue;
       for (let j = 1; j <= TRAIL; j++) {
         const dj = dt - j * this.trailStep;
         if (dj < -st.flightIn) break;
-        stationBall(st, dj, this._q);
+        stationBall(st, dj, this._q, hold);
         this.ghost(this._q, color, j);
       }
     }

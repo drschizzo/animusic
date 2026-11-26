@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { windState } from './winds.js';
 import { mat, fx } from './materials.js';
 import { plinth, rod, lathe, V, lamp } from './parts.js';
+import { attachRow } from './ballRowView.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -149,6 +150,7 @@ export class WindsView {
     this.lamp.position.set(0, 1.4, 0.9);
     g.add(this.lamp);
     this._c = new THREE.Color();
+    attachRow(this, model, trackColors, g);
   }
 
   /** Position et orientation (le placement est décidé par l'arrangeur). */
@@ -159,6 +161,7 @@ export class WindsView {
 
   update(t) {
     const m = this.model;
+    this.rowView?.update(t);
     let energy = 0;
     let best = 0;
     for (const v of this.pipeViews) {

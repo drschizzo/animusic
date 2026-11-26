@@ -7,6 +7,7 @@
 // (le bord avant des touches est côté +z).
 
 import { upperBound, smoothstep, lerp, strikeLift, sustainedEnd, pedalAt } from './util.js';
+import { buildKeyRow } from './ballRow.js';
 
 export const KEY_DEFAULTS = {
   whiteWidth: 0.118,
@@ -21,6 +22,15 @@ export const KEY_DEFAULTS = {
   tineHigh: 0.45,
   damp: 2.2, // amortissement de la lame pendant la note
   release: 9, // amortissement après la fin de la note
+  player: 'self', // 'self' = les touches s'enfoncent seules, 'balls' = une bille tombe sur chaque touche jouée
+  keyTop: 0.92, // hauteur du dessus des touches blanches
+  blackTop: 0.0425, // surépaisseur des touches noires
+  whiteHit: 0.25, // profondeur (z) du point de frappe sur une touche blanche (partie avant, dégagée)
+  blackHit: 0.09, // … et sur une touche noire
+  rampAbove: 1.42, // hauteur de la rampe des buses des blanches au-dessus des touches
+  blackRampAbove: 1.15, // … et de celle des noires, plus basse : les buses de deux demi-tons voisins ne se touchent
+  // pas, et la bille d'une noire, qui tombe plus près des lames, passe sous les buses des blanches
+  rampZ: -0.28, // profondeur des rampes : devant les lames vibrantes
 };
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
@@ -65,7 +75,7 @@ export function buildKeyboard(notes, options = {}) {
       n.off = next ? Math.max(n.start + Math.min(o.minHold, (next.start - n.start) * 0.4), Math.min(n.end, next.start - o.press - o.releaseTime)) : n.end;
     });
   }
-  return {
+  const model = {
     options: o,
     origin: o.origin ?? [0, 0, 0],
     yaw: o.yaw ?? 0,
@@ -77,12 +87,26 @@ export function buildKeyboard(notes, options = {}) {
     played: keys.filter((k) => k.hits.length),
     onsets: sorted.map((n) => n.time),
   };
+  if (o.player === 'balls') {
+    const half = model.width / 2;
+    model.row = buildKeyRow(
+      [
+        { targets: model.played.filter((k) => !k.black), y: o.keyTop, z: o.whiteHit, axis: { y: o.keyTop + o.rampAbove, z: o.rampZ } },
+        { targets: model.played.filter((k) => k.black), y: o.keyTop + o.blackTop, z: o.blackHit, axis: { y: o.keyTop + o.blackRampAbove, z: o.rampZ } },
+      ],
+      keyWidth,
+      { span: [-half - 0.12, half + 0.12] },
+    );
+  }
+  return model;
 }
 
 /** Enfoncement d'une touche (0 = relevée, 1 = à fond) à l'instant t. */
 export function keyDepth(model, key, t) {
   const o = model.options;
   const notes = key.notes;
+  // Avec les billes, la touche ne s'enfonce qu'à l'impact : tout le geste est retardé d'autant.
+  if (model.row) t -= o.press;
   let depth = 0;
   const last = upperBound(notes, t + o.press, (n) => n.start) - 1;
   for (let i = last; i >= 0 && i >= last - 1; i--) {

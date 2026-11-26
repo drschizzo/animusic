@@ -24,8 +24,8 @@ change à chaque section et un réalisateur filme le tout comme un concert.
   Une piste qu'on n'entend pas (volume quasi nul, ou doublure couverte par une piste plus forte
   d'au moins 10 dB, comme des cordes lentes sous un piano) passe en **Son seul** : jouée, sans instrument à l'écran.
   Plusieurs pistes peuvent partager le même instrument.
-- **Style** : *Tout en billes* (batterie, carillon, basse et cordes pincées sont joués par des billes crachées par
-  des tuyaux ; les autres instruments suivront) ou *Bras et mécanismes* (bras robotisés, comme avant).
+- **Style** : *Tout en billes* (tous les instruments sont joués par des billes crachées par des tuyaux, sauf les
+  cordes frottées, qui gardent leurs archets) ou *Bras et mécanismes* (bras robotisés, comme avant).
 - **Caméra** : *Réalisateur* (plans automatiques), *Orbite*, ou *Libre* (souris). Toucher la vue passe en libre.
 - **Barre de lecture** pour naviguer dans le morceau ; **Retard image** pour corriger une latence audio mal
   annoncée (Bluetooth) ; **Qualité** *Auto* part de *Haute* (reflets du sol, ombres portées, lumière indirecte, occlusion ambiante, flou de mouvement, profondeur de champ, faisceaux dans la brume, halo) et descend d'un cran
@@ -68,10 +68,17 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   collecteur porte un cornet sous chacune, et les deux sont reliés par un coude : un seul circuit. La bille frappe
   la face avant du tube (ou la corde), rebondit vers le public et tombe dans son cornet. Les trajectoires sont
   dans des plans parallèles : les billes de deux cibles voisines ne peuvent pas se croiser.
+- **Clavier à billes** : la bille tombe sur la touche, qui s'enfonce à l'impact et actionne son marteau ; elle
+  rebondit vers l'avant dans un cornet. Blanches et noires sont frappées à des profondeurs différentes (deux rangées
+  de cornets), mais toutes les buses sortent d'une même rampe, chacune orientée pour cela.
+- **Notes tenues à billes** (orgue, vents, harpe laser) : une bille ne tient pas un son, alors elle tombe dans une
+  **coupelle à poussoir** ; son poids ouvre la valve, la soupape ou l'iris tant qu'elle y repose, puis le poussoir
+  remonte d'un coup sec et l'éjecte vers un cornet à la fin de la note.
 - **Échanges de billes** (`src/passes.js`) : par moments (le début d'une section sur deux), un **canon de passe**
   dressé derrière un instrument tire la bille d'une note de l'instrument situé derrière lui, d'un long lob ; à
   défaut de voisin bien placé, c'est le canon central de la tourelle du marimba qui tire, à travers toute la scène.
-  Les billes de passe laissent une traînée lumineuse, pour se lire de loin. Le tube
+  Les billes de passe laissent une traînée lumineuse, pour se lire de loin. Une passe peut aussi tomber dans une
+  coupelle (la batterie tire vers l'orgue, la tourelle vers les vents ou la harpe laser). Le tube
   ou la corde visés étant cylindriques, le point d'impact est choisi (trois inconnues, résolues par Newton) pour que
   le rebond retombe dans le cornet habituel de la cible. Une passe remplace le tir de la buse : une note, une bille.
 - **Basse** : des chariots glissent devant la corde suivante pendant que le médiator est au repos, puis il traverse

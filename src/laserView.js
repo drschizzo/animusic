@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { laserState, laserExpression } from './laser.js';
 import { mat, fx } from './materials.js';
 import { rod, plinth, lathe, V, lamp } from './parts.js';
+import { attachRow } from './ballRowView.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -72,6 +73,7 @@ export class LaserView {
     this.lamp = lamp(0xffffff, 0, 14, 1.6);
     this.lamp.position.copy(focus);
     g.add(this.halo, this.sky, this.lamp);
+    attachRow(this, model, trackColors, g);
 
     // Rayon subdivisé sur sa longueur : il se courbe avec le pitch bend et ondule avec la modulation.
     const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 32, true);
@@ -142,6 +144,7 @@ export class LaserView {
 
   update(t) {
     const m = this.model;
+    this.rowView?.update(t);
     let energy = 0;
     let best = 0;
     this._c.setRGB(0, 0, 0);

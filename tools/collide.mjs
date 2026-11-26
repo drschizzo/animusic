@@ -203,7 +203,7 @@ function check(name, song, style) {
         const e = upperBound(source.shots, t + source.before, (x) => x.time);
         for (let i = s; i < e; i++) {
           const shot = source.shots[i];
-          if (!stationBall(shot.station, t - shot.time, tmp)) continue;
+          if (!stationBall(shot.station, t - shot.time, tmp, shot.hold ?? 0)) continue;
           lifted.set(...tmp).applyMatrix4(source.matrix);
           active.push([lifted.x, lifted.y, lifted.z, shot.station.ballRadius, source.name]);
         }
