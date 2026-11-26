@@ -36,6 +36,7 @@ npm run dev        # http://localhost:5173
 npm test           # tests unitaires (chorégraphie, instruments, arrangeur, réalisateur)
 npm run build && npm run smoke   # build + test de fumée dans Chromium (comme en CI)
 npm run bench -- morceau.mid     # banc d'essai : arrangement, NaN, coût par image
+npm run collide -- morceau.mid   # interpénétrations : billes, instruments, encombrements
 ```
 
 ## Principe : l'animation à l'envers
@@ -76,11 +77,34 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   instruments (avant / après). Un instrument qui entre tard **sort du sol** (trappe lumineuse) avant sa première
   note, puis reste en place, comme un musicien d'orchestre qui se tait. Chaque section a sa palette (horizon, bordure,
   projecteurs) et son énergie ; une tête de projecteur sur deux suit l'instrument le plus actif.
-- **Réalisateur** : la liste des plans est calculée pour tout le morceau ; chaque segment cadre l'instrument le plus
-  actif par rapport à son niveau habituel (bonus à son entrée), en alternant plans larges, rapprochés,
-  contre-plongées, travellings, grues et **poursuites** d'une bille d'un rebond à l'autre. Un instrument qui entre
-  est cadré pendant qu'il sort du sol. Les fins de plan se calent sur les temps forts, avec une coupe franche une fois
-  sur deux ; en qualité haute, la **mise au point** suit le sujet (profondeur de champ).
+- **Réalisateur** : la liste des plans est calculée pour tout le morceau. Le sujet de chaque plan est la voix
+  qu'on écoute : la **mélodie** (ligne la plus aiguë et la plus chantante, peu d'accords), un instrument qui entre ou
+  qui répond, un break de batterie ; la basse et l'orgue ne sont filmés que seuls, et un instrument qui joue sans
+  avoir été montré depuis longtemps finit par l'être. Un plan dure une phrase et finit avec elle. Deux instruments
+  voisins qui se répondent sont cadrés ensemble (**dialogue**). Les plans alternent plans larges, rapprochés,
+  contre-plongées, travellings, grues et **poursuites** d'une bille d'un rebond à l'autre ; un instrument qui entre
+  est cadré pendant qu'il sort du sol. En qualité haute, la **mise au point** suit le sujet (profondeur de champ).
+- **Rien ne se traverse** : chaque instrument déclare son encombrement (`SEATS`, `src/arranger.js`) ; la caméra
+  survole un instrument dont elle approche (rampe douce) et choisit un angle d'où le sujet n'est pas masqué. Les
+  billes rebondissent assez haut pour franchir le bout de leur lame et le bord de la gouttière, tombent dans
+  l'entonnoir par son axe, roulent au centre du tube de verre et disparaissent dans un chargeur opaque.
+  `tools/collide.mjs` construit la scène hors navigateur et le vérifie (billes contre toutes les pièces solides,
+  surfaces de deux instruments qui se croisent, encombrement réel ≤ encombrement déclaré, pièces mobiles comprises).
+
+## Disposition : un amphithéâtre d'orchestre
+
+L'arc de lames et la tourelle des billes occupent le centre ; les autres instruments sont assis sur des **gradins**
+derrière, tournés vers le public, chaque gradin plus haut que le précédent pour qu'on voie chaque instrument
+par-dessus ceux de devant :
+
+- gradin 1 (estrade 0,45 m) : les voix mélodiques, la plus basse au centre (vents), cordes pincées à droite, cordes
+  frottées à gauche comme dans un orchestre, harpe laser ;
+- gradin 2 (1,35 m) : la **section rythmique** au centre, batterie puis basse ;
+- gradin 3 (2,25 m) : les instruments hauts du fond (orgue, carillon) ;
+- le clavier reste au premier plan, devant la tourelle.
+
+Chaque gradin commence juste derrière le précédent, d'après l'encombrement réel de ses instruments ; un instrument
+qui ne trouve pas de place passe au gradin suivant.
 
 ## Répartition automatique des pistes
 
@@ -175,7 +199,7 @@ l'image suit l'horloge de rendu audio.
 | `src/audioImport.js`, `src/transcribe.js`, `src/drumDetect.js`, `src/audioArrange.js` | Import d'un enregistrement : décodage, transcription, batterie, répartition |
 | `src/main.js` | Interface et boucle de rendu |
 
-Outils : `tools/make-samples.mjs` (génère les échantillons avec FluidSynth), `tools/bench.mjs`,
+Outils : `tools/make-samples.mjs` (génère les échantillons avec FluidSynth), `tools/bench.mjs`, `tools/collide.mjs`,
 `tools/smoke.mjs`, `tools/shot.mjs` (captures d'écran à un instant donné), `tools/stress-midi.mjs` (fichiers MIDI de stress), `tools/audio-bench.cjs` (précision de l'import
 audio : `node tools/audio-bench.cjs morceau.mp3` à côté de `morceau.mid`, ffmpeg requis).
 

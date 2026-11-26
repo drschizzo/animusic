@@ -73,3 +73,63 @@ const options = (plan) => plan.options;
 test('plan déterministe', () => {
   assert.deepEqual(planShots(ensemble), planShots(ensemble));
 });
+
+// Orchestre : une mélodie aiguë (vents), des accords tenus (orgue), une basse, une
+// batterie, et un clavier qui répond à la mélodie entre ses phrases.
+const orchestra = (() => {
+  const melody = [];
+  const answer = [];
+  for (let bar = 0; bar < 12; bar++) {
+    const t0 = bar * 4;
+    const phrase = bar % 2 === 0 ? melody : answer;
+    const base = bar % 2 === 0 ? 76 : 69;
+    for (let i = 0; i < 6; i++) phrase.push({ midi: base + [0, 2, 4, 7, 4, 2][i], time: t0 + i * 0.5, duration: 0.45, velocity: 0.85, track: bar % 2 === 0 ? 0 : 4 });
+  }
+  const pads = Array.from({ length: 12 }, (_, b) => [48, 55, 64].map((m) => ({ midi: m, time: b * 4, duration: 3.9, velocity: 0.5, track: 1 }))).flat();
+  const bass = Array.from({ length: 96 }, (_, i) => ({ midi: 36 + (i % 4 === 3 ? 7 : 0), time: i * 0.5, duration: 0.4, velocity: 0.7, track: 2 }));
+  const drums = Array.from({ length: 192 }, (_, i) => ({ midi: [36, 42, 38, 42][i % 4], time: i * 0.25, duration: 0.1, velocity: 0.7, track: 3 }));
+  return buildEnsemble({ winds: melody, pads, bass, drums, plucked: answer });
+})();
+
+test('le réalisateur suit la mélodie plutôt que la densité', () => {
+  const plan = planShots(orchestra);
+  const time = new Map();
+  for (const s of plan.shots) {
+    const kinds = [s.subject, s.partner].filter((k) => k >= 0).map((k) => orchestra.instruments[k].kind);
+    for (const kind of kinds) time.set(kind, (time.get(kind) ?? 0) + (s.end - s.start) / kinds.length);
+  }
+  const melodic = (time.get('winds') ?? 0) + (time.get('plucked') ?? 0);
+  // La batterie joue 4 fois plus de notes que les vents, mais on écoute la mélodie.
+  assert.ok(melodic > (time.get('drums') ?? 0) * 2, JSON.stringify([...time]));
+  assert.ok(melodic > (time.get('pads') ?? 0) * 2 && melodic > (time.get('bass') ?? 0) * 2, JSON.stringify([...time]));
+});
+
+test('deux instruments qui se répondent sont cadrés ensemble', () => {
+  const plan = planShots(orchestra, { duoChance: 1 });
+  const duos = plan.shots.filter((s) => s.type === 'duo');
+  assert.ok(duos.length > 0);
+  const kinds = (s) => [s.subject, s.partner].map((k) => orchestra.instruments[k].kind).sort().join('+');
+  assert.ok(duos.every((s) => kinds(s) === 'plucked+winds'), duos.map(kinds).join(', '));
+});
+
+test('la caméra ne traverse jamais un instrument', () => {
+  for (const ens of [orchestra, ensemble]) {
+    const plan = planShots(ens);
+    for (let t = ens.start; t < ens.end; t += 0.05) {
+      const { position: [x, y, z] } = cameraAt(plan, t);
+      for (const ins of ens.instruments) {
+        const f = ins.footprint;
+        if (!f) continue;
+        const dx = x - f.center[0];
+        const dz = z - f.center[1];
+        const lx = Math.cos(f.yaw) * dx - Math.sin(f.yaw) * dz;
+        const lz = Math.sin(f.yaw) * dx + Math.cos(f.yaw) * dz;
+        const inside = Math.abs(lx) < f.halfW && Math.abs(lz) < f.halfD && y < f.top + 0.3;
+        assert.ok(!inside, `caméra dans ${ins.kind} à t=${t.toFixed(2)} (${[x, y, z].map((v) => v.toFixed(2))})`);
+      }
+      // Ni dans la tourelle, ni sous l'arc de lames.
+      const r = Math.hypot(x, z);
+      assert.ok(r > 2.4 || y > 1.9, `caméra dans la tourelle à t=${t.toFixed(2)}`);
+    }
+  }
+});
