@@ -3,10 +3,12 @@
 ![Aperçu](docs/apercu.png)
 
 Génère une scène 3D animée dans l'esprit d'*Animusic* (Pipe Dream) à partir d'un fichier MIDI :
-des canons tirent des billes qui retombent pile sur des lames de marimba, des bras robotisés jouent la
-batterie, des médiators pincent des cordes de basse, des tubes d'orgue s'illuminent sur les notes tenues, des
+des canons tirent des billes qui retombent pile sur des lames de marimba, rebondissent de lame en lame puis
+reviennent à la tourelle par des tubes de verre, des bras robotisés jouent la batterie, des médiators pincent des
+cordes de basse, des archets frottent une cage de cordes, des tubes d'orgue s'illuminent sur les notes tenues, des
 marteaux font sonner un carillon de cloches tubulaires, une harpe laser tire un rayon par note vers un cristal
-et un clavier mécanique enfonce ses touches tout seul — le tout sur une scène éclairée comme un concert.
+et un clavier mécanique enfonce ses touches tout seul. Les instruments sortent du sol à leur entrée, l'éclairage
+change à chaque section et un réalisateur filme le tout comme un concert.
 
 **En ligne : https://drschizzo.github.io/animusic/** (déployé automatiquement par GitHub Actions).
 
@@ -16,7 +18,7 @@ et un clavier mécanique enfonce ses touches tout seul — le tout sur une scèn
 - **Ou un enregistrement** (`.mp3`, `.wav`, `.ogg`, `.flac`…) : il est transcrit dans le navigateur (rien n'est
   envoyé nulle part), puis la scène est animée **sur le vrai son** ; un sélecteur permet d'écouter la transcription.
 - Chaque piste reçoit automatiquement un instrument (**Billes**, **Basse**, **Orgue**, **Carillon**,
-  **Harpe laser**, **Clavier**, **Batterie**), modifiable dans la liste des pistes, ou **Masquée**.
+  **Harpe laser**, **Cordes frottées**, **Clavier**, **Batterie**), modifiable dans la liste des pistes, ou **Masquée**.
   Plusieurs pistes peuvent partager le même instrument.
 - **Caméra** : *Réalisateur* (plans automatiques), *Orbite*, ou *Libre* (souris). Toucher la vue passe en libre.
 - **Barre de lecture** pour naviguer dans le morceau ; **Retard image** pour corriger une latence audio mal
@@ -42,20 +44,43 @@ Comme dans MIDImotion (l'outil d'Animusic), rien n'est simulé : tout est **calc
 puis la scène est posée à l'instant `t` lu sur l'horloge audio.
 
 - **Billes** : tir à `t − T`, vitesse initiale `v0 = (cible − départ + ½·g·T²·ŷ) / T` → parabole exacte ;
-  le canon le plus proche et libre vise juste avant de tirer.
+  le canon le plus proche et libre vise juste avant de tirer (avec un léger recul puis un dépassement), et tremble
+  après le coup. Une bille qui vient de frapper une lame peut **rebondir sur la lame de la note suivante** de sa piste
+  (même calcul, vitesse plafonnée) au lieu qu'un canon tire. Après sa dernière lame, elle saute dans une **gouttière**
+  en arc, roule jusqu'à un entonnoir et revient à la tourelle par un **tube de verre** ; la couronne dentée de la
+  tourelle avance d'un cran à chaque tir.
 - **Batterie** : un bras à deux segments par élément, pose de frappe par cinématique inverse ; la baguette se lève
-  avant le coup (plus haut si le coup est fort et espacé) et touche la peau pile à l'instant de la note.
+  avant le coup (plus haut si le coup est fort et espacé) et touche la peau pile à l'instant de la note, puis fouette
+  (ressort amorti). La peau vibre selon ses premiers modes propres, orientés par le point de frappe.
 - **Basse** : des chariots glissent devant la corde suivante pendant que le médiator est au repos, puis il traverse
-  la corde à l'instant exact (aller, puis retour au coup suivant) ; la corde vibre avec un flou de mouvement.
-- **Orgue** : la valve s'ouvre avant la note, la colonne de lumière dure autant que la note.
+  la corde à l'instant exact (aller, puis retour au coup suivant) ; la corde vibre avec un flou de mouvement. Les
+  chariots se balancent en s'arrêtant ; poulies et chaînes porte-câbles les suivent.
+- **Cordes frottées** : cordes tendues sur le pourtour d'une cage circulaire (sommets en spirale) ; trois archets
+  tournent chacun sur leur anneau, se posent sur la corde juste avant la note et la frottent pendant toute sa durée,
+  en tirant et poussant alternativement (un archet tangent au cercle ne touche qu'une corde).
+- **Orgue** : la valve s'ouvre avant la note, la colonne de lumière dure autant que la note ; à l'arrière, une
+  soufflerie à volant pompe d'autant plus vite que l'orgue consomme d'air.
 - **Carillon** : un marteau par cloche recule puis frappe le haut du tube à l'instant de la note ; la cloche se
   balance ensuite comme un pendule amorti (somme des réponses aux frappes récentes, donc sans à-coup).
 - **Harpe laser** : l'iris de l'émetteur s'ouvre avant la note, le rayon dure autant qu'elle ; le cristal brille
   de la somme des rayons reçus et éclaire réellement la scène.
 - **Clavier** : la touche s'enfonce juste avant la note et remonte avant d'être rejouée ; derrière, un marteau
-  frappe une lame vibrante par touche jouée.
+  frappe une lame vibrante par touche jouée. La **pédale de sustain** (CC64) est visible : pédale au sol, tringle et
+  barre d'étouffoirs qui s'écarte des lames ; elles vibrent (et le son tient) jusqu'à ce qu'elle remonte.
+- **Expression** : le pitch bend courbe les rayons de la harpe laser, la modulation (CC1) les fait onduler et fait
+  respirer la vibration des cordes frottées ; la vélocité dose le recul des canons et la hauteur des baguettes.
+- **Mouvements secondaires** (`springSum`, `src/util.js`) : chaque geste secondaire est une somme de réponses
+  d'oscillateurs amortis aux événements de la partition, nulle à l'instant de chaque impulsion : rien n'est simulé,
+  tout reste calculable à n'importe quel instant (saut dans la barre de lecture, export).
+- **Structure** (`src/sections.js`) : le morceau est découpé en sections par la nouveauté de l'activité des
+  instruments (avant / après). Chaque instrument est sur un élévateur : il **sort du sol** (trappe lumineuse) avant
+  sa première note et y redescend pendant ses longs silences. Chaque section a sa palette (horizon, bordure,
+  projecteurs) et son énergie ; une tête de projecteur sur deux suit l'instrument le plus actif.
 - **Réalisateur** : la liste des plans est calculée pour tout le morceau ; chaque segment cadre l'instrument le plus
-  actif par rapport à son niveau habituel (bonus à son entrée), en alternant plans larges, rapprochés, contre-plongées.
+  actif par rapport à son niveau habituel (bonus à son entrée), en alternant plans larges, rapprochés,
+  contre-plongées, travellings, grues et **poursuites** d'une bille d'un rebond à l'autre. Un instrument qui entre
+  est cadré pendant qu'il sort du sol. Les fins de plan se calent sur les temps forts, avec une coupe franche une fois
+  sur deux ; en qualité haute, la **mise au point** suit le sujet (profondeur de champ).
 
 ## Répartition automatique des pistes
 
@@ -66,7 +91,8 @@ Le programme General MIDI donne un indice, les statistiques des notes tranchent 
 | Batterie | canal de percussion |
 | Basse | basses (32-39), violoncelle / contrebasse monodiques, ligne grave monodique, ou voix nettement plus grave que les autres |
 | Carillon | célesta, glockenspiel, boîte à musique, vibraphone, cloches tubulaires, kalimba |
-| Harpe laser | soliste aux notes tenues : violon, cuivres, anches, flûtes, leads de synthé |
+| Cordes frottées | violon, alto, violoncelle, contrebasse, trémolo, violon folk joués tenu |
+| Harpe laser | soliste aux notes tenues : cuivres, anches, flûtes, leads de synthé |
 | Orgue | nappes, orgues et ensembles aux notes longues, accords tenus |
 | Clavier | pianos (0-7) |
 | Billes | tout le reste (marimba, xylophone, guitares, harpe…) ; sans cela, la piste de clavier la plus fournie |
@@ -126,12 +152,13 @@ l'image suit l'horloge de rendu audio.
 |---|---|
 | `src/midi.js` | Lecture MIDI (`@tonejs/midi`) → pistes / notes / programme ; morceau de démo |
 | `src/arranger.js` | Rôle de chaque piste (programme GM + statistiques + passe globale), construction et placement des instruments |
-| `src/choreography.js`, `src/drums.js`, `src/strings.js`, `src/pipes.js`, `src/bells.js`, `src/laser.js`, `src/keys.js` | **Cœurs purs, sans Three.js** : mouvements calculés de chaque instrument |
-| `src/director.js` | **Pur** : plans caméra et pose de la caméra à l'instant t |
+| `src/choreography.js`, `src/drums.js`, `src/strings.js`, `src/pipes.js`, `src/bells.js`, `src/laser.js`, `src/bowed.js`, `src/keys.js` | **Cœurs purs, sans Three.js** : mouvements calculés de chaque instrument |
+| `src/sections.js` | **Pur** : sections du morceau, déploiement des instruments, ambiance à l'instant t |
+| `src/director.js` | **Pur** : plans caméra et pose de la caméra (et mise au point) à l'instant t |
 | `src/*View.js` | Rendu Three.js de chaque instrument |
 | `src/scene.js` | Scène, qualité ; instancie la vue de chaque instrument |
 | `src/environment.js` | Décor : sol réfléchissant, éclairage, fond, projecteurs volumétriques, poussières |
-| `src/postfx.js` | Post-traitement : MSAA HDR, occlusion ambiante (GTAO), halo, objectif, ACES |
+| `src/postfx.js` | Post-traitement : MSAA HDR, occlusion ambiante (GTAO), profondeur de champ, halo, objectif, ACES |
 | `src/ssgi.js` | Tampon géométrique et lumière indirecte en espace écran (SSGI) |
 | `src/materials.js`, `src/parts.js` | Matériaux physiques, textures procédurales, pièces de construction partagées |
 | `src/audio.js` | Tone.js : échantillons GM, synthèse de secours, horloge de référence, capture pour la vidéo |
@@ -146,7 +173,7 @@ audio : `node tools/audio-bench.cjs morceau.mp3` à côté de `morceau.mid`, ffm
 ## Export vers Blender
 
 *Fichier → Importer → glTF 2.0* puis choisir le `.glb`. On y trouve tous les instruments (noms préfixés
-`billes_`, `batterie_`, `basse_`, `orgue_`, `carillon_`, `harpe_laser_`, `clavier_`, `bille_pisteN_k`) et la caméra animée `camera_realisateur`
+`billes_`, `batterie_`, `basse_`, `orgue_`, `carillon_`, `harpe_laser_`, `cordes_frottees_`, `clavier_`, `bille_pisteN_k`) et la caméra animée `camera_realisateur`
 (à définir comme caméra active). L'animation est échantillonnée à 30 img/s ; le décalage du son par rapport au
 début de l'animation est indiqué dans le message d'export et dans les propriétés personnalisées de la racine
 (`animusic.decalageAudioSecondes`). Non exportés : décor (sol, fond, projecteurs), lumières et effets lumineux
