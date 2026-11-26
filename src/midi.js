@@ -138,6 +138,19 @@ export function demoSong() {
     }
   }
 
+  // Violon (cordes frottées) : notes longues, de la 3e mesure à la fin, sur les notes de l'accord.
+  const violin = [];
+  for (let bar = 2; bar < 8; bar++) {
+    const chord = chords[bar % 4];
+    const line = bar % 2 ? [chord[2] + 24, chord[1] + 24] : [chord[1] + 24, chord[0] + 24];
+    line.forEach((m, k) => violin.push({ midi: m, time: (bar * 8 + k * 4) * beat, duration: 4 * beat * 0.9, velocity: k ? 0.6 : 0.75 }));
+  }
+  const violinMod = violin.flatMap((n) => [
+    { time: n.time, value: 0 },
+    { time: n.time + n.duration * 0.4, value: 0.5 },
+    { time: n.time + n.duration * 0.7, value: 1 },
+  ]);
+
   // Expression : pédale de sustain du piano (enfoncée sur chaque mesure, relevée juste
   // avant la suivante), coulés de pitch bend et vibrato (modulation) sur le contre-chant.
   const pianoSustain = [];
@@ -168,6 +181,7 @@ export function demoSong() {
       { name: 'Nappe', percussion: false, program: 19, notes: pad },
       { name: 'Carillon', percussion: false, program: 14, notes: bells },
       { name: 'Contre-chant', percussion: false, program: 73, notes: lead, bends: leadBends, mod: leadMod },
+      { name: 'Violon', percussion: false, program: 40, notes: violin, mod: violinMod },
       { name: 'Piano', percussion: false, program: 0, notes: keys, sustain: pianoSustain },
       { name: 'Batterie', percussion: true, program: 0, notes: drums },
     ],

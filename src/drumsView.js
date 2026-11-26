@@ -11,6 +11,47 @@ function linkGeometry(length, r0, r1) {
   return g;
 }
 
+/** Peau de fût : disque subdivisé en anneaux (pour pouvoir onduler). */
+function headGeometry(radius) {
+  return new THREE.RingGeometry(radius * 0.002, radius, 56, 10);
+}
+
+/**
+ * Peau qui vibre selon ses premiers modes propres (fondamental, puis modes à un et
+ * deux diamètres nodaux orientés par le point de frappe), excitée à chaque coup.
+ * Le déplacement et l'inclinaison des normales sont calculés dans le shader.
+ */
+function membrane(material, radius, angle) {
+  const u = (material.userData.membrane = { uAmp: { value: 0 }, uSince: { value: 10 }, uRadius: { value: radius }, uAngle: { value: angle } });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, u);
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uAmp; uniform float uSince; uniform float uRadius; uniform float uAngle;
+        float drumModes(vec2 p, float s) {
+          float r = clamp(length(p) / uRadius, 0.0, 1.0);
+          float th = atan(p.y, p.x) - uAngle;
+          float edge = 1.0 - r * r;
+          return edge * (cos(s * 95.0) + 1.3 * r * cos(th) * sin(s * 151.0) + 0.9 * r * r * cos(2.0 * th) * sin(s * 204.0));
+        }`,
+      )
+      .replace(
+        '#include <beginnormal_vertex>',
+        `#include <beginnormal_vertex>
+        float envN = uAmp * exp(-uSince * 7.0);
+        float eps = uRadius * 0.02;
+        float dx = (drumModes(position.xy + vec2(eps, 0.0), uSince) - drumModes(position.xy - vec2(eps, 0.0), uSince)) / (2.0 * eps);
+        float dy = (drumModes(position.xy + vec2(0.0, eps), uSince) - drumModes(position.xy - vec2(0.0, eps), uSince)) / (2.0 * eps);
+        objectNormal = normalize(objectNormal + vec3(dx, dy, 0.0) * envN * 5.0);`,
+      )
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed.z -= uAmp * exp(-uSince * 7.0) * drumModes(position.xy, uSince);');
+  };
+  material.customProgramCacheKey = () => 'drum-membrane';
+  return material;
+}
+
 /** Pied de cymbale ou de fût : tube chromé sur trépied. */
 function stand(group, x, z, height, chrome, dark) {
   group.add(rod(V(x, 0.02, z), V(x, height, z), 0.018, chrome, 10));
@@ -49,8 +90,8 @@ export class DrumKitView {
 
       if (p.kind === 'drum' || p.kind === 'kick') {
         const shell = new THREE.Mesh(new THREE.CylinderGeometry(p.radius, p.radius, p.depth, 56, 1, true), m.shell);
-        const headMat = mat.skin();
-        const head = new THREE.Mesh(new THREE.CircleGeometry(p.radius * 0.985, 56), headMat);
+        const headMat = membrane(mat.skin(), p.radius * 0.985, p.armDir ? Math.atan2(p.armDir[1], p.armDir[0]) : 0);
+        const head = new THREE.Mesh(headGeometry(p.radius * 0.985), headMat);
         const hoopGeo = new THREE.TorusGeometry(p.radius + 0.004, 0.016, 10, 56);
         const hoop = new THREE.Mesh(hoopGeo, m.chrome);
         const hoop2 = new THREE.Mesh(hoopGeo, m.chrome);
@@ -79,7 +120,7 @@ export class DrumKitView {
           head.rotation.y = Math.PI;
           hoop.position.z = -p.depth / 2;
           hoop2.position.z = p.depth / 2;
-          const front = new THREE.Mesh(new THREE.CircleGeometry(p.radius * 0.985, 56), headMat);
+          const front = new THREE.Mesh(headGeometry(p.radius * 0.985), headMat);
           front.position.z = p.depth / 2;
           // Évent de la peau avant, cerclé de lumière.
           const port = new THREE.Mesh(new THREE.CircleGeometry(p.radius * 0.26, 32), new THREE.MeshBasicMaterial({ color: 0x000000 }));
@@ -271,6 +312,12 @@ export class DrumKitView {
       if (v.headMat) {
         if (color) v.headMat.emissive.copy(color);
         v.headMat.emissiveIntensity = pulse * 1.3;
+        const mem = v.headMat.userData.membrane;
+        if (mem) {
+          const h = p.hits[Math.max(0, upperHit(p.hits, t) - 1)];
+          mem.uSince.value = Number.isFinite(since) ? since : 10;
+          mem.uAmp.value = h ? 0.08 * p.radius * h.velocity : 0;
+        }
         const squash = pulse > 0.001 ? 0.03 * pulse * Math.sin(since * 50) : 0;
         if (p.kind === 'kick') v.drum.scale.set(1 + squash, 1 + squash, 1);
         else v.drum.scale.set(1 + squash, 1, 1 + squash);
@@ -288,4 +335,16 @@ export class DrumKitView {
     }
     this.cables.commit();
   }
+}
+
+/** Nombre de frappes antérieures ou égales à t. */
+function upperHit(hits, t) {
+  let lo = 0;
+  let hi = hits.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (hits[mid].time <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }

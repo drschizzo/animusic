@@ -14,6 +14,7 @@ import { activeBallRange, ballPosition, ballScale, launcherPose, barPulse } from
 import { armAngles, hitPulse } from '../src/drums.js';
 import { hammerAngle, bellState } from '../src/bells.js';
 import { laserState } from '../src/laser.js';
+import { bowPose, bowedString } from '../src/bowed.js';
 import { keyDepth, keyHammerAngle, tineVibration } from '../src/keys.js';
 import { carrierPose, stringVibration } from '../src/strings.js';
 import { pipeState } from '../src/pipes.js';
@@ -42,6 +43,9 @@ function frame(ens, plan, t, song) {
       for (const p of m.pipes) check(Object.values(pipeState(m, p, t)));
     } else if (inst.kind === 'bells') {
       for (const b of m.bells) check(hammerAngle(m, b, t), bellState(m, b, t).angle, bellState(m, b, t).pulse);
+    } else if (inst.kind === 'bowed') {
+      for (const b of m.bows) check(Object.values(bowPose(m, b, t)));
+      for (const s of m.strings) check(Object.values(bowedString(m, s, t)));
     } else if (inst.kind === 'laser') {
       for (const e of m.emitters) check(Object.values(laserState(m, e, t)));
     } else if (inst.kind === 'keys') {
@@ -61,7 +65,7 @@ for (const file of process.argv.slice(2)) {
   const song = parseMidi(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), basename(file));
   const parseMs = performance.now() - t0;
 
-  const parts = { balls: [], bass: [], pads: [], drums: [], bells: [], laser: [], keys: [] };
+  const parts = { balls: [], bass: [], pads: [], drums: [], bells: [], laser: [], bowed: [], keys: [] };
   const assigned = assignRoles(song.tracks);
   const roles = song.tracks.map((tr, ti) => {
     tr.role = assigned[ti];
@@ -97,6 +101,7 @@ for (const file of process.argv.slice(2)) {
       : i.kind === 'bass' ? ` ${m.strings.length} cordes, largeur ${m.width.toFixed(1)} m`
       : i.kind === 'bells' ? ` ${m.bells.length} cloches, largeur ${m.width.toFixed(1)} m`
       : i.kind === 'laser' ? ` ${m.emitters.length} rayons, largeur ${m.width.toFixed(1)} m`
+      : i.kind === 'bowed' ? ` ${m.strings.length} cordes, ${m.bows.length} archets`
       : i.kind === 'keys' ? ` ${m.keys.length} touches, largeur ${m.width.toFixed(1)} m`
       : ` ${m.pipes.length} tubes, largeur ${m.width.toFixed(1)} m`;
     return `${i.kind}: ${i.onsets.length} notes,${extra}`;

@@ -7,6 +7,7 @@ import { PipesView } from './pipesView.js';
 import { BellsView } from './bellsView.js';
 import { LaserView } from './laserView.js';
 import { KeysView } from './keysView.js';
+import { BowedView } from './bowedView.js';
 import { Environment } from './environment.js';
 import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
@@ -21,7 +22,7 @@ const PIXEL_BUDGET = {
   low: { cap: 1, budget: 1920 * 1080 },
 };
 
-const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, keys: KeysView };
+const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, bowed: BowedView, keys: KeysView };
 
 /** Boîte englobante des pièces solides (sans effets lumineux ni maillages instanciés). */
 function solidBox(root) {

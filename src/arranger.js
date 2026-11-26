@@ -8,6 +8,7 @@ import { buildPipes } from './pipes.js';
 import { buildBells } from './bells.js';
 import { buildLaserHarp } from './laser.js';
 import { buildKeyboard } from './keys.js';
+import { buildBowed } from './bowed.js';
 import { mergeEvents } from './util.js';
 import { mergeSpans } from './sections.js';
 
@@ -17,6 +18,7 @@ export const ROLES = {
   pads: 'Orgue',
   bells: 'Carillon',
   laser: 'Harpe laser',
+  bowed: 'Cordes frottées',
   keys: 'Clavier',
   drums: 'Batterie',
   off: 'Masquée',
@@ -53,6 +55,8 @@ const BELL_PROGRAMS = (p) => (p >= 8 && p <= 11) || p === 14 || p === 98 || p ==
 // Violon, alto, cuivres, anches, flûtes, leads de synthé, cornemuse, violon folk, shehnai.
 const LEAD_PROGRAMS = (p) => p === 40 || p === 41 || (p >= 56 && p <= 87) || (p >= 109 && p <= 111);
 const KEYBOARD_PROGRAMS = (p) => p >= 0 && p <= 7;
+// Violon, alto, violoncelle, contrebasse, cordes en trémolo, violon folk.
+const BOWED_PROGRAMS = (p) => (p >= 40 && p <= 44) || p === 110;
 
 /**
  * Rôle par défaut d'une piste prise isolément : le programme General MIDI sert
@@ -68,6 +72,8 @@ export function classifyTrack(track) {
   if (PAD_PROGRAMS(p) && s.meanDuration > 0.4) return 'pads';
   if (BELL_PROGRAMS(p)) return 'bells';
   if (s.meanPitch < 50 && s.polyphony < 1.4) return 'bass';
+  // Cordes frottées jouées tenu (pas de pizzicato) : archets.
+  if (BOWED_PROGRAMS(p) && s.polyphony < 2.2 && s.meanDuration > 0.18) return 'bowed';
   // Ligne soliste tenue : un rayon par note.
   if (LEAD_PROGRAMS(p) && s.polyphony < 1.6 && s.meanDuration > 0.16) return 'laser';
   if (s.meanDuration > 0.9 || (s.polyphony >= 2.5 && s.meanDuration > 0.5)) return 'pads';
@@ -114,7 +120,7 @@ const facing = ([x, , z], audienceZ) => Math.atan2(-x, audienceZ - z);
 
 /**
  * Construit tous les instruments.
- * @param parts { balls, bass, pads, drums, bells, laser, keys } : notes {midi,time,duration,velocity,track} par rôle
+ * @param parts { balls, bass, pads, drums, bells, laser, bowed, keys } : notes {midi,time,duration,velocity,track} par rôle
  * @param controls contrôleurs expressifs par piste : [{ sustain, bends, mod }] (voir midi.js)
  * @returns { instruments: [{kind, model, onsets, focus:{center,radius}, start, end}], start, end, radius }
  */
@@ -186,15 +192,21 @@ export function buildEnsemble(parts, controls = []) {
     });
   }
 
-  // Carillon et harpe laser sur des estrades derrière l'arc de lames, filmés par-dessus.
-  const backAngle = (27 * Math.PI) / 180;
+  // Carillon, cordes frottées et harpe laser sur des estrades derrière l'arc de lames,
+  // répartis en éventail selon leur nombre, filmés par-dessus.
   const riser = 0.7;
-  const back = (angle) => {
-    const [x, , z] = side(angle, R + 3.1);
+  const backKinds = ['bells', 'bowed', 'laser'].filter((k) => parts[k]?.length);
+  const spread = backKinds.length === 3 ? 42 : 27;
+  const backAngleOf = (kind) => {
+    const i = backKinds.indexOf(kind);
+    return backKinds.length === 1 ? 0 : (((2 * i) / (backKinds.length - 1) - 1) * spread * Math.PI) / 180;
+  };
+  const back = (kind) => {
+    const [x, , z] = side(backAngleOf(kind), R + 3.1);
     return [x, riser, z];
   };
   if (parts.bells?.length) {
-    const origin = back(parts.laser?.length ? -backAngle : 0);
+    const origin = back('bells');
     const model = buildBells(parts.bells, { origin, yaw: facing(origin, 0) });
     instruments.push({
       kind: 'bells',
@@ -208,8 +220,24 @@ export function buildEnsemble(parts, controls = []) {
       end: model.onsets[model.onsets.length - 1] + 3,
     });
   }
+  if (parts.bowed?.length) {
+    const origin = back('bowed');
+    const ctl = Object.fromEntries(tracksOf(parts.bowed).map((tr) => [tr, { mod: controls[tr]?.mod }]));
+    const model = buildBowed(parts.bowed, { origin, yaw: facing(origin, 0), controls: ctl });
+    instruments.push({
+      kind: 'bowed',
+      model,
+      onsets: model.onsets,
+      busy: spansOf(parts.bowed, model.options.approach + 0.4, model.options.release + 0.5),
+      focus: { center: [origin[0], riser + 1.7, origin[2]], radius: Math.max(2.2, model.width * 0.7) },
+      front: model.yaw,
+      camera: { distScale: 1.4, minHeight: 0.8, allowLow: false },
+      start: model.onsets[0] - 1,
+      end: Math.max(...parts.bowed.map((n) => n.time + n.duration)) + 1,
+    });
+  }
   if (parts.laser?.length) {
-    const origin = back(parts.bells?.length ? backAngle : 0);
+    const origin = back('laser');
     const ctl = Object.fromEntries(tracksOf(parts.laser).map((tr) => [tr, { bends: controls[tr]?.bends, mod: controls[tr]?.mod }]));
     const model = buildLaserHarp(parts.laser, { origin, yaw: facing(origin, 0), controls: ctl });
     instruments.push({
