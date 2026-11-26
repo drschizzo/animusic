@@ -121,7 +121,7 @@ export function buildEnsemble(parts) {
     instruments.push({
       kind: 'balls',
       model: balls,
-      onsets: balls.balls.map((b) => b.impact),
+      onsets: balls.impacts.map((i) => i.time),
       focus: { center: [0, 1.4, -R * 0.7], radius: R * 0.75 },
       front: 0,
       start: balls.start,

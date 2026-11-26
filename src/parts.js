@@ -242,3 +242,40 @@ export class CableBundle {
     this.mesh.instanceMatrix.needsUpdate = true;
   }
 }
+
+/**
+ * Gouttière : demi-cylindre ouvert vers le haut, balayé le long d'une suite de points
+ * (axe du demi-cylindre). Les deux faces sont visibles.
+ */
+export function channelGeometry(points, radius, sides = 14) {
+  const pos = [];
+  const idx = [];
+  const T = new THREE.Vector3();
+  const N = new THREE.Vector3();
+  const B = new THREE.Vector3();
+  points.forEach((p, i) => {
+    const a = points[Math.max(0, i - 1)];
+    const b = points[Math.min(points.length - 1, i + 1)];
+    T.subVectors(b, a).normalize();
+    B.crossVectors(T, UP).normalize();
+    N.crossVectors(B, T).normalize();
+    for (let k = 0; k <= sides; k++) {
+      const th = Math.PI + (k / sides) * Math.PI;
+      pos.push(
+        p.x + (Math.cos(th) * B.x + Math.sin(th) * N.x) * radius,
+        p.y + (Math.cos(th) * B.y + Math.sin(th) * N.y) * radius,
+        p.z + (Math.cos(th) * B.z + Math.sin(th) * N.z) * radius,
+      );
+      if (i > 0 && k > 0) {
+        const r0 = (i - 1) * (sides + 1);
+        const r1 = i * (sides + 1);
+        idx.push(r0 + k - 1, r1 + k - 1, r0 + k, r0 + k, r1 + k - 1, r1 + k);
+      }
+    }
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}

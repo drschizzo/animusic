@@ -31,8 +31,22 @@ export const DEFAULTS = {
   minLauncherGap: 0.09, // délai minimal entre deux tirs d'un même canon
   aimWindow: 0.35, // durée de la visée avant un tir
 
-  restitution: 0.4,
-  reboundHorizontal: 0.55,
+  // Rebonds en chaîne : une bille qui vient de frapper une lame peut rebondir sur la
+  // lame de la note suivante au lieu qu'un canon tire une nouvelle bille.
+  chainChance: 0.65,
+  maxChain: 5, // lames frappées au plus par une même bille
+  minHop: 0.28, // durée minimale d'un rebond (s)
+  maxHop: 1.0,
+  maxHopSpeed: 5, // vitesse horizontale maximale d'un rebond (m/s)
+
+  // Récupération : gouttière en arc derrière les lames, puis tubes de retour vers la tourelle.
+  exitTime: 0.5, // vol de la dernière lame à la gouttière
+  troughGap: 0.95, // distance gouttière ↔ lames
+  troughY: 0.78, // hauteur (centre de bille) au milieu de la gouttière
+  troughSlope: 0.28, // descente (m/rad) vers les extrémités
+  rollSpeed: 2.4, // vitesse dans la gouttière
+  tubeSpeed: 4.2, // vitesse dans les tubes
+  tubeY: 0.2, // hauteur des tubes au sol (centre de bille)
 };
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -120,10 +134,45 @@ export function buildChoreography(notes, options = {}) {
   // --- Billes : calcul inverse de chaque trajectoire.
   const T = o.flightTime;
   const g = o.gravity;
-  const balls = sorted.map((note) => {
+  /** Vitesse initiale d'une parabole de p à q en `dt` secondes. */
+  const aim = (p, q, dt) => [(q[0] - p[0]) / dt, (q[1] - p[1] + 0.5 * g * dt * dt) / dt, (q[2] - p[2]) / dt];
+  const balls = [];
+  const impacts = [];
+  sorted.forEach((note, ni) => {
     const bar = barByMidi.get(note.midi);
-    const launch = note.time - T;
+    bar.hits.push({ time: note.time, velocity: note.velocity, track: note.track });
 
+    // Rebond en chaîne ? On cherche une bille de la même piste dont le dernier impact
+    // est assez récent, pas encore relancée, et assez proche pour un saut crédible.
+    let chain = null;
+    if (hash01(ni) < o.chainChance) {
+      let best = Infinity;
+      for (let k = balls.length - 1; k >= 0; k--) {
+        const b = balls[k];
+        if (b.launch < note.time - T - (o.maxChain + 1) * o.maxHop) break; // trop anciennes pour servir encore
+        const dt = note.time - b.lastImpact;
+        if (b.track !== note.track || b.hits >= o.maxChain || dt < o.minHop || dt > o.maxHop) continue;
+        const from = bars[b.lastBar].target;
+        const dist = Math.hypot(bar.target[0] - from[0], bar.target[2] - from[2]);
+        if (dist / dt > o.maxHopSpeed) continue;
+        const score = dist + Math.abs(dt - 0.5);
+        if (score < best) {
+          best = score;
+          chain = b;
+        }
+      }
+    }
+    if (chain) {
+      const from = bars[chain.lastBar].target;
+      chain.segs.push({ t0: chain.lastImpact, p: from, v: aim(from, bar.target, note.time - chain.lastImpact) });
+      chain.lastImpact = note.time;
+      chain.lastBar = bar.index;
+      chain.hits++;
+      impacts.push({ time: note.time, position: bar.target, velocity: note.velocity, track: note.track, bar: bar.index, ball: chain });
+      return;
+    }
+
+    const launch = note.time - T;
     // Choix du canon : le plus proche angulairement parmi les canons libres,
     // sinon celui qui a tiré le moins récemment.
     let L = launchers[0];
@@ -145,77 +194,193 @@ export function buildChoreography(notes, options = {}) {
     let v0;
     for (let it = 0; it < 3; it++) {
       p0 = add(L.pivot, scale(dir, o.barrelLength));
-      const d = sub(bar.target, p0);
-      v0 = [d[0] / T, (d[1] + 0.5 * g * T * T) / T, d[2] / T];
+      v0 = aim(p0, bar.target, T);
       dir = norm(v0);
     }
-
     L.shots.push({ time: launch, dir, velocity: note.velocity });
     L.lastLaunch = launch;
-    bar.hits.push({ time: note.time, velocity: note.velocity, track: note.track });
 
-    const vImpactY = v0[1] - g * T;
-    return {
+    const ball = {
       launch,
       impact: note.time,
-      end: note.time + o.postImpact,
       p0,
       v0,
       target: bar.target,
-      vr: [v0[0] * o.reboundHorizontal, -vImpactY * o.restitution, v0[2] * o.reboundHorizontal],
+      segs: [{ t0: launch, p: p0, v: v0 }],
       launcher: L.index,
       bar: bar.index,
       track: note.track,
       midi: note.midi,
       velocity: note.velocity,
+      lastImpact: note.time,
+      lastBar: bar.index,
+      hits: 1,
     };
+    balls.push(ball);
+    impacts.push({ time: note.time, position: bar.target, velocity: note.velocity, track: note.track, bar: bar.index, ball });
   });
 
-  // Nombre maximal de billes simultanées (taille du pool de rendu).
-  let maxConcurrent = 0;
-  for (let i = 0, j = 0; i < balls.length; i++) {
-    while (balls[j].end < balls[i].launch) j++;
-    maxConcurrent = Math.max(maxConcurrent, i - j + 1);
+  // --- Récupération : chaque bille, après sa dernière lame, saute dans la gouttière,
+  // y roule jusqu'au bout le plus proche, tombe dans un tube et revient à la tourelle.
+  const returns = buildReturnPaths(o, radius, arc);
+  for (const b of balls) {
+    const bar = bars[b.lastBar];
+    const side = bar.angle > 1e-6 ? 1 : bar.angle < -1e-6 ? 0 : b.launcher % 2;
+    const path = returns[side];
+    const s0 = path.troughAt(Math.abs(bar.angle));
+    const land = path.pointAt(s0);
+    b.segs.push({ t0: b.lastImpact, p: bar.target, v: aim(bar.target, land, o.exitTime) });
+    const t0 = b.lastImpact + o.exitTime;
+    b.path = { t0, side, s0, t1: t0 + path.timeBetween(s0, path.length) };
+    b.end = b.path.t1;
   }
 
-  const first = balls.length ? balls[0].launch : 0;
-  const last = balls.length ? balls[balls.length - 1].end : 0;
+  // Nombre maximal de billes simultanées (taille du pool de rendu) et durée de vie maximale.
+  const events = [];
+  let maxLife = 0;
+  for (const b of balls) {
+    events.push([b.launch, 1], [b.end, -1]);
+    maxLife = Math.max(maxLife, b.end - b.launch);
+  }
+  events.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  let maxConcurrent = 0;
+  let alive = 0;
+  for (const [, d] of events) maxConcurrent = Math.max(maxConcurrent, (alive += d));
 
-  const shotTimes = balls.map((b) => ({ time: b.launch })).sort((a, b) => a.time - b.time);
-  return { options: o, bars, launchers, balls, radius, arc, maxConcurrent, start: first, duration: last, shotTimes };
+  const first = balls.length ? balls[0].launch : 0;
+  const last = balls.length ? Math.max(...balls.map((b) => b.end)) : 0;
+  const shotTimes = balls.map((b) => ({ time: b.launch }));
+  return { options: o, bars, launchers, balls, impacts, returns, radius, arc, maxConcurrent, maxLife, start: first, duration: last, shotTimes };
+}
+
+/** Pseudo-aléatoire déterministe (0..1) à partir d'un entier. */
+function hash01(i) {
+  const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/**
+ * Chemins de retour (gauche, droite), en coordonnées de centre de bille : gouttière en
+ * arc qui descend vers l'extrémité, chute dans un tube, course au sol jusqu'au pied de
+ * la tourelle, montée dans le plateau. Polyligne aux angles adoucis, paramétrée par
+ * l'abscisse curviligne ; la vitesse est `rollSpeed` dans la gouttière, `tubeSpeed` ensuite.
+ */
+export function buildReturnPaths(o, radius, arc) {
+  const Rt = radius + o.troughGap;
+  const endA = arc / 2 + 0.14;
+  const steps = Math.max(8, Math.ceil(endA / 0.03));
+  const troughY = (a) => o.troughY - o.troughSlope * a;
+  return [-1, 1].map((sign) => {
+    const at = (a, r, y) => [Math.sin(sign * a) * r, y, -Math.cos(sign * a) * r];
+    const trough = [];
+    for (let i = 0; i <= steps; i++) {
+      const a = (i / steps) * endA;
+      trough.push(at(a, Rt, troughY(a)));
+    }
+    // Au bout de la gouttière : entonnoir, chute verticale, puis le tube file au sol vers la tourelle.
+    const yEnd = troughY(endA);
+    const drop = at(endA + 0.2 / Rt, Rt, yEnd - 0.05);
+    const hubA = Math.min(endA, arc * 0.4 + 0.5);
+    const rHub = o.launcherRadius + 0.75;
+    let tube = [drop, at(endA + 0.2 / Rt, Rt, o.tubeY + 0.3), at(endA + 0.2 / Rt, Rt - 0.3, o.tubeY)];
+    tube.push(at(hubA, rHub + 0.5, o.tubeY), at(hubA, rHub, o.tubeY + 0.05));
+    tube = chaikin(tube, 3);
+    const points = [...trough, ...tube.slice(1)];
+    const cum = [0];
+    for (let i = 1; i < points.length; i++) {
+      const [a, b] = [points[i - 1], points[i]];
+      cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
+    }
+    const troughEnd = cum[steps];
+    const length = cum[cum.length - 1];
+    return {
+      side: sign,
+      points,
+      cum,
+      troughSteps: steps,
+      troughEnd,
+      length,
+      /** Abscisse du point de la gouttière à l'angle a (rad, ≥ 0). */
+      troughAt(a) {
+        const f = Math.min(steps, Math.max(0, (a / endA) * steps));
+        const i = Math.min(steps - 1, Math.floor(f));
+        return cum[i] + (cum[i + 1] - cum[i]) * (f - i);
+      },
+      pointAt(s, out = [0, 0, 0]) {
+        s = Math.min(length, Math.max(0, s));
+        let lo = 0;
+        let hi = cum.length - 1;
+        while (hi - lo > 1) {
+          const mid = (lo + hi) >> 1;
+          if (cum[mid] <= s) lo = mid;
+          else hi = mid;
+        }
+        const f = (s - cum[lo]) / Math.max(1e-9, cum[hi] - cum[lo]);
+        const a = points[lo];
+        const b = points[hi];
+        out[0] = a[0] + (b[0] - a[0]) * f;
+        out[1] = a[1] + (b[1] - a[1]) * f;
+        out[2] = a[2] + (b[2] - a[2]) * f;
+        return out;
+      },
+      /** Durée de parcours entre deux abscisses. */
+      timeBetween(s0, s1) {
+        const inTrough = Math.max(0, Math.min(s1, troughEnd) - s0);
+        return inTrough / o.rollSpeed + (s1 - s0 - inTrough) / o.tubeSpeed;
+      },
+      /** Abscisse atteinte `dt` secondes après être parti de s0. */
+      advance(s0, dt) {
+        const rollTime = Math.max(0, troughEnd - s0) / o.rollSpeed;
+        if (dt <= rollTime) return s0 + dt * o.rollSpeed;
+        return Math.max(s0, troughEnd) + (dt - rollTime) * o.tubeSpeed;
+      },
+    };
+  });
+}
+
+/** Adoucit les angles d'une polyligne (subdivision de Chaikin, extrémités conservées). */
+function chaikin(pts, iterations) {
+  let p = pts;
+  for (let k = 0; k < iterations; k++) {
+    const q = [p[0]];
+    for (let i = 0; i < p.length - 1; i++) {
+      const [a, b] = [p[i], p[i + 1]];
+      q.push(a.map((v, c) => 0.75 * v + 0.25 * b[c]), a.map((v, c) => 0.25 * v + 0.75 * b[c]));
+    }
+    q.push(p[p.length - 1]);
+    p = q;
+  }
+  return p;
 }
 
 /** Position d'une bille à l'instant t (écrite dans out). */
 export function ballPosition(ch, ball, t, out = [0, 0, 0]) {
-  const g = ch.options.gravity;
-  let p;
-  let v;
-  let dt;
-  if (t < ball.impact) {
-    p = ball.p0;
-    v = ball.v0;
-    dt = t - ball.launch;
-  } else {
-    p = ball.target;
-    v = ball.vr;
-    dt = t - ball.impact;
+  if (ball.path && t >= ball.path.t0) {
+    const path = ch.returns[ball.path.side];
+    return path.pointAt(path.advance(ball.path.s0, t - ball.path.t0), out);
   }
+  const g = ch.options.gravity;
+  const segs = ball.segs;
+  let k = segs.length - 1;
+  while (k > 0 && segs[k].t0 > t) k--;
+  const { p, v, t0 } = segs[k];
+  const dt = t - t0;
   out[0] = p[0] + v[0] * dt;
   out[1] = Math.max(ch.options.ballRadius, p[1] + v[1] * dt - 0.5 * g * dt * dt);
   out[2] = p[2] + v[2] * dt;
   return out;
 }
 
-/** Échelle d'une bille (disparition progressive en fin de vie). */
+/** Échelle d'une bille : elle rétrécit en entrant dans la tourelle. */
 export function ballScale(ball, t) {
-  const fadeOut = 0.3;
+  const fadeOut = 0.15;
   if (t < ball.launch || t > ball.end) return 0;
   return Math.min(1, (ball.end - t) / fadeOut);
 }
 
-/** Intervalle [start, end) des billes potentiellement visibles à t. */
+/** Intervalle [start, end) des billes (triées par tir) potentiellement visibles à t. */
 export function activeBallRange(ch, t) {
-  const start = lowerBound(ch.balls, t, (b) => b.end);
+  const start = lowerBound(ch.balls, t - ch.maxLife, (b) => b.launch);
   const end = upperBound(ch.balls, t, (b) => b.launch);
   return [start, Math.max(start, end)];
 }

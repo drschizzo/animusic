@@ -78,3 +78,32 @@ test('maxConcurrent couvre le pic de billes', () => {
     assert.ok(alive <= ch.maxConcurrent);
   }
 });
+
+// Phrase rapide sur une même piste : de quoi déclencher des rebonds en chaîne.
+const phrase = Array.from({ length: 24 }, (_, i) => ({ midi: 60 + ((i * 5) % 12), time: 2 + i * 0.4, velocity: 0.7, track: 0 }));
+
+test('rebonds en chaîne : chaque note est frappée par une bille, pile à son instant', () => {
+  const ch = buildChoreography(phrase);
+  assert.equal(ch.impacts.length, phrase.length);
+  assert.ok(ch.balls.length < phrase.length, 'au moins une bille rebondit sur plusieurs lames');
+  for (const im of ch.impacts) {
+    close(ballPosition(ch, im.ball, im.time), ch.bars[im.bar].target, 1e-6);
+    assert.equal(ch.bars[im.bar].midi, phrase.find((n) => Math.abs(n.time - im.time) < 1e-9).midi);
+  }
+});
+
+test('trajectoire continue, du tir au retour dans la tourelle', () => {
+  const ch = buildChoreography(phrase);
+  for (const b of ch.balls) {
+    let prev = null;
+    for (let t = b.launch; t <= b.end; t += 0.002) {
+      const p = ballPosition(ch, b, t);
+      if (prev) assert.ok(Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]) < 0.03, `saut à t=${t}`);
+      assert.ok(p[1] >= ch.options.ballRadius - 1e-9);
+      prev = p;
+    }
+    // Fin de parcours : au pied de la tourelle.
+    const end = ballPosition(ch, b, b.end);
+    assert.ok(Math.hypot(end[0], end[2]) < ch.options.launcherRadius + 1);
+  }
+});

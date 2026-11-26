@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose, turretSpin } from './choreography.js';
 import { lowerBound, upperBound } from './util.js';
 import { mat, fx } from './materials.js';
-import { roundedBox, lathe, rod, ringOf, footShadow, gear, Piston, CableBundle, V } from './parts.js';
+import { roundedBox, lathe, rod, ringOf, footShadow, gear, Piston, CableBundle, channelGeometry, V } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const TRAIL = 6; // fantômes lumineux derrière chaque bille
@@ -244,6 +244,9 @@ export class BallsView {
     this._axis = new THREE.Vector3();
     this._q2 = new THREE.Quaternion();
 
+    // --- Récupération : gouttière en arc, entonnoirs, tubes de verre jusqu'à la tourelle.
+    if (ch.balls.length) this.buildReturns(ch, { steel, chrome, dark });
+
     // --- Billes (pool instancié) : chrome teinté, légèrement lumineux
     const pool = Math.max(1, ch.maxConcurrent);
     const ballMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.14, envMapIntensity: 1.6 });
@@ -277,6 +280,75 @@ export class BallsView {
       this.content.add(light);
       return light;
     });
+  }
+
+  buildReturns(ch, { steel, chrome, dark }) {
+    const o = ch.options;
+    const lift = 0.06; // l'axe de la gouttière est un peu au-dessus du centre des billes
+    const rc = o.ballRadius + lift + 0.02;
+    const channelMat = mat.brass();
+    channelMat.side = THREE.DoubleSide;
+    const glass = mat.glass();
+    this.portMats = [];
+    for (const path of ch.returns) {
+      const pts = path.points.map(([x, y, z]) => V(x, y + lift, z));
+      const trough = pts.slice(0, path.troughSteps + 1);
+      const channel = new THREE.Mesh(channelGeometry(trough, rc), channelMat);
+      channel.castShadow = channel.receiveShadow = true;
+      this.content.add(channel);
+      // Liseré lumineux le long des bords de la gouttière.
+      const edgeMat = mat.glow(0xffc46b, 1.2);
+      this.portMats.push(edgeMat);
+      for (const side of [-1, 1]) {
+        const edge = trough.map((p, i) => {
+          const a = trough[Math.max(0, i - 1)];
+          const b = trough[Math.min(trough.length - 1, i + 1)];
+          const n = new THREE.Vector3().subVectors(b, a).cross(UP).normalize();
+          return p.clone().addScaledVector(n, side * rc);
+        });
+        const lip = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(edge), edge.length * 2, 0.012, 6), edgeMat);
+        this.content.add(lip);
+      }
+      // Pieds de la gouttière.
+      for (let i = 0; i <= path.troughSteps; i += Math.max(4, Math.round(path.troughSteps / 6))) {
+        const p = trough[i];
+        this.content.add(rod(V(p.x, 0, p.z), V(p.x, p.y - rc, p.z), 0.025, dark, 10));
+        const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.03, 14), dark);
+        foot.position.set(p.x, 0.015, p.z);
+        this.content.add(foot);
+      }
+      // Entonnoir au bout de la gouttière, au-dessus de la chute.
+      const drop = pts[path.troughSteps + 1];
+      const funnel = lathe([[rc * 0.95, -0.12], [rc * 1.05, -0.02], [rc * 2.1, 0.22], [rc * 2.2, 0.25]], 32, steel);
+      funnel.material = steel.clone();
+      funnel.material.side = THREE.DoubleSide;
+      const end = pts[path.troughSteps];
+      funnel.position.set((end.x + drop.x) / 2, end.y - 0.12, (end.z + drop.z) / 2);
+      this.content.add(funnel);
+      // Tube de verre : de l'entonnoir jusqu'au flanc de la tourelle.
+      const tubePts = pts.slice(path.troughSteps + 1);
+      tubePts[0] = funnel.position.clone().setY(funnel.position.y - 0.1);
+      const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(tubePts), tubePts.length * 3, rc, 20), glass);
+      tube.renderOrder = 2;
+      this.content.add(tube);
+      // Bagues chromées régulières sur le tube, et bouche lumineuse à l'arrivée.
+      const curve = new THREE.CatmullRomCurve3(tubePts);
+      const ringGeo = new THREE.TorusGeometry(rc + 0.012, 0.016, 8, 24);
+      const len = curve.getLength();
+      for (let d = 0.4; d < len - 0.2; d += 0.9) {
+        const u = d / len;
+        const ring = new THREE.Mesh(ringGeo, chrome);
+        ring.position.copy(curve.getPointAt(u));
+        ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), curve.getTangentAt(u));
+        this.content.add(ring);
+      }
+      const mouthMat = mat.glow(0xffc46b, 2);
+      this.portMats.push(mouthMat);
+      const mouth = new THREE.Mesh(new THREE.TorusGeometry(rc + 0.02, 0.022, 8, 24), mouthMat);
+      mouth.position.copy(curve.getPointAt(1));
+      mouth.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), curve.getTangentAt(1));
+      this.content.add(mouth);
+    }
   }
 
   update(t) {
@@ -324,11 +396,11 @@ export class BallsView {
     // Étincelles : gerbe balistique à chaque impact, identique à chaque passage.
     let p = 0;
     const maxSparks = this.sparks.instanceMatrix.count;
-    const first = lowerBound(ch.balls, t - SPARK_LIFE, (b) => b.impact);
-    const last = upperBound(ch.balls, t, (b) => b.impact);
+    const first = lowerBound(ch.impacts, t - SPARK_LIFE, (b) => b.time);
+    const last = upperBound(ch.impacts, t, (b) => b.time);
     for (let i = first; i < last; i++) {
-      const b = ch.balls[i];
-      const dt = t - b.impact;
+      const b = ch.impacts[i];
+      const dt = t - b.time;
       const color = this.trackColors[b.track];
       for (let j = 0; j < SPARKS && p < maxSparks; j++) {
         const life = SPARK_LIFE * (0.55 + 0.45 * hash(i, j));
@@ -338,9 +410,9 @@ export class BallsView {
         const up = 1.4 + 2.2 * hash(i, j + 47);
         const f = 1 - dt / life;
         this._v.set(
-          b.target[0] + Math.cos(a) * speed * dt,
-          Math.max(0.02, b.target[1] - o.ballRadius + up * dt - 4.9 * dt * dt),
-          b.target[2] + Math.sin(a) * speed * dt,
+          b.position[0] + Math.cos(a) * speed * dt,
+          Math.max(0.02, b.position[1] - o.ballRadius + up * dt - 4.9 * dt * dt),
+          b.position[2] + Math.sin(a) * speed * dt,
         );
         this._s.setScalar(0.5 + f);
         this._m.compose(this._v, this._q, this._s);

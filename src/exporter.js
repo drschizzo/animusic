@@ -15,7 +15,7 @@ import { cameraAt } from './director.js';
 
 const EPS = 1e-5;
 
-/** Réserves de sphères par piste : la bille i d'une piste occupe l'emplacement i mod N. */
+/** Réserves de sphères par piste : chaque bille reçoit un emplacement libre pendant toute sa vie. */
 function makeBallPools(view, trackColors, parent) {
   const ch = view.ch;
   const byTrack = new Map();
@@ -25,35 +25,36 @@ function makeBallPools(view, trackColors, parent) {
   });
   const pools = [];
   for (const [track, balls] of byTrack) {
-    // Billes simultanées maximum pour cette piste (lancements et fins sont triés).
-    let max = 0;
-    for (let i = 0, j = 0; i < balls.length; i++) {
-      while (balls[j].end < balls[i].launch) j++;
-      max = Math.max(max, i - j + 1);
-    }
+    // Attribution gloutonne (billes triées par tir) : un emplacement se libère à la fin d'une bille.
+    const freeAt = [];
+    const slots = balls.map((b) => {
+      let k = freeAt.findIndex((end) => end < b.launch);
+      if (k < 0) k = freeAt.push(0) - 1;
+      freeAt[k] = b.end;
+      return k;
+    });
     const material = new THREE.MeshStandardMaterial({ color: trackColors[track], metalness: 1, roughness: 0.12 });
-    const meshes = Array.from({ length: max }, (_, k) => {
+    const meshes = freeAt.map((_, k) => {
       const m = new THREE.Mesh(view.balls.geometry, material);
       m.name = `bille_piste${track}_${k}`;
       m.scale.setScalar(0);
       parent.add(m);
       return m;
     });
-    pools.push({ balls, meshes });
+    pools.push({ balls, slots, meshes, maxLife: ch.maxLife });
   }
   return pools;
 }
 
 function poseBalls(ch, pools, t, tmp) {
-  for (const { balls, meshes } of pools) {
+  for (const { balls, slots, meshes, maxLife } of pools) {
     for (const m of meshes) m.scale.setScalar(0);
-    // Les billes vivantes d'une piste forment un intervalle contigu : i mod N est unique.
-    const [s, e] = activeBallRange({ balls }, t);
+    const [s, e] = activeBallRange({ balls, maxLife }, t);
     for (let i = s; i < e; i++) {
       const b = balls[i];
       const sc = ballScale(b, t);
       if (sc <= 0) continue;
-      const m = meshes[i % meshes.length];
+      const m = meshes[slots[i]];
       ballPosition(ch, b, t, tmp);
       m.position.set(tmp[0], tmp[1], tmp[2]);
       m.scale.setScalar(sc);
