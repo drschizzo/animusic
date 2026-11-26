@@ -14,7 +14,7 @@ export const DEFAULTS = {
   postImpact: 1.4, // durée de vie de la bille après l'impact
   ballRadius: 0.12,
 
-  radius: 8, // rayon minimal de l'arc de lames
+  radius: 6, // rayon minimal de l'arc de lames (plus grand, il repousse tout l'orchestre)
   arcDeg: 160, // ouverture maximale de l'arc
   minBarSpacing: 0.42,
   maxBarWidth: 0.5,

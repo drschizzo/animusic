@@ -182,6 +182,7 @@ function withStation(piece, o) {
   const pos = piece.position;
   let strike;
   let corners;
+  let bar; // tronçon horizontal du tuyau où se raccorde le réseau
   if (piece.kind === 'kick') {
     const back = pos[2] - piece.depth / 2;
     const hit = [pos[0], pos[1] + 0.1, back - r];
@@ -199,6 +200,7 @@ function withStation(piece, o) {
     const h = unit3([n[0], 0, n[2]]);
     const cd = along(c1, h, -0.3);
     corners = [strike.catch, cb, [cb[0], y, cd[2]], cd, c1, strike.mouth];
+    bar = [corners[2], cd]; // tronçon au sol, derrière le fût
   } else {
     const d = norm2(piece.armDir);
     const D = [d[0], 0, d[1]];
@@ -221,11 +223,13 @@ function withStation(piece, o) {
     const cd = along(cc, D, 0.3);
     const c1 = along(strike.mouth, n, -o.nozzleLength);
     corners = [strike.catch, cb, cc, cd, [cd[0], c1[1], cd[2]], c1, strike.mouth];
+    bar = [corners[4], c1]; // traverse en haut de la crosse
   }
   // Axe du tuyau, du cornet à la bouche ; la bille n'en parcourt que les deux bouts.
   const tube = fillet(corners, 0.17);
   piece.station = buildStation(strike, { ballRadius: r, feed: tube, drain: tube });
   piece.station.tube = tube;
+  piece.station.bar = bar;
   // Pieds : sous le milieu de chaque tronçon posé au sol (là où l'arrondi des coudes ne l'a pas décollé).
   const low = (c) => Math.abs(c[1] - o.pipeFloorY) < 1e-6;
   piece.station.feet = corners.slice(1).flatMap((c, i) => (low(c) && low(corners[i]) ? [[(c[0] + corners[i][0]) / 2, 0, (c[2] + corners[i][2]) / 2]] : []));

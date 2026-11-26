@@ -108,6 +108,9 @@ export function analyzeSong(ensemble, options = {}) {
   const songStart = ensemble.start;
   const grace = introGrace(ensemble, o);
   const deploy = inst.map((ins) => {
+    // Machine d'un seul tenant (réseau de tuyaux) : tout est en place dès le début, sinon
+    // les tuyaux d'un instrument encore sous le sol aboutiraient dans le vide.
+    if (ensemble.trunks) return [[-Infinity, Infinity]];
     // Comme dans un orchestre, un musicien qui se tait reste sur scène : l'instrument
     // n'entre qu'une fois (en sortant du sol s'il arrive tard) et ne repart pas.
     const spans = mergeSpans(ins.busy ?? [[ins.start, ins.end]]);

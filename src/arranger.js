@@ -574,7 +574,8 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
   const totalFront = front.reduce((a, it) => a + it.width + 0.8, -0.8);
   let x = -totalFront / 2;
   for (const it of front) {
-    it.origin = [x + it.width / 2, 0, R * 0.42];
+    // Devant la tourelle, à distance fixe : la place de la tour du réseau, quel que soit le rayon de l'arc.
+    it.origin = [x + it.width / 2, 0, Math.max(3.36, R * 0.42)];
     it.yaw = 0;
     it.riser = 0;
     x += it.width + 0.8;
@@ -633,9 +634,9 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
   // Échanges de billes entre instruments voisins (voir passes.js).
   // Réseau de tuyaux qui relie les instruments à la tour (voir trunks.js) ; les passes l'évitent.
   if (style === 'balls') {
-    ensemble.trunks = planTrunks(ensemble);
+    ensemble.trunks = planTrunks(ensemble, passOptions.trunkOptions);
     ensemble.passes = planPasses(ensemble, { ...passOptions, trunks: ensemble.trunks });
-    scheduleTrunks(ensemble.trunks, ensemble);
+    scheduleTrunks(ensemble.trunks);
   }
   return ensemble;
 }

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { feedBall, backBall } from './trunks.js';
 import { BallPool } from './ballPool.js';
 import { mat } from './materials.js';
-import { roundedBox } from './parts.js';
+import { lathe } from './parts.js';
 import { lowerBound, upperBound } from './util.js';
 
 /** Tuyau balayé le long d'une polyligne (repères transportés de proche en proche, sans vrille). */
@@ -64,8 +64,21 @@ export class TrunksView {
       ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...dir));
       g.add(ring);
     };
+    const gold = mat.gold();
+    const capGeo = new THREE.TorusGeometry(o.radius + 0.012, 0.016, 8, 24);
+    const footGeo = new THREE.CylinderGeometry(o.radius + 0.03, o.radius + 0.045, 0.1, 20);
     this.lines = trunks.lines.map((line) => {
-      for (const path of [line.feed, line.back]) {
+      // Chaque colonne : pied d'acier sur le socle, bague dorée à la naissance de l'arche.
+      for (const [path, tall, foot] of line.back ? [[line.feed, line.tall, line.foot], [line.back, line.tall + 0.5, line.backFoot]] : [[line.feed, line.tall, line.foot]]) {
+        const base = new THREE.Mesh(footGeo, dark);
+        base.position.set(foot[0], foot[1] + 0.05, foot[2]);
+        const cap = new THREE.Mesh(capGeo, gold);
+        cap.rotation.x = Math.PI / 2;
+        cap.position.set(foot[0], tall, foot[2]);
+        g.add(base, cap);
+        void path;
+      }
+      for (const path of line.back ? [line.feed, line.back] : [line.feed]) {
         const tube = new THREE.Mesh(sweepGeometry(path.points, o.radius), glass);
         tube.renderOrder = 2;
         g.add(tube);
@@ -83,18 +96,33 @@ export class TrunksView {
         return max;
       };
       const pool = new BallPool(g, line.ballRadius, most(line.feedBalls, line.feedSpan) + most(line.backBalls, line.backSpan) + 2);
+      pool.balls.castShadow = false;
       pool.trails.visible = false; // dans le verre, pas de traînée
       return { line, pool };
     });
     this.pools = this.lines.map((l) => l.pool);
-    const b = trunks.base;
-    if (b) {
-      const base = roundedBox(b.maxX - b.minX, b.top, b.maxZ - b.minZ, 0.03, dark);
-      base.position.set((b.minX + b.maxX) / 2, b.top / 2, (b.minZ + b.maxZ) / 2);
-      const led = (this.led = mat.glow(0xffc46b, 0.5));
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(b.maxX - b.minX + 0.012, 0.02, b.maxZ - b.minZ + 0.012), led);
-      strip.position.set(base.position.x, b.top - 0.06, base.position.z);
-      g.add(base, strip);
+    const c = trunks.colonnade;
+    if (c) {
+      // Socle en arc de cercle sous la colonnade, souligné d'un filet lumineux.
+      const r0 = c.feed - 0.14;
+      const r1 = c.back + 0.14;
+      const arc = (profile, material) => {
+        const mesh = new THREE.Mesh(new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), 48, -c.half, 2 * c.half), material);
+        mesh.castShadow = mesh.receiveShadow = true;
+        g.add(mesh);
+        return mesh;
+      };
+      const body = Object.assign(dark.clone(), { side: THREE.DoubleSide });
+      arc([[r0, 0], [r0, c.top], [r1, c.top], [r1, 0]], body);
+      this.led = mat.glow(0xffc46b, 0.6);
+      arc([[r1 + 0.006, c.top - 0.07], [r1 + 0.006, c.top - 0.05]], Object.assign(this.led, { side: THREE.DoubleSide }));
+      // Joues aux deux bouts du socle.
+      for (const s of [-1, 1]) {
+        const cheek = new THREE.Mesh(new THREE.PlaneGeometry(r1 - r0, c.top), body);
+        cheek.position.set(Math.sin(s * c.half) * ((r0 + r1) / 2), c.top / 2, Math.cos(s * c.half) * ((r0 + r1) / 2));
+        cheek.rotation.y = s * c.half - Math.PI / 2;
+        g.add(cheek);
+      }
     }
     this._p = [0, 0, 0];
     this._v = [0, 0, 0];
@@ -118,7 +146,7 @@ export class TrunksView {
         }
       };
       draw(line.feedBalls, t, t + line.feedSpan, feedBall, line.feed, -1);
-      draw(line.backBalls, t - line.backSpan, t, backBall, line.back, 1);
+      if (line.back) draw(line.backBalls, t - line.backSpan, t, backBall, line.back, 1);
       pool.end();
     }
   }
