@@ -337,6 +337,20 @@ $('exportGltf').addEventListener('click', async () => {
   }
 });
 
+// Lecture en boucle (réglage mémorisé).
+try {
+  $('loop').checked = localStorage.getItem('animusic.loop') === '1';
+} catch {
+  /* stockage indisponible */
+}
+$('loop').addEventListener('change', (e) => {
+  try {
+    localStorage.setItem('animusic.loop', e.target.checked ? '1' : '0');
+  } catch {
+    /* réglage non mémorisé */
+  }
+});
+
 $('listen').addEventListener('change', (e) => player.setListenOriginal(e.target.value === 'original'));
 
 $('samples').addEventListener('change', (e) => {
@@ -477,8 +491,11 @@ function frame() {
     // Fin de morceau dans une playlist : on enchaîne sur le suivant (pas pendant une vidéo).
     if (player.playing && t > duration + 0.5 && !recorder && nextIndex(1) >= 0) playFromPlaylist(nextIndex(1));
     else if (player.playing && t > duration + 0.5) {
+      // Une vidéo s'arrête toujours à la fin du morceau, même en boucle.
+      const again = $('loop').checked && !recorder;
       if (recorder) stopRecording();
       player.stop();
+      if (again) player.play().then(updatePlayButton);
       updatePlayButton();
     }
   }
