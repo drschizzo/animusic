@@ -12,9 +12,20 @@ export const SECTION_DEFAULTS = {
   threshold: 0.18, // nouveauté minimale pour couper
   rise: 2.4, // durée de la sortie du sol
   fall: 2.0, // durée de la descente
-  restGap: 12, // silence au-delà duquel l'instrument redescend
-  introGrace: 4, // les instruments qui jouent dès le début sont déjà en place
+  restGap: 40, // silence au-delà duquel l'instrument redescend (rare : un va-et-vient lasse vite)
+  introGrace: 12, // les instruments qui entrent avant ce délai sont déjà en place au début…
+  introShare: 0.12, // … ou avant cette fraction du morceau, si elle est plus longue
 };
+
+/**
+ * Délai en deçà duquel un instrument est en place dès le début : une scène presque vide
+ * pendant une intro (batterie seule, par exemple) paraît cassée ; seules les entrées
+ * franchement tardives se font en sortant du sol.
+ */
+export function introGrace(ensemble, options = {}) {
+  const o = { ...SECTION_DEFAULTS, ...options };
+  return Math.max(o.introGrace, o.introShare * (ensemble.end - ensemble.start));
+}
 
 /** Fusionne des intervalles [start, end] séparés de moins de `gap`. */
 export function mergeSpans(spans, gap = 0) {
@@ -97,10 +108,11 @@ export function analyzeSong(ensemble, options = {}) {
   // Déploiement : un instrument est sur scène pendant ses périodes d'activité (les
   // silences courts ne comptent pas), et reste en place après sa dernière note.
   const songStart = ensemble.start;
+  const grace = introGrace(ensemble, o);
   const deploy = inst.map((ins) => {
     const spans = mergeSpans(ins.busy ?? [[ins.start, ins.end]], o.restGap);
     if (!spans.length) return [];
-    if (spans[0][0] <= songStart + o.introGrace) spans[0][0] = -Infinity;
+    if (spans[0][0] <= songStart + grace) spans[0][0] = -Infinity;
     spans[spans.length - 1][1] = Infinity;
     return spans;
   });

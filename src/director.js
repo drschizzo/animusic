@@ -9,7 +9,7 @@
 
 import { countOnsets, smoothstep, lerp, clamp, lowerBound } from './util.js';
 import { ballPosition } from './choreography.js';
-import { SECTION_DEFAULTS } from './sections.js';
+import { SECTION_DEFAULTS, introGrace } from './sections.js';
 
 export const DIRECTOR_DEFAULTS = {
   minShot: 3.5,
@@ -61,10 +61,11 @@ export function planShots(ensemble, options = {}) {
   const rate = inst.map((i) => i.onsets.length / Math.max(1, t1 - t0));
   const first = inst.map((i) => i.onsets[0] ?? Infinity);
   // Entrées en scène : l'instrument sort du sol (voir sections.js) ; on le cadre pendant sa montée.
-  const { rise, introGrace } = SECTION_DEFAULTS;
+  const { rise } = SECTION_DEFAULTS;
+  const grace = introGrace(ensemble);
   const entries = inst
     .map((ins, k) => ({ k, time: (ins.busy?.[0]?.[0] ?? Infinity) - rise }))
-    .filter((e) => Number.isFinite(e.time) && e.time + rise > ensemble.start + introGrace)
+    .filter((e) => Number.isFinite(e.time) && e.time + rise > ensemble.start + grace)
     .sort((a, b) => a.time - b.time);
 
   const wide = () => ({
