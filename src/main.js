@@ -45,7 +45,11 @@ function rebuild() {
   shotPlan = planShots(ensemble);
 
   const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad', bells: 'mallet', laser: 'pad', bowed: 'pad', winds: 'pad', plucked: 'mallet', keys: 'mallet' };
-  const notes = parts
+  // Pistes « son seul » (doublures couvertes, pistes quasi muettes) : jouées, sans instrument.
+  const soundOnly = song.tracks.flatMap((t, i) =>
+    t.role === 'sound' && !t.percussion ? [{ kind: 'pads', notes: t.notes.map((n) => ({ ...n, track: i })) }] : [],
+  );
+  const notes = [...parts, ...soundOnly]
     .filter((p) => voiceOf[p.kind])
     .flatMap((p) =>
       p.notes.map((n) => ({

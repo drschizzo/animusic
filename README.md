@@ -21,6 +21,8 @@ change à chaque section et un réalisateur filme le tout comme un concert.
   envoyé nulle part), puis la scène est animée **sur le vrai son** ; un sélecteur permet d'écouter la transcription.
 - Chaque piste reçoit automatiquement un instrument (**Billes**, **Basse**, **Orgue**, **Carillon**,
   **Harpe laser**, **Cordes frottées**, **Clavier**, **Batterie**), modifiable dans la liste des pistes, ou **Masquée**.
+  Une piste qu'on n'entend pas (volume quasi nul, ou doublure couverte par une piste plus forte
+  d'au moins 10 dB, comme des cordes lentes sous un piano) passe en **Son seul** : jouée, sans instrument à l'écran.
   Plusieurs pistes peuvent partager le même instrument.
 - **Caméra** : *Réalisateur* (plans automatiques), *Orbite*, ou *Libre* (souris). Toucher la vue passe en libre.
 - **Barre de lecture** pour naviguer dans le morceau ; **Retard image** pour corriger une latence audio mal
@@ -208,7 +210,7 @@ l'image suit l'horloge de rendu audio.
 | `src/audioImport.js`, `src/transcribe.js`, `src/drumDetect.js`, `src/audioArrange.js` | Import d'un enregistrement : décodage, transcription, batterie, répartition |
 | `src/main.js` | Interface et boucle de rendu |
 
-Outils : `tools/bench.mjs`, `tools/collide.mjs`,
+Outils : `tools/gm-attack.mjs` (table des temps d'attaque de la banque, `src/gmAttack.js`), `tools/bench.mjs`, `tools/collide.mjs`,
 `tools/smoke.mjs`, `tools/shot.mjs` (captures d'écran à un instant donné), `tools/stress-midi.mjs` (fichiers MIDI de stress), `tools/audio-bench.cjs` (précision de l'import
 audio : `node tools/audio-bench.cjs morceau.mp3` à côté de `morceau.mid`, ffmpeg requis).
 

@@ -17,6 +17,7 @@ import { buildBowed } from './bowed.js';
 import { buildWinds, windStyle } from './winds.js';
 import { mergeEvents, clamp } from './util.js';
 import { mergeSpans } from './sections.js';
+import { GM_ATTACK } from './gmAttack.js';
 
 export const ROLES = {
   balls: 'Billes (marimba)',
@@ -29,6 +30,7 @@ export const ROLES = {
   pads: 'Orgue',
   laser: 'Harpe laser',
   drums: 'Batterie',
+  sound: 'Son seul (sans instrument)',
   off: 'Masquée',
 };
 
@@ -109,6 +111,82 @@ export function classifyTrack(track) {
   return 'balls';
 }
 
+/** Valeur d'un contrôleur à l'instant t (événements triés), ou `def` avant le premier. */
+function ccAt(events, t, def) {
+  let v = def;
+  for (const e of events) {
+    if (e.time > t + 1e-6) break;
+    v = e.value;
+  }
+  return v;
+}
+
+const dB = (x) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
+
+/**
+ * Niveau sonore estimé d'une piste (dB, 0 = tout au maximum) : volume (CC7) et
+ * expression (CC11) du fichier, vélocité, et part de l'attaque de l'instrument que
+ * la note a le temps de jouer (des cordes qui mettent 0,3 s à s'établir ne font
+ * qu'un souffle sur une note de 0,08 s). Moyenne en énergie sur les notes.
+ */
+export function trackLevel(track) {
+  if (!track.notes?.length) return -Infinity;
+  const ccs = track.ccs ?? [];
+  const vol = ccs.filter((e) => e.number === 7);
+  const expr = ccs.filter((e) => e.number === 11);
+  const attack = track.percussion ? 0 : (GM_ATTACK[track.program] ?? 0);
+  let energy = 0;
+  for (const n of track.notes) {
+    // Gains MIDI en loi carrée (convention General MIDI) : 40·log10(v/127).
+    const gain = (ccAt(vol, n.time, 100) / 127) ** 2 * (ccAt(expr, n.time, 127) / 127) ** 2 * (n.velocity ?? 0.8) ** 2;
+    const reached = attack > 0 ? Math.min(1, n.duration / attack) : 1;
+    energy += (gain * reached) ** 2;
+  }
+  return dB(Math.sqrt(energy / track.notes.length));
+}
+
+/**
+ * Pistes qui ne méritent pas d'instrument à l'écran parce qu'on ne les entend pas :
+ * quasi muettes (plus de 30 dB sous la piste la plus forte), ou doublure couverte
+ * (la plupart de leurs notes sont jouées en même temps, à la même hauteur, par une
+ * piste plus forte d’au moins 10 dB). La batterie n'est jamais concernée.
+ */
+export function hiddenTracks(tracks) {
+  const levels = tracks.map((t) => (t.percussion ? -Infinity : trackLevel(t)));
+  const loudest = Math.max(...levels);
+  if (!Number.isFinite(loudest)) return [];
+  // Index par hauteur des instants d'attaque de chaque piste.
+  const onsets = tracks.map((t) => {
+    const m = new Map();
+    for (const n of t.notes ?? []) (m.get(n.midi) ?? m.set(n.midi, []).get(n.midi)).push(n.time);
+    for (const list of m.values()) list.sort((a, b) => a - b);
+    return m;
+  });
+  const near = (list, t) => {
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid] < t - 0.05) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < list.length && list[lo] <= t + 0.05;
+  };
+  const hidden = [];
+  tracks.forEach((t, i) => {
+    if (t.percussion || !t.notes?.length) return;
+    if (levels[i] < loudest - 30) return hidden.push(i);
+    const masked = tracks.some((u, j) => {
+      if (j === i || u.percussion || levels[j] < levels[i] + 10) return false;
+      let shared = 0;
+      for (const n of t.notes) if (near(onsets[j].get(n.midi) ?? [], n.time)) shared++;
+      return shared >= 0.6 * t.notes.length;
+    });
+    if (masked) hidden.push(i);
+  });
+  return hidden;
+}
+
 /**
  * Rôles de toutes les pistes d'un morceau : classification individuelle, puis
  * passe globale. S'il n'y a pas de basse, la piste mélodique nettement plus grave
@@ -116,10 +194,12 @@ export function classifyTrack(track) {
  */
 export function assignRoles(tracks) {
   const roles = tracks.map(classifyTrack);
+  // Une piste qu'on n'entend pas ne doit pas avoir d'instrument à l'écran : elle reste jouée.
+  hiddenTracks(tracks).forEach((i) => (roles[i] = 'sound'));
   if (!roles.includes('bass')) {
     const melodic = tracks
       .map((t, i) => ({ i, s: trackStats(t.notes) }))
-      .filter(({ i }) => roles[i] !== 'drums')
+      .filter(({ i }) => roles[i] !== 'drums' && roles[i] !== 'sound')
       .sort((a, b) => a.s.meanPitch - b.s.meanPitch);
     if (melodic.length >= 2) {
       const [low, next] = melodic;
@@ -183,7 +263,7 @@ export function groupParts(tracks, { maxParts = 10 } = {}) {
   const byKey = new Map();
   tracks.forEach((t, i) => {
     const kind = t.role;
-    if (!kind || kind === 'off' || !t.notes?.length) return;
+    if (!kind || kind === 'off' || kind === 'sound' || !t.notes?.length) return;
     const key = kind === 'drums' || kind === 'balls' ? kind : `${kind}:${t.program ?? -1}`;
     let part = byKey.get(key);
     if (!part) {
