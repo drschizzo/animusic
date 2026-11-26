@@ -1,7 +1,7 @@
 // Test de fumée du build de production dans un vrai navigateur :
 // sert dist/ sous /animusic/ (comme GitHub Pages), charge la page, vérifie qu'il n'y a
-// pas d'erreur, que la démo se construit, que la lecture avance, que les échantillons
-// se chargent et qu'un fichier MIDI se lit.
+// pas d'erreur, que la démo se construit, que la lecture avance, que le lecteur SoundFont
+// se charge et joue, et qu'un fichier MIDI se lit.
 //
 //   npm run build && node tools/smoke.mjs
 //
@@ -22,9 +22,10 @@ try {
   playwright = require(join(execSync('npm root -g').toString().trim(), 'playwright'));
 }
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.mp3': 'audio/mpeg' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.mp3': 'audio/mpeg', '.sf3': 'application/octet-stream' };
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (path === '/favicon.ico') return res.writeHead(204).end(); // demandée par le navigateur, pas par la page
   if (!path.startsWith('/animusic/')) return res.writeHead(404).end();
   const file = join('dist', path.slice('/animusic/'.length) || 'index.html');
   try {
@@ -89,6 +90,9 @@ const check = (ok, msg) => {
 
 const browser = await playwright.chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || undefined,
+  // Chromium complet (nouveau mode sans écran) : le « headless shell » par défaut ne fait
+  // sortir aucun son d'un AudioWorklet, donc rien du lecteur SoundFont.
+  channel: process.env.CHROMIUM_PATH ? undefined : 'chromium',
   args: ['--autoplay-policy=no-user-gesture-required'],
 });
 try {
@@ -104,16 +108,32 @@ try {
   await page.goto(url);
   await page.waitForFunction(() => window.animusic?.ensemble, null, { timeout: 120000 });
   const kinds = await page.evaluate(() => window.animusic.ensemble.instruments.map((i) => i.kind));
-  check(kinds.length === 7, `démo construite avec ${kinds.join(', ')}`);
+  check(kinds.length === 8, `démo construite avec ${kinds.join(', ')}`);
 
-  await page.waitForFunction(() => document.getElementById('sound').textContent === '', null, { timeout: 30000 });
-  const ready = await page.evaluate(() => window.animusic.player.ready.size);
-  check(ready >= 5, `${ready} jeux d'échantillons chargés`);
+  await page.waitForFunction(() => document.getElementById('sound').textContent === '', null, { timeout: 120000 });
+  const sf = await page.evaluate(() => window.animusic.player.soundfontOn);
+  check(sf, 'lecteur SoundFont chargé');
 
+  // Niveau mesuré à la sortie du lecteur SoundFont (les synthés de secours n'y passent pas).
+  await page.evaluate(() => {
+    const p = window.animusic.player;
+    const an = p.rawContext.createAnalyser();
+    p.limiter.connect(an);
+    window.__peak = 0;
+    const buf = new Float32Array(an.fftSize);
+    window.__meter = setInterval(() => {
+      an.getFloatTimeDomainData(buf);
+      for (const v of buf) window.__peak = Math.max(window.__peak, Math.abs(v));
+    }, 20);
+  });
   await page.click('#play');
   await page.waitForTimeout(2500);
-  const t = await page.evaluate(() => window.animusic.player.currentTime());
-  check(t > 0.5, `la lecture avance (t = ${t.toFixed(2)} s)`);
+  const playing = await page.evaluate(() => {
+    clearInterval(window.__meter);
+    return { t: window.animusic.player.currentTime(), peak: window.__peak };
+  });
+  check(playing.t > 0.5, `la lecture avance (t = ${playing.t.toFixed(2)} s)`);
+  check(playing.peak > 0.01, `le SoundFont joue (crête ${playing.peak.toFixed(3)})`);
 
   // Export glTF de la démo (animation cuite).
   const download = page.waitForEvent('download', { timeout: 240000 });
@@ -129,8 +149,8 @@ try {
   [60, 64, 67, 72].forEach((n, i) => track.addNote({ midi: n, time: i * 0.3, duration: 0.25 }));
   await page.setInputFiles('#file', { name: 'test.mid', mimeType: 'audio/midi', buffer: Buffer.from(midi.toArray()) });
   await page.waitForFunction(() => window.animusic.ensemble.instruments.length === 1, null, { timeout: 60000 });
-  const stats = await page.textContent('#stats');
-  check(stats.trim() === 'billes : 4 notes', `fichier MIDI lu (${stats})`);
+  const read = await page.evaluate(() => window.animusic.ensemble.instruments.map((i) => `${i.kind} : ${i.line.length} notes`).join(', '));
+  check(read === 'balls : 4 notes', `fichier MIDI lu (${read})`);
 
   // Import d'un enregistrement (WAV synthétique) : transcription + batterie + lecture de l'original.
   await page.setInputFiles('#file', { name: 'essai.wav', mimeType: 'audio/wav', buffer: makeWav() });
