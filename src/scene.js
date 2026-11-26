@@ -8,6 +8,7 @@ import { BellsView } from './bellsView.js';
 import { LaserView } from './laserView.js';
 import { KeysView } from './keysView.js';
 import { BowedView } from './bowedView.js';
+import { WindsView } from './windsView.js';
 import { Environment } from './environment.js';
 import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
@@ -22,7 +23,7 @@ const PIXEL_BUDGET = {
   low: { cap: 1, budget: 1920 * 1080 },
 };
 
-const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, bowed: BowedView, keys: KeysView };
+const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, bowed: BowedView, winds: WindsView, plucked: StringsView, keys: KeysView };
 
 /** Boîte englobante des pièces solides (sans effets lumineux ni maillages instanciés). */
 function solidBox(root) {
@@ -132,7 +133,10 @@ export class Stage {
       root.position.copy(saved[0]);
       root.quaternion.copy(saved[1]);
       root.updateMatrixWorld(true);
-      const halo = floorHalo((local.max.x - local.min.x) / 2 + 0.15, (local.max.z - local.min.z) / 2 + 0.15);
+      // Liseré au sol dans la couleur de la piste principale : il identifie l'instrument
+      // (et s'avive quand il joue, éclate pendant qu'il sort du sol).
+      const color = trackColors[ensemble.instruments[k].mainTrack] ?? new THREE.Color(0x49d8ff);
+      const halo = floorHalo((local.max.x - local.min.x) / 2 + 0.15, (local.max.z - local.min.z) / 2 + 0.15, color);
       // Centre de la boîte (repère de l'instrument) ramené dans la scène.
       local.getCenter(halo.position).applyQuaternion(root.quaternion).add(root.position).setY(0.006);
       halo.quaternion.copy(root.quaternion);
@@ -172,16 +176,17 @@ export class Stage {
       const { height, halo } = this.hatches[k];
       lift.visible = d > 0;
       lift.position.y = d < 1 ? -height * (1 - d) : Math.min(0.08, (d - 1) * 0.6);
-      if (halo) {
-        const glow = d > 0 && d < 1 ? Math.sin(Math.PI * Math.min(1, d)) : 0;
-        halo.visible = glow > 0.01;
-        halo.material.uniforms.uIntensity.value = 2.5 * glow;
-      }
       if (d > 0) v.update(t);
-      // Activité récente (pour les projecteurs qui suivent l'action).
+      // Activité récente (pour les projecteurs qui suivent l'action, et le liseré au sol).
       const on = instruments[k].onsets;
       const i = lowerBound(on, t + 1e-6) - 1;
-      this.spots[k].level = d >= 1 && i >= 0 ? Math.exp(-(t - on[i]) * 1.5) : 0;
+      const activity = i >= 0 ? Math.exp(-(t - on[i]) * 1.5) : 0;
+      this.spots[k].level = d >= 1 ? activity : 0;
+      if (halo) {
+        const rising = d > 0 && d < 1 ? Math.sin(Math.PI * Math.min(1, d)) : 0;
+        halo.visible = d > 0;
+        halo.material.uniforms.uIntensity.value = 2.5 * rising + (d >= 1 ? 0.3 + 0.9 * activity : 0);
+      }
     });
     if (this.song) this.mood = sectionAt(this.song, t);
     // Battue du morceau (grosse caisse) : le décor respire avec elle.

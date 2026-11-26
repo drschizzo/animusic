@@ -8,7 +8,8 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { parseMidi } from '../src/midi.js';
-import { assignRoles, buildEnsemble } from '../src/arranger.js';
+import { assignRoles, buildEnsemble, groupParts } from '../src/arranger.js';
+import { windState } from '../src/winds.js';
 import { planShots, cameraAt } from '../src/director.js';
 import { activeBallRange, ballPosition, ballScale, launcherPose, barPulse } from '../src/choreography.js';
 import { armAngles, hitPulse } from '../src/drums.js';
@@ -36,7 +37,9 @@ function frame(ens, plan, t, song) {
       for (const b of m.bars) check(Object.values(barPulse(m, b, t)).filter((v) => v !== Infinity));
     } else if (inst.kind === 'drums') {
       for (const p of m.pieces) check(armAngles(m, p, t), hitPulse(m, p, t).pulse);
-    } else if (inst.kind === 'bass') {
+    } else if (inst.kind === 'winds') {
+      for (const p of m.pipes) check(Object.values(windState(m, p, t)));
+    } else if (inst.kind === 'bass' || inst.kind === 'plucked') {
       for (const s of m.strings) check(stringVibration(m, s, t).amp);
       for (const c of m.carriers) check(Object.values(carrierPose(m, c, t)));
     } else if (inst.kind === 'pads') {
@@ -65,16 +68,16 @@ for (const file of process.argv.slice(2)) {
   const song = parseMidi(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), basename(file));
   const parseMs = performance.now() - t0;
 
-  const parts = { balls: [], bass: [], pads: [], drums: [], bells: [], laser: [], bowed: [], keys: [] };
   const assigned = assignRoles(song.tracks);
   const roles = song.tracks.map((tr, ti) => {
     tr.role = assigned[ti];
-    parts[tr.role].push(...tr.notes.map((n) => ({ ...n, track: ti })));
     return `${tr.name}[${tr.program}]→${tr.role}(${tr.notes.length})`;
   });
+  const parts = groupParts(song.tracks);
+  const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
 
   t0 = performance.now();
-  const ens = buildEnsemble(parts);
+  const ens = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1));
   const buildMs = performance.now() - t0;
   t0 = performance.now();
   const plan = planShots(ens);
@@ -98,7 +101,8 @@ for (const file of process.argv.slice(2)) {
     const extra =
       i.kind === 'balls' ? ` ${m.bars.length} lames, rayon ${m.radius.toFixed(1)} m, ${m.maxConcurrent} billes max`
       : i.kind === 'drums' ? ` ${m.pieces.length} éléments`
-      : i.kind === 'bass' ? ` ${m.strings.length} cordes, largeur ${m.width.toFixed(1)} m`
+      : i.kind === 'bass' || i.kind === 'plucked' ? ` ${m.strings.length} cordes, largeur ${m.width.toFixed(1)} m`
+      : i.kind === 'winds' ? ` ${m.pipes.length} tuyaux (${m.style}), largeur ${m.width.toFixed(1)} m`
       : i.kind === 'bells' ? ` ${m.bells.length} cloches, largeur ${m.width.toFixed(1)} m`
       : i.kind === 'laser' ? ` ${m.emitters.length} rayons, largeur ${m.width.toFixed(1)} m`
       : i.kind === 'bowed' ? ` ${m.strings.length} cordes, ${m.bows.length} archets`

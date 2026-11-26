@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import './style.css';
-import { buildEnsemble, assignRoles, ROLES } from './arranger.js';
+import { buildEnsemble, assignRoles, groupParts, ROLES } from './arranger.js';
 import { planShots, cameraAt } from './director.js';
 import { parseMidi, demoSong } from './midi.js';
 import { isAudioFile, importAudio } from './audioImport.js';
@@ -29,34 +29,33 @@ function showError(msg) {
 
 /** (Re)construit la scène à partir du rôle de chaque piste. */
 function rebuild() {
-  const parts = Object.fromEntries(Object.keys(ROLES).filter((r) => r !== 'off').map((r) => [r, []]));
-  song.tracks.forEach((t, ti) => {
-    if (t.role !== 'off') parts[t.role].push(...t.notes.map((n) => ({ ...n, track: ti })));
-  });
+  // Une partie musicale = un instrument (voir groupParts).
+  const parts = groupParts(song.tracks);
   player.stop();
   updatePlayButton();
-  const total = Object.values(parts).reduce((a, p) => a + p.length, 0);
-  if (total === 0) {
+  if (!parts.length) {
     showError('Aucune piste à jouer.');
     return;
   }
   showError('');
   // Expression (pédale de sustain, pitch bend, modulation) de chaque piste.
   const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
-  ensemble = buildEnsemble(parts, controls);
+  ensemble = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1));
   stage.build(ensemble, song.tracks.map((_, i) => colorFor(i)));
   shotPlan = planShots(ensemble);
 
-  const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad', bells: 'mallet', laser: 'pad', bowed: 'pad', keys: 'mallet' };
-  const notes = Object.keys(voiceOf).flatMap((role) =>
-    parts[role].map((n) => ({
-      ...n,
-      // La pédale de sustain prolonge le son au-delà du relâché de la touche.
-      duration: sustainedEnd(n, song.tracks[n.track].sustain) - n.time,
-      voice: voiceOf[role],
-      program: song.tracks[n.track].program ?? 0,
-    })),
-  );
+  const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad', bells: 'mallet', laser: 'pad', bowed: 'pad', winds: 'pad', plucked: 'mallet', keys: 'mallet' };
+  const notes = parts
+    .filter((p) => voiceOf[p.kind])
+    .flatMap((p) =>
+      p.notes.map((n) => ({
+        ...n,
+        // La pédale de sustain prolonge le son au-delà du relâché de la touche.
+        duration: sustainedEnd(n, song.tracks[n.track].sustain) - n.time,
+        voice: voiceOf[p.kind],
+        program: song.tracks[n.track].program ?? 0,
+      })),
+    );
   const kit = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
   const drumHits = kit ? kit.pieces.flatMap((p) => p.hits.map((h) => ({ ...h, piece: p.name }))) : [];
   duration = ensemble.end;
@@ -67,9 +66,8 @@ function rebuild() {
   $('seek').value = 0;
   loadSounds(notes, drumHits.length > 0);
 
-  const labels = { balls: 'billes', bass: 'basse', pads: 'orgue', drums: 'batterie', bells: 'carillon', laser: 'harpe laser', bowed: 'cordes frottées', keys: 'clavier' };
   $('stats').textContent = ensemble.instruments
-    .map((i) => `${labels[i.kind]} : ${i.onsets.length} notes`)
+    .map((i) => `${ROLES[i.kind].toLowerCase()} (${i.tracks.map((t) => song.tracks[t].name.trim()).join(', ')}) : ${i.onsets.length} notes`)
     .join(' · ');
 }
 

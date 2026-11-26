@@ -98,7 +98,7 @@ export async function exportGLTF(stage, ensemble, plan, options) {
   };
 
   // Noms lisibles dans Blender : préfixe de l'instrument (billes, batterie, basse, orgue).
-  const LABELS = { balls: 'billes', drums: 'batterie', bass: 'basse', pads: 'orgue', bells: 'carillon', laser: 'harpe_laser', bowed: 'cordes_frottees', keys: 'clavier' };
+  const LABELS = { balls: 'billes', drums: 'batterie', bass: 'basse', pads: 'orgue', bells: 'carillon', laser: 'harpe_laser', bowed: 'cordes_frottees', winds: 'vents', plucked: 'cordes_pincees', keys: 'clavier' };
   let counter = 0;
   stage.views.forEach((v, k) => {
     const viewRoot = v.group ?? v.content;

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildBassStrings, carrierPose, stringVibration } from '../src/strings.js';
 import { buildPipes, pipeState } from '../src/pipes.js';
-import { classifyTrack, assignRoles, buildEnsemble } from '../src/arranger.js';
+import { classifyTrack, assignRoles, buildEnsemble, groupParts } from '../src/arranger.js';
+import { buildWinds, windState } from '../src/winds.js';
 import { buildBells, hammerAngle, bellState } from '../src/bells.js';
 import { buildLaserHarp, laserState, crystalState } from '../src/laser.js';
 import { buildKeyboard, keyDepth, keyHammerAngle, tineVibration } from '../src/keys.js';
@@ -71,19 +72,26 @@ test('classification des pistes', () => {
   const long = [60, 64].map((midi) => ({ midi, time: 0, duration: 1.5, velocity: 0.7 }));
   const short = [60, 64, 67, 72].map((midi, i) => ({ midi, time: i * 0.2, duration: 0.15, velocity: 0.7 }));
   assert.equal(classifyTrack({ program: 48, notes: long }), 'pads');
-  // « Ensemble de cordes » mais notes courtes : c'est une ligne mélodique.
-  assert.equal(classifyTrack({ program: 48, notes: short }), 'balls');
+  // « Ensemble de cordes » mais notes courtes et détachées : jouées pincées.
+  assert.equal(classifyTrack({ program: 48, notes: short }), 'plucked');
   assert.equal(classifyTrack({ program: 0, notes: bassNotes }), 'bass');
   const chords = [60, 64, 67].map((midi) => ({ midi, time: 0, duration: 2, velocity: 0.7 }));
-  assert.equal(classifyTrack({ program: 0, notes: chords }), 'pads');
+  // Un piano reste un clavier, même en accords tenus : on doit voir les touches.
+  assert.equal(classifyTrack({ program: 0, notes: chords }), 'keys');
   const melody = [72, 74, 76, 77].map((midi, i) => ({ midi, time: i * 0.3, duration: 0.25, velocity: 0.7 }));
   assert.equal(classifyTrack({ program: 0, notes: melody }), 'keys');
-  assert.equal(classifyTrack({ program: 24, notes: melody }), 'balls');
+  assert.equal(classifyTrack({ program: 24, notes: melody }), 'plucked');
+  assert.equal(classifyTrack({ program: 106, notes: melody }), 'plucked'); // shamisen
+  assert.equal(classifyTrack({ program: 12, notes: melody }), 'balls'); // marimba
   assert.equal(classifyTrack({ program: 14, notes: melody }), 'bells');
-  // Flûte soliste aux notes tenues : harpe laser ; en accords plaqués : orgue.
+  // Vents : flûte soliste comme cuivres en accords sont soufflés ; un lead de synthé est un rayon.
   const solo = [72, 74, 76, 77].map((midi, i) => ({ midi, time: i * 0.5, duration: 0.45, velocity: 0.7 }));
-  assert.equal(classifyTrack({ program: 73, notes: solo }), 'laser');
-  assert.equal(classifyTrack({ program: 61, notes: chords }), 'pads');
+  assert.equal(classifyTrack({ program: 73, notes: solo }), 'winds');
+  assert.equal(classifyTrack({ program: 60, notes: solo }), 'winds'); // cor
+  assert.equal(classifyTrack({ program: 61, notes: chords }), 'winds');
+  assert.equal(classifyTrack({ program: 81, notes: solo }), 'laser');
+  // Programme inconnu (import audio) : d'après les notes.
+  assert.equal(classifyTrack({ program: -1, notes: chords }), 'pads');
 });
 
 test('passe globale : sans billes, la piste de clavier la plus fournie les reçoit', () => {
@@ -94,8 +102,8 @@ test('passe globale : sans billes, la piste de clavier la plus fournie les reço
     { program: 14, notes: line(84, 4) },
   ];
   assert.deepEqual(assignRoles(tracks), ['keys', 'balls', 'bells']);
-  // Une guitare tient déjà les billes : le piano reste au clavier.
-  assert.deepEqual(assignRoles([{ program: 24, notes: line(60, 8) }, { program: 0, notes: line(72, 20) }]), ['balls', 'keys']);
+  // Une marimba tient déjà les billes : le piano reste au clavier.
+  assert.deepEqual(assignRoles([{ program: 12, notes: line(60, 8) }, { program: 0, notes: line(72, 20) }]), ['balls', 'keys']);
 });
 
 test('passe globale : la voix nettement plus grave devient la basse', () => {
@@ -218,4 +226,66 @@ test('clavier : touches noires et blanches, enfoncement tenu, marteau à l\'heur
   assert.equal(tineVibration(m, e, 0.9).amp, 0);
   assert.ok(tineVibration(m, e, 1.24).amp > 0.79);
   assert.ok(tineVibration(m, e, 4).amp < 0.01);
+});
+
+const phraseAt = (base, n, step = 0.3) => Array.from({ length: n }, (_, i) => ({ midi: base + (i % 7), time: i * step, duration: step * 0.9, velocity: 0.8 }));
+
+test('une partie par piste : batterie et billes réunies, pistes doublées partagées', () => {
+  const tracks = [
+    { role: 'winds', program: 60, notes: phraseAt(60, 10) },
+    { role: 'winds', program: 73, notes: phraseAt(72, 10) },
+    { role: 'winds', program: 73, notes: phraseAt(74, 6) }, // seconde flûte : même instrument
+    { role: 'plucked', program: 106, notes: phraseAt(64, 12) },
+    { role: 'drums', program: 0, notes: [{ midi: 36, time: 0, duration: 0.1, velocity: 1 }] },
+    { role: 'drums', program: 0, notes: [{ midi: 38, time: 1, duration: 0.1, velocity: 1 }] },
+    { role: 'balls', program: 12, notes: phraseAt(60, 5) },
+    { role: 'off', program: 0, notes: phraseAt(60, 5) },
+  ];
+  const parts = groupParts(tracks);
+  const summary = parts.map((p) => `${p.kind}:${p.tracks.join('+')}`).sort();
+  assert.deepEqual(summary, ['balls:6', 'drums:4+5', 'plucked:3', 'winds:0', 'winds:1+2']);
+  // Trop de parties : les plus petites rejoignent la plus grosse de même type.
+  const many = Array.from({ length: 6 }, (_, i) => ({ role: 'winds', program: 56 + i, notes: phraseAt(60, 4 + i) }));
+  const capped = groupParts(many, { maxParts: 3 });
+  assert.equal(capped.length, 3);
+  assert.equal(capped.reduce((a, p) => a + p.notes.length, 0), many.reduce((a, t) => a + t.notes.length, 0));
+});
+
+test('placement : chaque instance a sa place, sans chevauchement', () => {
+  const tracks = [
+    { role: 'winds', program: 63, notes: phraseAt(60, 40) },
+    { role: 'winds', program: 60, notes: phraseAt(55, 30) },
+    { role: 'winds', program: 73, notes: phraseAt(72, 20) },
+    { role: 'plucked', program: 106, notes: phraseAt(64, 30) },
+    { role: 'plucked', program: 29, notes: phraseAt(52, 10) },
+    { role: 'bass', program: 35, notes: phraseAt(36, 30) },
+    { role: 'keys', program: 7, notes: phraseAt(60, 10) },
+    { role: 'bowed', program: 40, notes: phraseAt(67, 10) },
+    { role: 'pads', program: 19, notes: phraseAt(48, 10, 1) },
+    { role: 'balls', program: 12, notes: phraseAt(70, 20) },
+  ];
+  tracks.forEach((t, i) => t.notes.forEach((n) => (n.track = i)));
+  const e = buildEnsemble(groupParts(tracks), [], tracks.map((t) => t.program));
+  assert.equal(e.instruments.length, 10);
+  const placed = e.instruments.filter((i) => i.model.origin);
+  for (const a of placed) {
+    for (const b of placed) {
+      if (a === b) continue;
+      const d = Math.hypot(a.model.origin[0] - b.model.origin[0], a.model.origin[2] - b.model.origin[2]);
+      assert.ok(d > (a.model.width + b.model.width) / 2 * 0.9, `${a.kind} / ${b.kind} se chevauchent (${d.toFixed(2)} m)`);
+    }
+  }
+  // Style des vents d'après le timbre.
+  assert.deepEqual(e.instruments.filter((i) => i.kind === 'winds').map((i) => i.model.style).sort(), ['brass', 'brass', 'flute']);
+  assert.ok(e.instruments.every((i) => i.mainTrack >= 0 || i.kind === 'balls'));
+});
+
+test('vents : la soupape anticipe, le souffle dure autant que la note', () => {
+  const m = buildWinds([{ midi: 67, time: 2, duration: 1, velocity: 0.8, track: 0 }]);
+  const p = m.pipes[0];
+  assert.equal(windState(m, p, 1.7).valve, 0);
+  assert.ok(windState(m, p, 1.95).valve > 0);
+  assert.equal(windState(m, p, 1.95).level, 0);
+  assert.ok(windState(m, p, 2.5).level > 0.8);
+  assert.ok(windState(m, p, 3.5).level < 0.01);
 });

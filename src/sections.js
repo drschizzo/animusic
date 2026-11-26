@@ -1,7 +1,6 @@
 // Structure du morceau : module pur. Découpe le morceau en sections (intro, couplet,
 // refrain…) à partir de l'activité de chaque instrument, et calcule quand chaque
-// instrument doit être déployé sur scène (il sort du sol avant d'entrer et y
-// redescend pendant ses longs silences).
+// instrument entre en scène (il sort du sol avant sa première note s'il arrive tard).
 
 import { upperBound, smoothstep, clamp, easeBack } from './util.js';
 
@@ -12,7 +11,6 @@ export const SECTION_DEFAULTS = {
   threshold: 0.18, // nouveauté minimale pour couper
   rise: 2.4, // durée de la sortie du sol
   fall: 2.0, // durée de la descente
-  restGap: 40, // silence au-delà duquel l'instrument redescend (rare : un va-et-vient lasse vite)
   introGrace: 12, // les instruments qui entrent avant ce délai sont déjà en place au début…
   introShare: 0.12, // … ou avant cette fraction du morceau, si elle est plus longue
 };
@@ -110,11 +108,11 @@ export function analyzeSong(ensemble, options = {}) {
   const songStart = ensemble.start;
   const grace = introGrace(ensemble, o);
   const deploy = inst.map((ins) => {
-    const spans = mergeSpans(ins.busy ?? [[ins.start, ins.end]], o.restGap);
+    // Comme dans un orchestre, un musicien qui se tait reste sur scène : l'instrument
+    // n'entre qu'une fois (en sortant du sol s'il arrive tard) et ne repart pas.
+    const spans = mergeSpans(ins.busy ?? [[ins.start, ins.end]]);
     if (!spans.length) return [];
-    if (spans[0][0] <= songStart + grace) spans[0][0] = -Infinity;
-    spans[spans.length - 1][1] = Infinity;
-    return spans;
+    return [[spans[0][0] <= songStart + grace ? -Infinity : spans[0][0], Infinity]];
   });
   return { sections, deploy, options: o };
 }

@@ -14,7 +14,8 @@ export class StringsView {
     g.rotation.y = model.yaw;
     parent.add(g);
 
-    const frame = mat.lacquer(0x1a0d10, 0.3);
+    // Basse : châssis laqué sombre ; cordes pincées (guitare, shamisen, harpe) : bois clair.
+    const frame = model.style === 'plucked' ? mat.wood(0x9a5a28) : mat.lacquer(0x1a0d10, 0.3);
     const chrome = mat.chrome();
     const gold = mat.gold();
     const dark = mat.gunmetal();
