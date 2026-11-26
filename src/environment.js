@@ -490,9 +490,9 @@ export class Environment {
   }
 
   /** Adapte le décor à la taille de l'ensemble (rayon de l'arc de lames). */
-  setRadius(R) {
+  setRadius(R, stage = R + 6.2) {
     this.radius = R;
-    const stageR = (this.stageRadius = R + 6.2);
+    const stageR = (this.stageRadius = Math.max(R + 6.2, stage));
     this.floor.uniforms.uStageRadius.value = stageR;
     this.edge.scale.setScalar(stageR - 0.14);
     this.edge.scale.z = 1;

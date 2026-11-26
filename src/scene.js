@@ -13,7 +13,7 @@ import { Environment } from './environment.js';
 import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
 import { analyzeSong, deployAt, sectionAt } from './sections.js';
-import { floorHalo } from './parts.js';
+import { floorHalo, riserBlock } from './parts.js';
 import { lowerBound } from './util.js';
 
 /** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
@@ -36,6 +36,62 @@ function solidBox(root) {
     box.union(part.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
   });
   return box;
+}
+
+/**
+ * Monte chaque instrument de l'ensemble sur un élévateur (groupe déplacé verticalement
+ * pour l'entrée en scène) : sa vue, son estrade s'il est sur un gradin, et le liseré au
+ * sol dans la couleur de sa piste principale (identité de l'instrument). Sans rendu :
+ * utilisé aussi par le détecteur d'interpénétrations (tools/collide.mjs).
+ * @returns { lifts, views, hatches: [{ height, halo }] }
+ */
+export function mountInstruments(ensemble, trackColors, content) {
+  const lifts = ensemble.instruments.map(() => {
+    const lift = new THREE.Group();
+    content.add(lift);
+    return lift;
+  });
+  const views = ensemble.instruments.map((inst, k) => new VIEWS[inst.kind](inst.model, trackColors, lifts[k]));
+  const hatches = views.map((view, k) => {
+    const inst = ensemble.instruments[k];
+    if (inst.kind === 'balls') {
+      const box = solidBox(lifts[k]);
+      return { height: Number.isFinite(box.max.y) ? box.max.y + 0.1 : 4, halo: null };
+    }
+    const root = view.group ?? view.content;
+    const saved = [root.position.clone(), root.quaternion.clone()];
+    root.position.set(0, 0, 0);
+    root.quaternion.identity();
+    root.updateMatrixWorld(true);
+    const local = solidBox(root);
+    root.position.copy(saved[0]);
+    root.quaternion.copy(saved[1]);
+    const halfX = (local.max.x - local.min.x) / 2 + 0.15;
+    const halfZ = (local.max.z - local.min.z) / 2 + 0.15;
+    const center = local.getCenter(new THREE.Vector3()).setY(0).applyQuaternion(root.quaternion).add(root.position).setY(0);
+    const color = trackColors[inst.mainTrack] ?? new THREE.Color(0x49d8ff);
+    // Estrade : l'instrument est posé dessus, elle monte avec lui à son entrée.
+    const riser = inst.riser ?? 0;
+    if (riser > 0) {
+      root.position.y += riser + 0.003;
+      const block = riserBlock(halfX + 0.2, halfZ + 0.2, riser, color);
+      block.position.copy(center);
+      block.quaternion.copy(root.quaternion);
+      lifts[k].add(block);
+    }
+    root.updateMatrixWorld(true);
+    const box = solidBox(lifts[k]);
+    const height = Number.isFinite(box.max.y) ? box.max.y + 0.1 : 4;
+    // Liseré au sol (autour de l'estrade s'il y en a une) : il identifie l'instrument,
+    // s'avive quand il joue et éclate pendant qu'il sort du sol.
+    const pad = riser > 0 ? 0.35 : 0;
+    const halo = floorHalo(halfX + pad, halfZ + pad, color);
+    halo.position.copy(center).setY(0.006);
+    halo.quaternion.copy(root.quaternion);
+    content.add(halo);
+    return { height, halo };
+  });
+  return { lifts, views, hatches };
 }
 
 /** Scène Three.js : construit les objets à partir d'une chorégraphie et les pose à l'instant t. */
@@ -108,41 +164,10 @@ export class Stage {
   build(ensemble, trackColors) {
     this.clear();
     this.ensemble = ensemble;
-    this.environment.setRadius(ensemble.radius);
+    this.environment.setRadius(ensemble.radius, ensemble.stageRadius);
     this.kick = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
     this.song = analyzeSong(ensemble);
-    // Chaque instrument est monté sur un élévateur (groupe déplacé verticalement).
-    this.lifts = ensemble.instruments.map(() => {
-      const lift = new THREE.Group();
-      this.content.add(lift);
-      return lift;
-    });
-    this.views = ensemble.instruments.map((inst, k) => new VIEWS[inst.kind](inst.model, trackColors, this.lifts[k]));
-    // Hauteur de chaque instrument (pour le cacher entièrement sous le sol) et trappe
-    // lumineuse au sol, qui s'allume pendant qu'il monte ou descend.
-    this.hatches = this.views.map((view, k) => {
-      const box = solidBox(this.lifts[k]);
-      const height = Number.isFinite(box.max.y) ? box.max.y + 0.1 : 4;
-      if (ensemble.instruments[k].kind === 'balls') return { height, halo: null };
-      const root = view.group ?? view.content;
-      const saved = [root.position.clone(), root.quaternion.clone()];
-      root.position.set(0, 0, 0);
-      root.quaternion.identity();
-      root.updateMatrixWorld(true);
-      const local = solidBox(root);
-      root.position.copy(saved[0]);
-      root.quaternion.copy(saved[1]);
-      root.updateMatrixWorld(true);
-      // Liseré au sol dans la couleur de la piste principale : il identifie l'instrument
-      // (et s'avive quand il joue, éclate pendant qu'il sort du sol).
-      const color = trackColors[ensemble.instruments[k].mainTrack] ?? new THREE.Color(0x49d8ff);
-      const halo = floorHalo((local.max.x - local.min.x) / 2 + 0.15, (local.max.z - local.min.z) / 2 + 0.15, color);
-      // Centre de la boîte (repère de l'instrument) ramené dans la scène.
-      local.getCenter(halo.position).applyQuaternion(root.quaternion).add(root.position).setY(0.006);
-      halo.quaternion.copy(root.quaternion);
-      this.content.add(halo);
-      return { height, halo };
-    });
+    Object.assign(this, mountInstruments(ensemble, trackColors, this.content));
     this.mood = sectionAt(this.song, 0);
     this.spots = ensemble.instruments.map((inst) => ({ center: new THREE.Vector3(...inst.focus.center), level: 0 }));
 
@@ -162,9 +187,10 @@ export class Stage {
 
   /** Revient au plan d'ensemble initial. */
   resetView() {
-    const R = this.ensemble?.radius ?? 8;
-    this.controls.target.set(0, 1, -R * 0.3);
-    this.camera.position.set(0, 4 + R * 0.6, R * 1.3 + 5);
+    // Comme le plan d'ensemble du réalisateur : tout l'amphithéâtre, de face.
+    const S = this.ensemble?.stageRadius ?? 14.2;
+    this.controls.target.set(0, 1.5, -S * 0.42);
+    this.camera.position.set(0, 1.5 + S * 0.42 + 3, S * 0.73 + 4);
   }
 
   /** Pose tous les objets à l'instant musical t. */

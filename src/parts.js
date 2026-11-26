@@ -41,6 +41,25 @@ export function plinth(width, depth, height, { bottom = 0, color = 0x49d8ff } = 
   return { group, led };
 }
 
+/**
+ * Estrade d'un gradin : bloc sombre (demi-côtés halfX, halfZ, hauteur h, du sol à h),
+ * plateau laqué et filet lumineux dans la couleur de l'instrument sous le rebord.
+ */
+export function riserBlock(halfX, halfZ, h, color) {
+  const group = new THREE.Group();
+  const body = roundedBox(2 * halfX, h, 2 * halfZ, 0.04, mat.gunmetal());
+  body.position.y = h / 2;
+  body.castShadow = body.receiveShadow = true;
+  const top = roundedBox(2 * halfX - 0.08, 0.03, 2 * halfZ - 0.08, 0.012, mat.lacquer(0x14161c, 0.4));
+  top.position.y = h - 0.013; // affleure (2 mm) : l'instrument se pose juste dessus
+  top.receiveShadow = true;
+  const led = mat.glow(color, 1.6);
+  const strip = new THREE.Mesh(new THREE.BoxGeometry(2 * halfX + 0.012, 0.02, 2 * halfZ + 0.012), led);
+  strip.position.y = h - 0.06;
+  group.add(body, top, strip);
+  return group;
+}
+
 const shadowGeo = new THREE.PlaneGeometry(1, 1);
 shadowGeo.rotateX(-Math.PI / 2);
 

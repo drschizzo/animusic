@@ -143,6 +143,8 @@ export function assignRoles(tracks) {
 const spansOf = (notes, before, after) => mergeSpans(notes.map((n) => [n.time - before, n.time + n.duration + after]));
 const tracksOf = (notes) => [...new Set((notes ?? []).map((n) => n.track))];
 const lastEnd = (notes) => Math.max(...notes.map((n) => n.time + n.duration));
+/** Ligne musicale d'une partie (pour le réalisateur) : notes triées, hauteur et force. */
+const lineOf = (notes) => notes.map((n) => ({ time: n.time, midi: n.midi, velocity: n.velocity, duration: n.duration })).sort((a, b) => a.time - b.time);
 /** Piste qui joue le plus de notes d'une partie : sa couleur identifie l'instrument. */
 const mainTrack = (notes) => {
   const count = new Map();
@@ -189,33 +191,30 @@ export function groupParts(tracks, { maxParts = 10 } = {}) {
 /**
  * Fabriques d'instruments : modèle construit en coordonnées locales (le placement vient
  * ensuite), plus ce qu'il faut savoir pour le filmer et le placer.
- *   ring : 'back' (derrière l'arc de lames, sur estrade si riser) ou 'side' (de part et d'autre)
  *   focusY : hauteur du centre d'intérêt au-dessus de son socle
  */
 const FACTORIES = {
   bass: (notes) => {
     const model = buildBassStrings(notes);
-    return { model, ring: 'side', focusY: 1.6, busy: spansOf(notes, 0.3, 1), start: model.onsets[0] - 0.3, end: lastEnd(notes) + 1 };
+    return { model, focusY: 1.6, busy: spansOf(notes, 0.3, 1), start: model.onsets[0] - 0.3, end: lastEnd(notes) + 1 };
   },
-  plucked: (notes, ctx) => {
+  plucked: (notes) => {
     // Guitare, shamisen, harpe : cordes plus courtes, autant de médiators que d'accords serrés.
     const carriers = clamp(Math.ceil(trackStats(notes).polyphony) + 1, 2, 4);
     const model = buildBassStrings(notes, { lenLow: 2.1, lenHigh: 0.9, spacing: 0.24, maxWidth: 4.2, bottom: 0.55, pickY: 0.9, carriers });
     model.style = 'plucked';
-    return { model, ring: ctx.preferBack ? 'back' : 'side', focusY: 1.3, busy: spansOf(notes, 0.3, 1), start: model.onsets[0] - 0.3, end: lastEnd(notes) + 1 };
+    return { model, focusY: 1.3, busy: spansOf(notes, 0.3, 1), start: model.onsets[0] - 0.3, end: lastEnd(notes) + 1 };
   },
   pads: (notes) => {
     const model = buildPipes(notes);
     const o = model.options;
-    return { model, ring: 'side', focusY: 1.6, busy: spansOf(notes, o.anticipation, o.release), start: model.onsets[0] - o.anticipation, end: lastEnd(notes) + o.release };
+    return { model, focusY: 1.6, busy: spansOf(notes, o.anticipation, o.release), start: model.onsets[0] - o.anticipation, end: lastEnd(notes) + o.release };
   },
   bells: (notes) => {
     const model = buildBells(notes);
     const o = model.options;
     return {
       model,
-      ring: 'back',
-      riser: true,
       focusY: 2.3,
       camera: { distScale: 1.5, minHeight: 0.6, allowLow: false },
       busy: spansOf(notes, 0.6, 3),
@@ -228,8 +227,6 @@ const FACTORIES = {
     const o = model.options;
     return {
       model,
-      ring: 'back',
-      riser: true,
       focusY: 1.7,
       camera: { distScale: 1.4, minHeight: 0.8, allowLow: false },
       busy: spansOf(notes, o.approach + 0.4, o.release + 0.5),
@@ -242,8 +239,6 @@ const FACTORIES = {
     const o = model.options;
     return {
       model,
-      ring: 'back',
-      riser: true,
       focusY: 1.9,
       camera: { distScale: 1.5, minHeight: 0.6, allowLow: false },
       busy: spansOf(notes, o.anticipation, o.release),
@@ -256,8 +251,6 @@ const FACTORIES = {
     const o = model.options;
     return {
       model,
-      ring: 'back',
-      riser: true,
       focusY: 1.2,
       camera: { distScale: 1.4, minHeight: 0.7, allowLow: false },
       busy: spansOf(notes, o.anticipation, o.release),
@@ -270,7 +263,6 @@ const FACTORIES = {
     const model = buildKeyboard(notes, { sustain });
     return {
       model,
-      ring: 'front',
       focusY: 1.1,
       camera: { distScale: 1.2, minHeight: 2.2, allowLow: false },
       busy: spansOf(notes, 0.4, 1),
@@ -280,38 +272,81 @@ const FACTORIES = {
   },
 };
 
-const GAP = 1.6; // espace libre entre deux instruments voisins (m)
 const side = (angle, r) => [Math.sin(angle) * r, 0, -Math.cos(angle) * r];
 /** Orientation (yaw) pour que l'instrument fasse face au point (0, 0, z) : le « public ». */
 const facing = ([x, , z], audienceZ) => Math.atan2(-x, audienceZ - z);
 
 /**
- * Place des instruments sur un arc de rayon r : le premier au centre (angle `center`),
- * les suivants de part et d'autre en alternance, sans dépasser ±maxA. Renvoie ceux qui
- * n'ont pas trouvé de place.
+ * Places d'orchestre. La scène est un amphithéâtre de gradins derrière l'arc de lames,
+ * tourné vers le public : chaque gradin est plus haut que le précédent, si bien que
+ * chaque instrument se voit par-dessus ceux de devant.
+ *   gradin 0 : les voix mélodiques basses (vents, cordes pincées, harpe laser, cordes frottées),
+ *              la plus basse au centre pour dégager la vue sur la rythmique ;
+ *   gradin 1 : la section rythmique au centre, batterie puis basse à côté ;
+ *   gradin 2 : les instruments hauts du fond (orgue, carillon).
+ * `side` : côté préféré (−1 jardin, à gauche vu du public ; +1 cour), comme dans un
+ * orchestre où les violons sont à gauche. `height` et `depth` : encombrement approché
+ * (vérifié par tools/collide.mjs), utile au réalisateur pour ne jamais traverser un instrument.
  */
-function fillArc(items, r, maxA, place) {
+export const SEATS = {
+  winds: { tier: 0, order: 0, height: 1.9, depth: 2.5, extraW: 0.1 },
+  plucked: { tier: 0, order: 1, side: 1, height: 3.0, depth: 2.0, extraW: 0.6 },
+  laser: { tier: 0, order: 2, height: 4.0, depth: 3.4, extraW: 1.3 },
+  bowed: { tier: 0, order: 3, side: -1, height: 4.0, depth: 3.8, extraW: 0 },
+  drums: { tier: 1, order: 0, height: 2.9, depth: 4.4, width: 6.2 },
+  bass: { tier: 1, order: 1, height: 3.8, depth: 2.0, extraW: 0.6 },
+  pads: { tier: 2, order: 0, height: 3.9, depth: 1.0, extraW: 0.1 },
+  bells: { tier: 2, order: 1, height: 4.2, depth: 2.4, extraW: 1.3 },
+  keys: { tier: -1, order: 0, height: 2.4, depth: 2.1, extraW: 0.5 },
+};
+
+const RISER_PAD = 0.35; // débord de l'estrade autour de l'instrument
+const AISLE = 0.7; // allée entre deux gradins (et entre l'arc de lames et le premier)
+const SEAT_GAP = 0.8; // espace entre deux estrades voisines
+
+/** Hauteur d'estrade de chaque gradin, demi-ouverture maximale. */
+export const TIERS = [
+  { riser: 0.45, maxA: (95 * Math.PI) / 180 },
+  { riser: 1.35, maxA: (80 * Math.PI) / 180 },
+  { riser: 2.25, maxA: (70 * Math.PI) / 180 },
+  { riser: 3.1, maxA: (62 * Math.PI) / 180 },
+];
+
+/**
+ * Remplit un gradin depuis le centre : le premier instrument au milieu, les suivants de
+ * part et d'autre (du côté préféré s'il y a la place, sinon en alternance). Renvoie
+ * ceux qui n'ont pas trouvé de place.
+ */
+function fillTier(items, r, maxA, place) {
   const left = [];
   let lo = 0;
   let hi = 0;
-  items.forEach((it, k) => {
-    const w = (it.width + GAP) / r; // angle occupé, marge comprise
-    if (k === 0) {
-      if (w / 2 > maxA) return left.push(it);
+  let first = true;
+  for (const it of items) {
+    const w = (it.seatW + SEAT_GAP) / r; // angle occupé, marge comprise
+    if (first) {
+      if (w / 2 > maxA) {
+        left.push(it);
+        continue;
+      }
+      place(it, 0);
       lo = -w / 2;
       hi = w / 2;
-      return place(it, 0);
+      first = false;
+      continue;
     }
-    const right = hi + w <= maxA;
-    const leftOk = lo - w >= -maxA;
-    if (right && (!leftOk || hi <= -lo)) {
+    const canR = hi + w <= maxA;
+    const canL = lo - w >= -maxA;
+    const pref = it.side ?? 0;
+    const right = pref > 0 ? canR : pref < 0 ? !canL && canR : canR && (!canL || hi <= -lo);
+    if (right) {
       place(it, hi + w / 2);
       hi += w;
-    } else if (leftOk) {
+    } else if (canL) {
       place(it, lo - w / 2);
       lo -= w;
     } else left.push(it);
-  });
+  }
   return left;
 }
 
@@ -341,6 +376,7 @@ export function buildEnsemble(parts, controls = [], programs = []) {
       model: balls,
       tracks: tracksOf(all('balls')),
       onsets: balls.impacts.map((i) => i.time),
+      line: lineOf(all('balls')),
       busy: mergeSpans(balls.balls.map((b) => [b.launch - 0.6, b.end])),
       focus: { center: [0, 1.4, -R * 0.7], radius: R * 0.75 },
       front: 0,
@@ -349,28 +385,8 @@ export function buildEnsemble(parts, controls = [], programs = []) {
     });
   }
 
-  // Batterie : au centre, entre la tourelle et l'arc.
+  // Les autres parties : une instance chacune. La batterie est construite à sa place.
   const drumNotes = all('drums');
-  if (drumNotes.length) {
-    const kit = buildDrumKit(drumNotes, { center: [0, 0, -(R * 0.5 + 0.4)] });
-    const times = kit.pieces.flatMap((p) => p.hits.map((h) => h.time)).sort((a, b) => a - b);
-    instruments.push({
-      kind: 'drums',
-      model: kit,
-      tracks: tracksOf(drumNotes),
-      mainTrack: mainTrack(drumNotes),
-      onsets: times,
-      busy: mergeSpans(times.map((t) => [t - kit.options.strikeTime - 0.3, t + 1])),
-      focus: { center: [0, 1.0, kit.center[2]], radius: 2.6 },
-      front: 0,
-      // Les canons sont devant la batterie : on la filme en plongée, par-dessus.
-      camera: { distScale: 1.25, minHeight: 3.3, allowLow: false },
-      start: times[0] - kit.options.strikeTime,
-      end: times[times.length - 1] + 1.5,
-    });
-  }
-
-  // Les autres parties : une instance chacune, la plus fournie d'abord (meilleures places).
   const others = list
     .filter((p) => FACTORIES[p.kind] && p.notes.length)
     .sort((a, b) => b.notes.length - a.notes.length)
@@ -384,70 +400,94 @@ export function buildEnsemble(parts, controls = [], programs = []) {
         controlsFor: (keys) => Object.fromEntries(tracks.map((tr) => [tr, Object.fromEntries(keys.map((k) => [k, controls[tr]?.[k]]))])),
       };
       const made = FACTORIES[p.kind](p.notes, ctx);
-      return { kind: p.kind, tracks, mainTrack: main, ...made, width: made.model.width, onsets: made.model.onsets };
+      return { kind: p.kind, tracks, mainTrack: main, ...made, width: made.model.width, onsets: made.model.onsets, n: p.notes.length, line: lineOf(p.notes) };
     });
+  if (drumNotes.length) others.unshift({ kind: 'drums', notes: drumNotes, width: SEATS.drums.width, n: drumNotes.length });
 
-  // Placement : estrades derrière l'arc (instruments hauts ou solistes), côtés de la
-  // scène (cordes pincées, basse, orgue), clavier au premier plan.
-  const riser = 0.7;
-  const backR = R + 3.1;
-  const sideR = R * 0.85 + 0.4;
-  const placed = [];
-  const put = (it, angle, r, ring) => {
-    const [x, , z] = side(angle, r);
-    const y = ring === 'back' && it.riser ? riser : 0;
-    const origin = [x, y, z];
-    it.model.origin = origin;
-    it.model.yaw = facing(origin, ring === 'back' ? 0 : R * 1.2);
-    placed.push(it);
-  };
-  const back = others.filter((it) => it.ring === 'back');
-  const sides = others.filter((it) => it.ring === 'side');
-  const front = others.filter((it) => it.ring === 'front');
-  const sideMin = (100 * Math.PI) / 180;
-  const sideMax = (176 * Math.PI) / 180;
-  // Côtés : on remplit à gauche et à droite en alternance, de l'avant-scène vers le public.
-  const fillSides = (items) => {
-    const used = [sideMin, sideMin];
-    const left = [];
-    for (const it of items) {
-      const w = (it.width + GAP) / sideR;
-      const k = used[0] <= used[1] ? 0 : 1;
-      if (used[k] + w > sideMax) {
-        left.push(it);
-        continue;
-      }
-      put(it, (k === 0 ? -1 : 1) * (used[k] + w / 2), sideR, 'side');
-      used[k] += w;
-    }
-    return left;
-  };
-  let overflow = fillArc(back, backR, (62 * Math.PI) / 180, (it, a) => put(it, a, backR, 'back'));
-  overflow = fillSides([...sides, ...overflow]);
-  // Dernier recours : un second rang, plus loin derrière.
-  overflow = fillArc(overflow, backR + 4, (70 * Math.PI) / 180, (it, a) => put(it, a, backR + 4, 'back'));
-  overflow.forEach((it, k) => put(it, (k % 2 ? 1 : -1) * (0.3 + 0.25 * k), backR + 8, 'back'));
-  // Claviers : rangée au premier plan, centrée.
+  // Placement par gradin. Chaque gradin commence juste derrière le précédent (ou derrière
+  // la gouttière et les entonnoirs de l'arc de lames pour le premier) ; dans un gradin,
+  // ordre de la table SEATS, puis le plus fourni d'abord.
+  const seatOf = (it) => ({ ...SEATS[it.kind], ...(it.seat ?? {}) });
+  for (const it of others) {
+    const seat = seatOf(it);
+    it.seatW = (seat.width ?? it.width + seat.extraW) + 2 * RISER_PAD;
+    it.seatD = seat.depth + 2 * RISER_PAD;
+  }
+  let outer = R + balls.options.troughGap + 0.9; // bord extérieur des entonnoirs et de leurs pieds
+  let pending = [];
+  let lastTier = null;
+  TIERS.forEach((tier, k) => {
+    const items = [...pending, ...others.filter((it) => seatOf(it).tier === k)].sort(
+      (a, b) => seatOf(a).tier - seatOf(b).tier || seatOf(a).order - seatOf(b).order || b.n - a.n,
+    );
+    if (!items.length) return;
+    for (const it of items) it.side = seatOf(it).side;
+    const r = outer + AISLE + Math.max(...items.map((it) => it.seatD)) / 2;
+    const placed = [];
+    pending = fillTier(items, r, tier.maxA, (it, angle) => {
+      const [x, , z] = side(angle, r);
+      it.origin = [x, 0, z];
+      it.yaw = facing(it.origin, R * 0.8);
+      it.riser = tier.riser;
+      placed.push(it);
+    });
+    // Bord extérieur du gradin : coins arrière des estrades compris.
+    outer = Math.max(outer, ...placed.map((it) => Math.hypot(r + it.seatD / 2, it.seatW / 2)));
+    lastTier = tier;
+  });
+  // Dernier recours (ensemble démesuré) : derrière le dernier gradin.
+  pending.forEach((it, k) => {
+    const [x, , z] = side((k % 2 ? 1 : -1) * (0.3 + 0.25 * k), outer + AISLE + it.seatD / 2);
+    it.origin = [x, 0, z];
+    it.yaw = facing(it.origin, R * 0.8);
+    it.riser = lastTier?.riser ?? 0;
+  });
+  // Claviers : rangée au premier plan, devant la tourelle, au sol.
+  const front = others.filter((it) => seatOf(it).tier < 0);
   const totalFront = front.reduce((a, it) => a + it.width + 0.8, -0.8);
   let x = -totalFront / 2;
   for (const it of front) {
-    it.model.origin = [x + it.width / 2, 0, R * 0.42];
-    it.model.yaw = 0;
+    it.origin = [x + it.width / 2, 0, R * 0.42];
+    it.yaw = 0;
+    it.riser = 0;
     x += it.width + 0.8;
-    placed.push(it);
   }
 
   for (const it of others) {
-    const o = it.model.origin;
+    const o = it.origin;
+    const seat = seatOf(it);
+    if (it.kind === 'drums') {
+      // La batterie, face au public, au centre de son gradin.
+      const kit = buildDrumKit(drumNotes, { center: [o[0], 0, o[2]] });
+      const times = kit.pieces.flatMap((p) => p.hits.map((h) => h.time)).sort((a, b) => a - b);
+      Object.assign(it, {
+        model: kit,
+        tracks: tracksOf(drumNotes),
+        mainTrack: mainTrack(drumNotes),
+        onsets: times,
+        busy: mergeSpans(times.map((t) => [t - kit.options.strikeTime - 0.3, t + 1])),
+        focusY: 1.0,
+        yaw: 0,
+        camera: { distScale: 1.25, minHeight: 1.2, allowLow: false },
+        start: times[0] - kit.options.strikeTime,
+        end: times[times.length - 1] + 1.5,
+      });
+    } else {
+      it.model.origin = o;
+      it.model.yaw = it.yaw;
+    }
     instruments.push({
       kind: it.kind,
       model: it.model,
       tracks: it.tracks,
       mainTrack: it.mainTrack,
       onsets: it.onsets,
+      line: it.line ?? [],
       busy: it.busy,
-      focus: { center: [o[0], o[1] + it.focusY, o[2]], radius: Math.max(2, it.width * 0.6) },
-      front: it.model.yaw,
+      riser: it.riser,
+      focus: { center: [o[0], it.riser + it.focusY, o[2]], radius: Math.max(2, it.width * 0.6) },
+      footprint: { center: [o[0], o[2]], yaw: it.yaw, halfW: it.seatW / 2, halfD: it.seatD / 2, top: it.riser + seat.height },
+      front: it.yaw,
       camera: it.camera,
       start: it.start,
       end: it.end,
@@ -456,5 +496,10 @@ export function buildEnsemble(parts, controls = [], programs = []) {
 
   const start = instruments.length ? Math.min(...instruments.map((i) => i.start)) : 0;
   const end = instruments.length ? Math.max(...instruments.map((i) => i.end)) : 0;
-  return { instruments, start, end, radius: R, riser };
+  // Rayon de la scène : jusqu'au bord de l'instrument le plus éloigné.
+  const stageRadius = Math.max(
+    R + 6.2,
+    ...instruments.filter((i) => i.footprint).map((i) => Math.hypot(...i.footprint.center) + Math.max(i.footprint.halfW, i.footprint.halfD) + 0.8),
+  );
+  return { instruments, start, end, radius: R, stageRadius };
 }

@@ -24,6 +24,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run collide
       - run: npm run build
       # Charge le build dans un vrai Chromium avant de déployer.
       - name: Test de fumée
