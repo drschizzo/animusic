@@ -9,6 +9,7 @@ import { buildBells } from './bells.js';
 import { buildLaserHarp } from './laser.js';
 import { buildKeyboard } from './keys.js';
 import { mergeEvents } from './util.js';
+import { mergeSpans } from './sections.js';
 
 export const ROLES = {
   balls: 'Billes',
@@ -104,6 +105,9 @@ export function assignRoles(tracks) {
   return roles;
 }
 
+/** Intervalles d'activité d'une partie (notes avec durée), élargis de `before` / `after`. */
+const spansOf = (notes, before, after) => mergeSpans(notes.map((n) => [n.time - before, n.time + n.duration + after]));
+
 const side = (angle, r) => [Math.sin(angle) * r, 0, -Math.cos(angle) * r];
 /** Orientation (yaw) pour que l'instrument fasse face au point (0, 0, z) : le « public ». */
 const facing = ([x, , z], audienceZ) => Math.atan2(-x, audienceZ - z);
@@ -125,6 +129,7 @@ export function buildEnsemble(parts, controls = []) {
       kind: 'balls',
       model: balls,
       onsets: balls.impacts.map((i) => i.time),
+      busy: mergeSpans(balls.balls.map((b) => [b.launch - 0.6, b.end])),
       focus: { center: [0, 1.4, -R * 0.7], radius: R * 0.75 },
       front: 0,
       start: balls.start,
@@ -139,6 +144,7 @@ export function buildEnsemble(parts, controls = []) {
       kind: 'drums',
       model: kit,
       onsets: times,
+      busy: mergeSpans(times.map((t) => [t - kit.options.strikeTime - 0.3, t + 1])),
       focus: { center: [0, 1.0, kit.center[2]], radius: 2.6 },
       front: 0,
       // Les canons sont devant la batterie : on la filme en plongée, par-dessus.
@@ -158,6 +164,7 @@ export function buildEnsemble(parts, controls = []) {
       kind: 'bass',
       model,
       onsets: model.onsets,
+      busy: spansOf(parts.bass, 0.3, 1),
       focus: { center: [origin[0], 1.6, origin[2]], radius: Math.max(2, model.width * 0.6) },
       front: model.yaw,
       start: model.onsets[0] - 0.3,
@@ -171,6 +178,7 @@ export function buildEnsemble(parts, controls = []) {
       kind: 'pads',
       model,
       onsets: model.onsets,
+      busy: spansOf(parts.pads, model.options.anticipation, model.options.release),
       focus: { center: [origin[0], 1.6, origin[2]], radius: Math.max(2, model.width * 0.6) },
       front: model.yaw,
       start: model.onsets[0] - model.options.anticipation,
@@ -192,6 +200,7 @@ export function buildEnsemble(parts, controls = []) {
       kind: 'bells',
       model,
       onsets: model.onsets,
+      busy: spansOf(parts.bells, 0.6, 3),
       focus: { center: [origin[0], riser + 2.3, origin[2]], radius: Math.max(2.4, model.width * 0.6) },
       front: model.yaw,
       camera: { distScale: 1.5, minHeight: 0.6, allowLow: false },
@@ -207,6 +216,7 @@ export function buildEnsemble(parts, controls = []) {
       kind: 'laser',
       model,
       onsets: model.onsets,
+      busy: spansOf(parts.laser, model.options.anticipation, model.options.release),
       focus: { center: [origin[0], riser + 1.9, origin[2]], radius: Math.max(2.4, model.width * 0.6) },
       front: model.yaw,
       camera: { distScale: 1.5, minHeight: 0.6, allowLow: false },
@@ -223,6 +233,7 @@ export function buildEnsemble(parts, controls = []) {
       kind: 'keys',
       model,
       onsets: model.onsets,
+      busy: spansOf(parts.keys, 0.4, 1),
       focus: { center: [origin[0], 1.1, origin[2]], radius: Math.max(1.8, model.width * 0.5) },
       front: 0,
       camera: { distScale: 1.2, minHeight: 2.2, allowLow: false },

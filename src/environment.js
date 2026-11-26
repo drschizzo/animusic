@@ -11,6 +11,15 @@ const HAZE = 0x070a14;
 const BLUR_LEVELS = 4;
 const ACCENTS = [0x49d8ff, 0xff4fa3, 0xffc46b, 0x8f7bff];
 
+/** Ambiances successives des sections : horizon (a, b), bordure du plateau, projecteurs. */
+const MOODS = [
+  { a: 0x1a3a6a, b: 0x4a1848, edge: 0x49d8ff, heads: [0xdfe8ff, 0x49d8ff, 0xdfe8ff, 0xff4fa3] },
+  { a: 0x5a2a0e, b: 0x501038, edge: 0xffc46b, heads: [0xffe2b0, 0xffc46b, 0xffe2b0, 0xff4fa3] },
+  { a: 0x0e4a4a, b: 0x2a1a6a, edge: 0x5cff8f, heads: [0xd8fff0, 0x5cff8f, 0xd8fff0, 0x8f7bff] },
+  { a: 0x3a1060, b: 0x0a3a6a, edge: 0x8f7bff, heads: [0xe8dcff, 0x8f7bff, 0xe8dcff, 0x49d8ff] },
+  { a: 0x5a0e1a, b: 0x2a0a4a, edge: 0xff4f6a, heads: [0xffd8de, 0xff4f6a, 0xffd8de, 0xffc46b] },
+];
+
 const PROBE_LAYER = 1; // objets visibles seulement par la sonde de reflets
 
 /** Boîtes à lumière du « studio » : elles n'existent que dans les reflets. */
@@ -349,6 +358,7 @@ export class Environment {
   constructor(renderer, scene) {
     this.scene = scene;
     this.radius = 8;
+    this._tmpColor = new THREE.Color();
     scene.background = new THREE.Color(HAZE);
     scene.fog = new THREE.FogExp2(HAZE, 0.016);
     this.studio = studioEnvironment(renderer);
@@ -429,7 +439,7 @@ export class Environment {
       const beam = fx(new THREE.Mesh(cone, beamMat));
       pivot.add(body, lens, beam);
       this.rig.add(pivot);
-      return { pivot, beam, beamMat, phase: i * 2.399, target: new THREE.Vector3() };
+      return { pivot, beam, beamMat, lensMat: lens.material, phase: i * 2.399, target: new THREE.Vector3(), goal: new THREE.Vector3() };
     });
 
     // --- Poussières en suspension, accrochant la lumière.
@@ -521,22 +531,47 @@ export class Environment {
    * @param wall temps réel (s) : balayage lent des projecteurs, dérive des poussières
    * @param pulse battue du morceau (0..1, grosse caisse) : les lumières respirent avec elle
    */
-  update(wall, pulse = 0) {
+  update(wall, pulse = 0, mood = null, spots = []) {
     const R = this.radius;
     const down = new THREE.Vector3(0, -1, 0);
     const dir = new THREE.Vector3();
-    for (const h of this.heads) {
-      // Chaque tête vise un point qui se promène lentement sur le plateau.
-      const a = h.angle + Math.sin(wall * 0.13 + h.phase) * 0.9;
-      const r = R * (0.25 + 0.3 * (0.5 + 0.5 * Math.sin(wall * 0.09 + h.phase * 1.7)));
-      h.target.set(Math.sin(a) * r, 0, Math.cos(a) * r);
+    const energy = mood?.energy ?? 0.5;
+    // Ambiance de la section : palette (fondu depuis la section précédente) et énergie.
+    if (mood) {
+      const a = MOODS[mood.from % MOODS.length];
+      const b = MOODS[mood.index % MOODS.length];
+      const u = this.backdrop.material.uniforms;
+      u.uA.value.setHex(a.a).lerp(this._tmpColor.setHex(b.a), mood.blend);
+      u.uB.value.setHex(a.b).lerp(this._tmpColor.setHex(b.b), mood.blend);
+      this.edgeMat.emissive.setHex(a.edge).lerp(this._tmpColor.setHex(b.edge), mood.blend);
+      this.heads.forEach((h, i) => {
+        const ca = a.heads[i % a.heads.length];
+        const cb = b.heads[i % b.heads.length];
+        h.beamMat.uniforms.uColor.value.setHex(ca).lerp(this._tmpColor.setHex(cb), mood.blend);
+        h.lensMat.color.copy(h.beamMat.uniforms.uColor.value).multiplyScalar(2.2);
+      });
+    }
+    // Les instruments les plus actifs sont suivis par une tête sur deux.
+    const ranked = spots.filter((s) => s.level > 0.05).sort((p, q) => q.level - p.level);
+    const speed = 0.6 + 0.9 * energy;
+    this.heads.forEach((h, i) => {
+      const spot = i % 2 === 1 ? ranked[(i >> 1) % Math.max(1, ranked.length)] : null;
+      if (spot) {
+        h.goal.set(spot.center.x, 0, spot.center.z);
+      } else {
+        // Point qui se promène sur le plateau, d'autant plus vite que la section est intense.
+        const a = h.angle + Math.sin(wall * 0.13 * speed + h.phase) * 0.9;
+        const r = R * (0.25 + 0.3 * (0.5 + 0.5 * Math.sin(wall * 0.09 * speed + h.phase * 1.7)));
+        h.goal.set(Math.sin(a) * r, 0, Math.cos(a) * r);
+      }
+      h.target.lerp(h.goal, 0.06);
       dir.copy(h.target).sub(h.pivot.position).setY(-this.rigY).normalize();
       h.pivot.quaternion.setFromUnitVectors(down, dir);
-      h.beamMat.uniforms.uIntensity.value = this.beamGain * (0.75 + 0.6 * pulse);
-    }
+      h.beamMat.uniforms.uIntensity.value = this.beamGain * (0.45 + 0.7 * energy + 0.6 * pulse);
+    });
     this.dustMat.uniforms.uTime.value = wall;
-    this.backdrop.material.uniforms.uPulse.value = pulse;
-    this.edgeMat.emissiveIntensity = 3 + 4 * pulse;
+    this.backdrop.material.uniforms.uPulse.value = pulse + 0.6 * energy;
+    this.edgeMat.emissiveIntensity = 2 + 2.5 * energy + 4 * pulse;
   }
 
   /**

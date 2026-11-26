@@ -10,6 +10,9 @@ import { KeysView } from './keysView.js';
 import { Environment } from './environment.js';
 import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
+import { analyzeSong, deployAt, sectionAt } from './sections.js';
+import { floorHalo } from './parts.js';
+import { lowerBound } from './util.js';
 
 /** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
 const PIXEL_BUDGET = {
@@ -20,6 +23,19 @@ const PIXEL_BUDGET = {
 
 const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, keys: KeysView };
 
+/** Boîte englobante des pièces solides (sans effets lumineux ni maillages instanciés). */
+function solidBox(root) {
+  const box = new THREE.Box3();
+  const part = new THREE.Box3();
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    if (!o.isMesh || o.isInstancedMesh || o.userData.fx) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    box.union(part.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+  });
+  return box;
+}
+
 /** Scène Three.js : construit les objets à partir d'une chorégraphie et les pose à l'instant t. */
 export class Stage {
   constructor(container) {
@@ -29,6 +45,8 @@ export class Stage {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
+    // Tout ce qui passe sous le sol est découpé : les instruments en sortent à leur entrée.
+    renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.001)];
     container.appendChild(renderer.domElement);
 
     const scene = (this.scene = new THREE.Scene());
@@ -90,7 +108,38 @@ export class Stage {
     this.ensemble = ensemble;
     this.environment.setRadius(ensemble.radius);
     this.kick = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
-    this.views = ensemble.instruments.map((inst) => new VIEWS[inst.kind](inst.model, trackColors, this.content));
+    this.song = analyzeSong(ensemble);
+    // Chaque instrument est monté sur un élévateur (groupe déplacé verticalement).
+    this.lifts = ensemble.instruments.map(() => {
+      const lift = new THREE.Group();
+      this.content.add(lift);
+      return lift;
+    });
+    this.views = ensemble.instruments.map((inst, k) => new VIEWS[inst.kind](inst.model, trackColors, this.lifts[k]));
+    // Hauteur de chaque instrument (pour le cacher entièrement sous le sol) et trappe
+    // lumineuse au sol, qui s'allume pendant qu'il monte ou descend.
+    this.hatches = this.views.map((view, k) => {
+      const box = solidBox(this.lifts[k]);
+      const height = Number.isFinite(box.max.y) ? box.max.y + 0.1 : 4;
+      if (ensemble.instruments[k].kind === 'balls') return { height, halo: null };
+      const root = view.group ?? view.content;
+      const saved = [root.position.clone(), root.quaternion.clone()];
+      root.position.set(0, 0, 0);
+      root.quaternion.identity();
+      root.updateMatrixWorld(true);
+      const local = solidBox(root);
+      root.position.copy(saved[0]);
+      root.quaternion.copy(saved[1]);
+      root.updateMatrixWorld(true);
+      const halo = floorHalo((local.max.x - local.min.x) / 2 + 0.15, (local.max.z - local.min.z) / 2 + 0.15);
+      // Centre de la boîte (repère de l'instrument) ramené dans la scène.
+      local.getCenter(halo.position).applyQuaternion(root.quaternion).add(root.position).setY(0.006);
+      halo.quaternion.copy(root.quaternion);
+      this.content.add(halo);
+      return { height, halo };
+    });
+    this.mood = sectionAt(this.song, 0);
+    this.spots = ensemble.instruments.map((inst) => ({ center: new THREE.Vector3(...inst.focus.center), level: 0 }));
 
     this.resetView();
     this.controls.update();
@@ -114,7 +163,25 @@ export class Stage {
 
   /** Pose tous les objets à l'instant musical t. */
   update(t) {
-    for (const v of this.views ?? []) v.update(t);
+    const instruments = this.ensemble?.instruments ?? [];
+    (this.views ?? []).forEach((v, k) => {
+      const d = deployAt(this.song, k, t);
+      const lift = this.lifts[k];
+      const { height, halo } = this.hatches[k];
+      lift.visible = d > 0;
+      lift.position.y = d < 1 ? -height * (1 - d) : Math.min(0.08, (d - 1) * 0.6);
+      if (halo) {
+        const glow = d > 0 && d < 1 ? Math.sin(Math.PI * Math.min(1, d)) : 0;
+        halo.visible = glow > 0.01;
+        halo.material.uniforms.uIntensity.value = 2.5 * glow;
+      }
+      if (d > 0) v.update(t);
+      // Activité récente (pour les projecteurs qui suivent l'action).
+      const on = instruments[k].onsets;
+      const i = lowerBound(on, t + 1e-6) - 1;
+      this.spots[k].level = d >= 1 && i >= 0 ? Math.exp(-(t - on[i]) * 1.5) : 0;
+    });
+    if (this.song) this.mood = sectionAt(this.song, t);
     // Battue du morceau (grosse caisse) : le décor respire avec elle.
     const kick = this.kick?.pieces.find((p) => p.name === 'kick');
     this.pulse = kick ? hitPulse(this.kick, kick, t).pulse : 0;
@@ -144,7 +211,7 @@ export class Stage {
   render() {
     this.controls.update();
     const wall = performance.now() / 1000;
-    this.environment.update(wall, this.pulse);
+    this.environment.update(wall, this.pulse, this.mood, this.spots);
     // Les ombres ne dépendent pas de la caméra : calculées au premier rendu de l'image
     // (sonde ou reflet), elles resservent pour tous les suivants.
     this.renderer.shadowMap.autoUpdate = false;

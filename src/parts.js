@@ -279,3 +279,41 @@ export function channelGeometry(points, radius, sides = 14) {
   g.computeVertexNormals();
   return g;
 }
+
+/**
+ * Trappe lumineuse au sol : contour de rectangle arrondi (demi-côtés halfX, halfZ) qui
+ * brille pendant qu'un instrument sort du sol. Intensité : uniforms.uIntensity.
+ */
+export function floorHalo(halfX, halfZ, color = 0x49d8ff) {
+  const pad = 0.8;
+  const sx = 2 * (halfX + pad);
+  const sz = 2 * (halfZ + pad);
+  const mesh = new THREE.Mesh(
+    shadowGeo,
+    new THREE.ShaderMaterial({
+      uniforms: {
+        uSize: { value: new THREE.Vector2(sx, sz) },
+        uHalf: { value: new THREE.Vector2(halfX, halfZ) },
+        uColor: { value: new THREE.Color(color) },
+        uIntensity: { value: 0 },
+      },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `
+        uniform vec2 uSize; uniform vec2 uHalf; uniform vec3 uColor; uniform float uIntensity; varying vec2 vUv;
+        void main() {
+          vec2 p = abs((vUv - 0.5) * uSize) - uHalf + 0.12;
+          float d = length(max(p, 0.0)) + min(max(p.x, p.y), 0.0) - 0.12;
+          float line = exp(-abs(d) * 40.0) + 0.35 * exp(-abs(d) * 9.0);
+          float inside = d < 0.0 ? 0.15 : 0.0;
+          gl_FragColor = vec4(uColor * uIntensity * (line + inside), 1.0);
+        }`,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  mesh.scale.set(sx, 1, sz);
+  mesh.renderOrder = -1;
+  return fx(mesh);
+}

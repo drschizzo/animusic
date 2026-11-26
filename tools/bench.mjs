@@ -17,10 +17,11 @@ import { laserState } from '../src/laser.js';
 import { keyDepth, keyHammerAngle, tineVibration } from '../src/keys.js';
 import { carrierPose, stringVibration } from '../src/strings.js';
 import { pipeState } from '../src/pipes.js';
+import { analyzeSong, deployAt, sectionAt } from '../src/sections.js';
 
 const finite = (...vals) => vals.flat(Infinity).every((v) => typeof v !== 'number' || Number.isFinite(v));
 
-function frame(ens, plan, t) {
+function frame(ens, plan, t, song) {
   let bad = 0;
   const check = (...v) => {
     if (!finite(...v)) bad++;
@@ -49,6 +50,8 @@ function frame(ens, plan, t) {
   }
   const cam = cameraAt(plan, t);
   check(cam.position, cam.target);
+  ens.instruments.forEach((_, k) => check(deployAt(song, k, t)));
+  check(sectionAt(song, t).energy);
   return bad;
 }
 
@@ -72,6 +75,7 @@ for (const file of process.argv.slice(2)) {
   t0 = performance.now();
   const plan = planShots(ens);
   const planMs = performance.now() - t0;
+  const structure = analyzeSong(ens);
 
   let bad = 0;
   let worst = 0;
@@ -79,7 +83,7 @@ for (const file of process.argv.slice(2)) {
   t0 = performance.now();
   for (let t = ens.start; t <= ens.end; t += 1 / 60) {
     const f0 = performance.now();
-    bad += frame(ens, plan, t);
+    bad += frame(ens, plan, t, structure);
     worst = Math.max(worst, performance.now() - f0);
     frames++;
   }
@@ -101,7 +105,7 @@ for (const file of process.argv.slice(2)) {
   console.log(`\n== ${basename(file)} (${(ens.end - ens.start).toFixed(0)} s)`);
   console.log(`  pistes : ${roles.join(' | ')}`);
   console.log(`  instruments : ${kinds.join(' ; ') || 'aucun'}`);
-  console.log(`  ${plan.shots.length} plans caméra`);
+  console.log(`  ${plan.shots.length} plans caméra · sections : ${structure.sections.map((s) => s.start.toFixed(0)).join(", ")} s`);
   console.log(
     `  lecture ${parseMs.toFixed(1)} ms · arrangement ${buildMs.toFixed(1)} ms · plans ${planMs.toFixed(1)} ms · ` +
       `pose/image moy ${avg.toFixed(3)} ms, pire ${worst.toFixed(2)} ms · valeurs invalides : ${bad}`,
