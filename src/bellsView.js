@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { hammerAngle, bellState } from './bells.js';
 import { mat, hdr } from './materials.js';
 import { rod, plinth, V } from './parts.js';
+import { BallRowView } from './ballRowView.js';
 
 /** Rendu du carillon de cloches tubulaires (voir bells.js). */
 export class BellsView {
@@ -21,9 +22,18 @@ export class BellsView {
     const top = o.top;
 
     // Estrade (jusqu'au sol) et portique.
-    const base = plinth(model.width + 1.2, 2.2, model.origin[1] + 0.001, { bottom: -model.origin[1], color: 0xffc46b });
+    // Avec les billes, l'estrade s'avance jusque sous la rampe des buses.
+    const row = model.row;
+    const front = row ? row.extent.maxZ + 0.25 : 1.1;
+    const base = plinth(model.width + 1.2, front + 1.1, model.origin[1] + 0.001, { bottom: -model.origin[1], color: 0xffc46b });
+    base.group.position.z = (front - 1.1) / 2;
     this.led = base.led;
     g.add(base.group);
+    if (row) {
+      this.rowView = new BallRowView(row, trackColors, g);
+      this.balls = this.rowView.balls;
+      this.trails = this.rowView.trails;
+    }
     for (const x of [-half, half]) {
       g.add(rod(V(x, 0, 0), V(x, top + 0.25, 0), 0.07, dark));
       g.add(rod(V(x, 0, -0.42), V(x, top - 0.1, -0.42), 0.045, dark));
@@ -38,10 +48,10 @@ export class BellsView {
     // Rail des marteaux, derrière les cloches.
     const railZ = -0.36;
     const railY = top - o.cord - 0.1;
-    g.add(rod(V(-half, railY, railZ - 0.06), V(half, railY, railZ - 0.06), 0.03, dark));
+    if (!row) g.add(rod(V(-half, railY, railZ - 0.06), V(half, railY, railZ - 0.06), 0.03, dark));
 
     this.bellViews = model.bells.map((b) => {
-      const r = Math.min(0.075, model.spacing * 0.3);
+      const r = model.radius;
       const tubeMat = mat.gold();
       tubeMat.emissive = new THREE.Color(0x000000);
       const pivot = new THREE.Group();
@@ -59,6 +69,7 @@ export class BellsView {
       tube.castShadow = true;
       pivot.add(cord, tube, rimTop, rimBottom);
       g.add(pivot);
+      if (row) return { b, pivot, tubeMat };
 
       // Marteau : bras horizontal au contact, tête en feutre contre le haut du tube.
       const hammer = new THREE.Group();
@@ -83,13 +94,15 @@ export class BellsView {
     const m = this.model;
     let glow = 0;
     for (const v of this.bellViews) {
-      v.hammer.rotation.x = -hammerAngle(m, v.b, t);
+      if (v.hammer) v.hammer.rotation.x = -hammerAngle(m, v.b, t);
       const { angle, pulse, track } = bellState(m, v.b, t);
-      v.pivot.rotation.x = -angle;
+      // Le marteau frappe par l'arrière, la bille par l'avant : la cloche part à l'opposé.
+      v.pivot.rotation.x = v.hammer ? -angle : angle;
       if (track >= 0) v.tubeMat.emissive.copy(this.trackColors[track]);
       v.tubeMat.emissiveIntensity = pulse * 1.6;
       glow = Math.max(glow, pulse);
     }
     this.led.emissiveIntensity = 0.25 + 3 * glow;
+    this.rowView?.update(t);
   }
 }

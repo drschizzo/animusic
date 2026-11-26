@@ -36,7 +36,7 @@ function frame(ens, plan, t, song) {
       for (const L of m.launchers) check(Object.values(launcherPose(m, L, t)));
       for (const b of m.bars) check(Object.values(barPulse(m, b, t)).filter((v) => v !== Infinity));
     } else if (inst.kind === 'drums') {
-      for (const p of m.pieces) check(armAngles(m, p, t), hitPulse(m, p, t).pulse);
+      for (const p of m.pieces) check(p.arm ? armAngles(m, p, t) : 0, hitPulse(m, p, t).pulse);
     } else if (inst.kind === 'winds') {
       for (const p of m.pipes) check(Object.values(windState(m, p, t)));
     } else if (inst.kind === 'bass' || inst.kind === 'plucked') {

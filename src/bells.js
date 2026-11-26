@@ -8,6 +8,7 @@
 // Coordonnées locales : x le long du portique, y vers le haut, z vers le public.
 
 import { lerp, lowerBound, strikeLift, lastHitPulse } from './util.js';
+import { buildBallRow } from './ballRow.js';
 
 export const BELL_DEFAULTS = {
   spacing: 0.36,
@@ -22,6 +23,8 @@ export const BELL_DEFAULTS = {
   swing: 0.13, // amplitude (rad) du balancement pour une frappe forte
   swingDecay: 1.5,
   pulseDecay: 2.2,
+  player: 'hammers', // 'hammers' = un marteau par cloche, 'balls' = billes (voir ballRow.js)
+  tubeRadius: 0.075, // rayon maximal d'un tube
 };
 
 export function buildBells(notes, options = {}) {
@@ -46,15 +49,19 @@ export function buildBells(notes, options = {}) {
   });
   const byMidi = new Map(bells.map((b) => [b.midi, b]));
   for (const note of sorted) byMidi.get(note.midi).hits.push({ time: note.time, velocity: note.velocity, track: note.track });
-  return {
+  const model = {
     options: o,
     origin: o.origin ?? [0, 0, 0],
     yaw: o.yaw ?? 0,
     spacing,
     width: n * spacing + 0.8,
     bells,
+    radius: Math.min(o.tubeRadius, spacing * 0.3),
     onsets: sorted.map((n) => n.time),
   };
+  // Billes : elles frappent la face avant du tube, à la hauteur où tapait le marteau.
+  if (o.player === 'balls') model.row = buildBallRow(bells, { y: o.top - o.cord - 0.1, z: model.radius }, spacing);
+  return model;
 }
 
 /** Angle du marteau (rad) : 0 au contact avec la cloche, positif en arrière. */

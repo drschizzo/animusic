@@ -1,7 +1,25 @@
 import * as THREE from 'three';
 import { armAngles, hitPulse } from './drums.js';
+import { BallPool } from './ballPool.js';
 import { mat } from './materials.js';
 import { lathe, ringOf, rod, V } from './parts.js';
+import { upperBound } from './util.js';
+
+const UP = new THREE.Vector3(0, 1, 0);
+
+/** Axe d'un tuyau (polyligne du modèle) vu comme une courbe Three, de l'abscisse s0 à s1. */
+class PathCurve extends THREE.Curve {
+  constructor(path, s0, s1) {
+    super();
+    Object.assign(this, { path, s0, s1 });
+    this._p = [0, 0, 0];
+  }
+
+  getPoint(u, target = new THREE.Vector3()) {
+    this.path.pointAt(this.s0 + (this.s1 - this.s0) * u, this._p);
+    return target.set(this._p[0], this._p[1], this._p[2]);
+  }
+}
 
 /** Boulon d'ancrage des colonnes. */
 const anchorGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.01, 6);
@@ -113,6 +131,9 @@ export class DrumKitView {
       maple: mat.paleWood(),
       chrome: mat.chrome(),
       robot: mat.shell(),
+      pipe: Object.assign(mat.steel(), { side: THREE.DoubleSide }),
+      horn: Object.assign(mat.brass(), { side: THREE.DoubleSide }),
+      bore: new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }),
       joint: mat.gunmetal(),
       rubber: mat.rubber(),
       stick: mat.paleWood(),
@@ -264,11 +285,102 @@ export class DrumKitView {
         v.headMat = headMat;
       }
 
-      v.arm = this.buildArm(p);
+      if (p.station) Object.assign(v, this.buildStation(p));
+      else v.arm = this.buildArm(p);
       return v;
     });
+    if (kit.player === 'balls') {
+      const pool = (this.pool = new BallPool(this.group, kit.options.ballRadius, kit.maxBalls));
+      this.balls = pool.balls;
+      this.trails = pool.trails;
+    }
     // Matériaux de construction : jamais modifiés ensuite (les pièces fixes peuvent être fusionnées).
     delete this.mats;
+  }
+
+  /**
+   * Station de billes d'un élément : un seul tuyau, du cornet qui avale la bille à la
+   * bouche qui la crache (voir drums.js). Les deux anneaux lumineux signalent le tir et
+   * la capture.
+   */
+  buildStation(p) {
+    const m = this.mats;
+    const st = p.station;
+    const R = this.kit.options.pipeRadius;
+    const hornDepth = 0.17;
+    const path = st.feed;
+    const tubeLen = path.length - hornDepth;
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(new PathCurve(path, hornDepth, path.length), Math.ceil(tubeLen / 0.035), R, 14), m.pipe);
+    tube.castShadow = tube.receiveShadow = true;
+    this.group.add(tube);
+
+    const at = (s) => V(...path.pointAt(s));
+    const dirAt = (s) => V(...path.tangentAt(s));
+    const ringAt = (s, radius, thickness, material) => {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, thickness, 8, 32), material);
+      ring.position.copy(at(s));
+      ring.quaternion.setFromUnitVectors(V(0, 0, 1), dirAt(s));
+      this.group.add(ring);
+      return ring;
+    };
+    // Cornet : pavillon de laiton dans l'axe d'arrivée de la bille, qui se resserre sur le tuyau.
+    const horn = lathe(
+      [
+        [R, -hornDepth],
+        [R + 0.004, -0.11],
+        [R + 0.027, -0.05],
+        [R + 0.067, 0],
+        [R + 0.077, 0.012],
+      ],
+      36,
+      m.horn,
+    );
+    horn.position.copy(at(0));
+    horn.quaternion.setFromUnitVectors(UP, dirAt(0).negate());
+    this.group.add(horn);
+    const catchMat = mat.glow(0xffc46b, 0.2);
+    ringAt(0, R + 0.079, 0.01, catchMat).position.addScaledVector(dirAt(0), -0.012);
+    // Bouche : collier d'acier et anneau lumineux.
+    const nozzleMat = mat.glow(0xffc46b, 0.2);
+    ringAt(path.length - 0.004, R + 0.006, 0.012, nozzleMat);
+    ringAt(path.length - 0.09, R + 0.004, 0.009, m.chrome);
+    // Fond noir des deux bouts : la bille y naît et y disparaît hors de vue.
+    for (const s of [st.hideOut + 0.08, path.length - st.hideIn - 0.08]) {
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(R * 0.97, 16), m.bore);
+      disc.position.copy(at(s));
+      disc.quaternion.setFromUnitVectors(V(0, 0, 1), dirAt(s));
+      this.group.add(disc);
+    }
+    // Colliers réguliers sur les parties droites et hautes, et pieds boulonnés au sol.
+    for (let s = hornDepth + 0.5; s < path.length - 0.6; s += 0.8) ringAt(s, R + 0.004, 0.008, m.chrome);
+    const floorY = this.kit.options.pipeFloorY;
+    for (const [x, , z] of st.feet) {
+      const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, floorY - R, 20), m.joint);
+      foot.position.set(x, (floorY - R) / 2, z);
+      foot.castShadow = foot.receiveShadow = true;
+      const bolts = ringOf(5, 0.115, anchorGeo, m.chrome, floorY - R + 0.004);
+      bolts.position.set(x, 0, z);
+      this.group.add(foot, bolts);
+    }
+    return { nozzleMat, catchMat };
+  }
+
+  /** Billes en vie à l'instant t, et éclat des bouches et des cornets. */
+  updateBalls(t) {
+    const kit = this.kit;
+    this.pool.drawStations(t, kit.shots, kit, this.trackColors);
+    for (const v of this.views) {
+      const st = v.piece.station;
+      const shots = v.piece.shots;
+      const glow = (material, offset) => {
+        const i = upperBound(shots, t - offset, (s) => s.time) - 1;
+        const level = i >= 0 ? (0.4 + 0.6 * shots[i].velocity) * Math.exp(-(t - offset - shots[i].time) * 11) : 0;
+        if (i >= 0) material.emissive.copy(this.trackColors[shots[i].track]);
+        material.emissiveIntensity = 0.15 + 5 * level;
+      };
+      glow(v.nozzleMat, -st.flightIn);
+      glow(v.catchMat, st.flightOut);
+    }
   }
 
   buildArm(p) {
@@ -368,12 +480,15 @@ export class DrumKitView {
   }
 
   update(t) {
+    if (this.pool) this.updateBalls(t);
     for (const v of this.views) {
       const p = v.piece;
-      const a = armAngles(this.kit, p, t);
-      const [s0, s1] = v.arm.segments;
-      s0.rotation.z = a[0];
-      if (s1) s1.rotation.z = a[1] - a[0];
+      if (v.arm) {
+        const a = armAngles(this.kit, p, t);
+        const [s0, s1] = v.arm.segments;
+        s0.rotation.z = a[0];
+        if (s1) s1.rotation.z = a[1] - a[0];
+      }
 
       const { pulse, since, track } = hitPulse(this.kit, p, t);
       const color = track >= 0 ? this.trackColors[track] : null;

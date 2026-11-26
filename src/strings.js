@@ -9,6 +9,7 @@
 // la scène (côté médiator). Le placement dans la scène est donné par origin + yaw.
 
 import { upperBound, smoothstep, lerp, springSum } from './util.js';
+import { buildBallRow } from './ballRow.js';
 
 export const STRING_DEFAULTS = {
   spacing: 0.32,
@@ -23,6 +24,8 @@ export const STRING_DEFAULTS = {
   minGap: 0.12, // délai minimal entre deux pincements d'un même chariot
   damp: 1.6, // amortissement pendant la note
   release: 8, // amortissement après la fin de la note
+  player: 'picks', // 'picks' = médiators sur chariots, 'balls' = billes (voir ballRow.js)
+  ballHeight: 0.72, // hauteur de frappe des billes, en fraction de la corde la plus courte
 };
 
 /**
@@ -78,7 +81,7 @@ export function buildBassStrings(notes, options = {}) {
   }
 
   const width = n * spacing + 0.6;
-  return {
+  const model = {
     options: o,
     origin: o.origin ?? [0, 0, 0],
     yaw: o.yaw ?? 0,
@@ -88,6 +91,12 @@ export function buildBassStrings(notes, options = {}) {
     carriers,
     onsets: sorted.map((n) => n.time),
   };
+  // Billes : pas de chariots ; chaque corde est frappée de face, toutes à la même hauteur.
+  if (o.player === 'balls') {
+    model.carriers = [];
+    model.row = buildBallRow(strings, { y: o.bottom + o.lenHigh * o.ballHeight, z: 0.022 }, spacing, { drop: 0.5 });
+  }
+  return model;
 }
 
 /** Position du chariot (x) et du médiator (z) à l'instant t. */

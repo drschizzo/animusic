@@ -8,6 +8,7 @@
 
 import { buildChoreography } from './choreography.js';
 import { buildDrumKit } from './drums.js';
+import { planPasses } from './passes.js';
 import { buildBassStrings } from './strings.js';
 import { buildPipes } from './pipes.js';
 import { buildBells } from './bells.js';
@@ -291,32 +292,42 @@ export function groupParts(tracks, { maxParts = 10 } = {}) {
  * ensuite), plus ce qu'il faut savoir pour le filmer et le placer.
  *   focusY : hauteur du centre d'intérêt au-dessus de son socle
  */
+/** Avance (s) du geste sur la note : la vie d'une bille avant sa frappe, sinon celle du mécanisme. */
+const leadOf = (model, fallback) => (model.row ? Math.max(fallback, model.row.before + 0.1) : fallback);
+
+/**
+ * Place d'un instrument joué par une rangée de billes : l'estrade doit couvrir la rampe
+ * des buses, en avant de l'instrument (l'estrade est centrée, d'où le facteur 2).
+ */
+const rowSeat = (model) => (model.row ? { seat: { depth: 2 * (model.row.extent.maxZ + 0.3) } } : {});
+
 const FACTORIES = {
-  bass: (notes) => {
-    const model = buildBassStrings(notes);
-    return { model, focusY: 1.6, busy: spansOf(notes, 0.3, 1), start: model.onsets[0] - 0.3, end: lastEnd(notes) + 1 };
+  bass: (notes, ctx) => {
+    const model = buildBassStrings(notes, { player: ctx.style === 'balls' ? 'balls' : 'picks' });
+    return { model, focusY: 1.6, ...rowSeat(model), busy: spansOf(notes, leadOf(model, 0.3), 1), start: model.onsets[0] - leadOf(model, 0.3), end: lastEnd(notes) + 1 };
   },
-  plucked: (notes) => {
+  plucked: (notes, ctx) => {
     // Guitare, shamisen, harpe : cordes plus courtes, autant de médiators que d'accords serrés.
     const carriers = clamp(Math.ceil(trackStats(notes).polyphony) + 1, 2, 4);
-    const model = buildBassStrings(notes, { lenLow: 2.1, lenHigh: 0.9, spacing: 0.24, maxWidth: 4.2, bottom: 0.55, pickY: 0.9, carriers });
+    const model = buildBassStrings(notes, { lenLow: 2.1, lenHigh: 0.9, spacing: 0.24, maxWidth: 4.2, bottom: 0.55, pickY: 0.9, carriers, player: ctx.style === 'balls' ? 'balls' : 'picks' });
     model.style = 'plucked';
-    return { model, focusY: 1.3, busy: spansOf(notes, 0.3, 1), start: model.onsets[0] - 0.3, end: lastEnd(notes) + 1 };
+    return { model, focusY: 1.3, ...rowSeat(model), busy: spansOf(notes, leadOf(model, 0.3), 1), start: model.onsets[0] - leadOf(model, 0.3), end: lastEnd(notes) + 1 };
   },
   pads: (notes) => {
     const model = buildPipes(notes);
     const o = model.options;
     return { model, focusY: 1.6, busy: spansOf(notes, o.anticipation, o.release), start: model.onsets[0] - o.anticipation, end: lastEnd(notes) + o.release };
   },
-  bells: (notes) => {
-    const model = buildBells(notes);
+  bells: (notes, ctx) => {
+    const model = buildBells(notes, { player: ctx.style === 'balls' ? 'balls' : 'hammers' });
     const o = model.options;
     return {
       model,
+      ...rowSeat(model),
       focusY: 2.3,
       camera: { distScale: 1.5, minHeight: 0.6, allowLow: false },
-      busy: spansOf(notes, 0.6, 3),
-      start: model.onsets[0] - o.strikeTime * 2,
+      busy: spansOf(notes, leadOf(model, 0.6), 3),
+      start: model.onsets[0] - leadOf(model, o.strikeTime * 2),
       end: model.onsets[model.onsets.length - 1] + 3,
     };
   },
@@ -454,9 +465,10 @@ function fillTier(items, r, maxA, place) {
  *   { kind: notes } (une partie par type, forme historique utilisée par les tests)
  * @param controls contrôleurs expressifs par piste : [{ sustain, bends, mod }] (voir midi.js)
  * @param programs programme General MIDI de chaque piste (choix du style des vents)
+ * @param options style : 'arms' (bras et mécanismes) ou 'balls' (tout ce qui peut l'être est joué par des billes)
  * @returns { instruments: [{kind, model, tracks, onsets, busy, focus:{center,radius}, front, start, end}], start, end, radius }
  */
-export function buildEnsemble(parts, controls = [], programs = []) {
+export function buildEnsemble(parts, controls = [], programs = [], { style = 'arms', passes: passOptions = {} } = {}) {
   const list = Array.isArray(parts)
     ? parts
     : Object.entries(parts)
@@ -492,6 +504,7 @@ export function buildEnsemble(parts, controls = [], programs = []) {
       const tracks = p.tracks ?? tracksOf(p.notes);
       const main = mainTrack(p.notes);
       const ctx = {
+        style,
         tracks,
         controls,
         program: programs[main] ?? -1,
@@ -500,7 +513,18 @@ export function buildEnsemble(parts, controls = [], programs = []) {
       const made = FACTORIES[p.kind](p.notes, ctx);
       return { kind: p.kind, tracks, mainTrack: main, ...made, width: made.model.width, onsets: made.model.onsets, n: p.notes.length, line: lineOf(p.notes) };
     });
-  if (drumNotes.length) others.unshift({ kind: 'drums', notes: drumNotes, width: SEATS.drums.width, n: drumNotes.length });
+  if (drumNotes.length) {
+    const drums = { kind: 'drums', notes: drumNotes, width: SEATS.drums.width, n: drumNotes.length };
+    if (style === 'balls') {
+      // Les tuyaux débordent du kit : l'estrade se règle sur leur encombrement réel, et le
+      // kit est décalé pour s'y trouver centré.
+      const e = buildDrumKit(drumNotes, { player: 'balls' }).extent;
+      drums.width = e.maxX - e.minX;
+      drums.seat = { width: drums.width, depth: e.maxZ - e.minZ, height: e.top };
+      drums.shift = [-(e.minX + e.maxX) / 2, -(e.minZ + e.maxZ) / 2];
+    }
+    others.unshift(drums);
+  }
 
   // Placement par gradin. Chaque gradin commence juste derrière le précédent (ou derrière
   // la gouttière et les entonnoirs de l'arc de lames pour le premier) ; dans un gradin,
@@ -556,18 +580,19 @@ export function buildEnsemble(parts, controls = [], programs = []) {
     const seat = seatOf(it);
     if (it.kind === 'drums') {
       // La batterie, face au public, au centre de son gradin.
-      const kit = buildDrumKit(drumNotes, { center: [o[0], 0, o[2]] });
+      const [sx, sz] = it.shift ?? [0, 0];
+      const kit = buildDrumKit(drumNotes, { center: [o[0] + sx, 0, o[2] + sz], player: style === 'balls' ? 'balls' : 'arms' });
       const times = kit.pieces.flatMap((p) => p.hits.map((h) => h.time)).sort((a, b) => a - b);
       Object.assign(it, {
         model: kit,
         tracks: tracksOf(drumNotes),
         mainTrack: mainTrack(drumNotes),
         onsets: times,
-        busy: mergeSpans(times.map((t) => [t - kit.options.strikeTime - 0.3, t + 1])),
+        busy: mergeSpans(times.map((t) => [t - kit.lead - 0.3, t + 1])),
         focusY: 1.0,
         yaw: 0,
         camera: { distScale: 1.25, minHeight: 1.2, allowLow: false },
-        start: times[0] - kit.options.strikeTime,
+        start: times[0] - kit.lead,
         end: times[times.length - 1] + 1.5,
       });
     } else {
@@ -599,5 +624,8 @@ export function buildEnsemble(parts, controls = [], programs = []) {
     R + 6.2,
     ...instruments.filter((i) => i.footprint).map((i) => Math.hypot(...i.footprint.center) + Math.max(i.footprint.halfW, i.footprint.halfD) + 0.8),
   );
-  return { instruments, start, end, radius: R, stageRadius };
+  const ensemble = { instruments, start, end, radius: R, stageRadius };
+  // Échanges de billes entre instruments voisins (voir passes.js).
+  if (style === 'balls') ensemble.passes = planPasses(ensemble, passOptions);
+  return ensemble;
 }

@@ -24,6 +24,8 @@ change à chaque section et un réalisateur filme le tout comme un concert.
   Une piste qu'on n'entend pas (volume quasi nul, ou doublure couverte par une piste plus forte
   d'au moins 10 dB, comme des cordes lentes sous un piano) passe en **Son seul** : jouée, sans instrument à l'écran.
   Plusieurs pistes peuvent partager le même instrument.
+- **Style** : *Tout en billes* (batterie, carillon, basse et cordes pincées sont joués par des billes crachées par
+  des tuyaux ; les autres instruments suivront) ou *Bras et mécanismes* (bras robotisés, comme avant).
 - **Caméra** : *Réalisateur* (plans automatiques), *Orbite*, ou *Libre* (souris). Toucher la vue passe en libre.
 - **Barre de lecture** pour naviguer dans le morceau ; **Retard image** pour corriger une latence audio mal
   annoncée (Bluetooth) ; **Qualité** *Auto* part de *Haute* (reflets du sol, ombres portées, lumière indirecte, occlusion ambiante, flou de mouvement, profondeur de champ, faisceaux dans la brume, halo) et descend d'un cran
@@ -40,7 +42,7 @@ npm run dev        # http://localhost:5173
 npm test           # tests unitaires (chorégraphie, instruments, arrangeur, réalisateur)
 npm run build && npm run smoke   # build + test de fumée dans Chromium (comme en CI)
 npm run bench -- morceau.mid     # banc d'essai : arrangement, NaN, coût par image
-npm run collide -- morceau.mid   # interpénétrations : billes, instruments, encombrements
+npm run collide -- morceau.mid   # interpénétrations (dans les deux styles) : billes, instruments, encombrements
 ```
 
 ## Principe : l'animation à l'envers
@@ -55,6 +57,23 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
 - **Batterie** : un bras à deux segments par élément, pose de frappe par cinématique inverse ; la baguette se lève
   avant le coup (plus haut si le coup est fort et espacé) et touche la peau pile à l'instant de la note, puis fouette
   (ressort amorti). La peau vibre selon ses premiers modes propres, orientés par le point de frappe.
+- **Batterie à billes** (style *Tout en billes*, `src/ballistics.js`) : chaque élément a sa **station**, un seul
+  tuyau dont un bout est une crosse qui crache la bille et l'autre un cornet qui l'avale. La bille frappe la peau à
+  l'instant de la note, rebondit (réflexion, restitution 0,55) et retombe dans le cornet ; la grosse caisse, peau
+  verticale, est frappée par une bille lancée du sol. Toutes les billes d'une station suivent la même trajectoire :
+  leur écart horizontal reste égal à `vitesse × écart des notes`, d'où l'écart minimal (60 ms) en deçà duquel une
+  frappe ne reçoit pas de bille. Le moteur est générique (cible, normale, vitesse d'impact → bouche, rebond, cornet)
+  et servira aux autres instruments.
+- **Carillon et cordes à billes** (`src/ballRow.js`) : une rampe porte une buse par cloche ou par corde, un
+  collecteur porte un cornet sous chacune, et les deux sont reliés par un coude : un seul circuit. La bille frappe
+  la face avant du tube (ou la corde), rebondit vers le public et tombe dans son cornet. Les trajectoires sont
+  dans des plans parallèles : les billes de deux cibles voisines ne peuvent pas se croiser.
+- **Échanges de billes** (`src/passes.js`) : par moments (le début d'une section sur deux), un **canon de passe**
+  dressé derrière un instrument tire la bille d'une note de l'instrument situé derrière lui, d'un long lob ; à
+  défaut de voisin bien placé, c'est le canon central de la tourelle du marimba qui tire, à travers toute la scène.
+  Les billes de passe laissent une traînée lumineuse, pour se lire de loin. Le tube
+  ou la corde visés étant cylindriques, le point d'impact est choisi (trois inconnues, résolues par Newton) pour que
+  le rebond retombe dans le cornet habituel de la cible. Une passe remplace le tir de la buse : une note, une bille.
 - **Basse** : des chariots glissent devant la corde suivante pendant que le médiator est au repos, puis il traverse
   la corde à l'instant exact (aller, puis retour au coup suivant) ; la corde vibre avec un flou de mouvement. Les
   chariots se balancent en s'arrêtant. Les cordes pincées (guitare, shamisen…) utilisent le même mécanisme, plus petit,

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { carrierPose, stringVibration } from './strings.js';
 import { mat, fx } from './materials.js';
 import { rod, plinth, roundedBox, V } from './parts.js';
+import { BallRowView } from './ballRowView.js';
 
 /** Rendu de la basse à cordes pincées (voir strings.js). */
 export class StringsView {
@@ -25,8 +26,11 @@ export class StringsView {
     const topL = o.bottom + strings[0].length;
     const topR = o.bottom + strings[strings.length - 1].length;
 
-    const base = plinth(model.width + 0.5, 1.5, 0.12, { color: 0x3dc6ff });
-    base.group.position.z = 0.2;
+    // Avec les billes, le socle s'avance jusque sous la rampe des buses.
+    const row = model.row;
+    const front = row ? row.extent.maxZ + 0.25 : 0.95;
+    const base = plinth(model.width + 0.5, front + 0.55, 0.12, { color: 0x3dc6ff });
+    base.group.position.z = (front - 0.55) / 2;
     this.led = base.led;
     g.add(base.group);
 
@@ -73,6 +77,15 @@ export class StringsView {
       }
       return { s, coreMat, blur, blurMat };
     });
+
+    this._c = new THREE.Color();
+    if (row) {
+      this.carrierViews = [];
+      this.rowView = new BallRowView(row, trackColors, g);
+      this.balls = this.rowView.balls;
+      this.trails = this.rowView.trails;
+      return;
+    }
 
     // Rail des chariots, devant les cordes (côté +z).
     const railZ = 0.45;
@@ -122,6 +135,7 @@ export class StringsView {
       glow = Math.max(glow, amp);
     }
     this.led.emissiveIntensity = 0.25 + 3 * glow;
+    this.rowView?.update(t);
     m.carriers.forEach((c, i) => {
       const { x, z, sway, tilt } = carrierPose(m, c, t);
       const view = this.carrierViews[i];

@@ -2,7 +2,9 @@
 // vues que l'application) puis vérifie
 //   1. qu'aucune bille ne traverse une pièce solide, sur tout son parcours (vol, rebond
 //      vers la gouttière, gouttière, entonnoir, tube de retour) ;
-//   2. qu'aucun instrument n'en chevauche un autre (boîtes englobantes de leurs pièces).
+//   2. qu'aucun instrument n'en chevauche un autre (boîtes englobantes de leurs pièces) ;
+//   3. que deux billes ne se touchent jamais (marimba et stations de la batterie).
+// Chaque morceau est vérifié dans les deux styles : bras et mécanismes, puis billes.
 //
 //   node tools/collide.mjs [fichier.mid ...]     (sans argument : morceau de démonstration)
 //
@@ -21,7 +23,9 @@ globalThis.document ??= {
 
 const { parseMidi, demoSong } = await import('../src/midi.js');
 const { assignRoles, buildEnsemble, groupParts } = await import('../src/arranger.js');
-const { ballPosition, ballScale } = await import('../src/choreography.js');
+const { ballPosition, ballScale, activeBallRange } = await import('../src/choreography.js');
+const { stationBall } = await import('../src/ballistics.js');
+const { lowerBound, upperBound } = await import('../src/util.js');
 const { mountInstruments } = await import('../src/scene.js');
 
 const CELL = 0.5;
@@ -76,12 +80,12 @@ function sphereHit(grid, c, r, skip) {
   return worst;
 }
 
-function check(name, song) {
+function check(name, song, style) {
   const roles = assignRoles(song.tracks);
   song.tracks.forEach((t, i) => (t.role = roles[i]));
   const parts = groupParts(song.tracks);
   const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
-  const ens = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1));
+  const ens = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1), { style });
   const colors = song.tracks.map(() => new THREE.Color(1, 1, 1));
   const scene = new THREE.Group();
   const mounted = mountInstruments(ens, colors, scene, { freeze: !process.env.NO_FREEZE });
@@ -126,6 +130,96 @@ function check(name, song) {
       }
     }
     for (const [key, h] of hits) problems.push(`bille ↔ ${key} : ${h.count} échantillons, pénétration ${(h.depth * 100).toFixed(1)} cm, ex. t=${h.t.toFixed(2)} ${h.at}`);
+  }
+
+  // 1 bis. Billes des stations (batterie, carillon, cordes) contre toutes les pièces
+  // solides, tuyaux et cornets compris : la bille y circule dans l'axe, sans toucher la paroi.
+  const sources = views.flatMap((v) => {
+    const m = v.inst.model;
+    const matrix = (v.view.group ?? v.view.content).matrixWorld; // l'instrument est posé sur son estrade
+    if (v.inst.kind === 'drums' && m.player === 'balls')
+      return [{ name: 'batterie', matrix, shots: m.shots, before: m.before, after: m.after, stations: m.pieces.map((p) => [p.name, p.station]) }];
+    if (m.row) return [{ name: `${v.inst.kind}#${views.indexOf(v)}`, matrix, shots: m.row.shots, before: m.row.before, after: m.row.after, stations: m.row.stations.map((st, i) => [`${v.inst.kind} n° ${i + 1}`, st]) }];
+    return [];
+  });
+  // Passes : billes tirées d'un instrument vers un autre, en coordonnées de la scène.
+  for (const c of ens.passes?.cannons ?? []) {
+    const used = [...new Set(c.shots.map((s) => s.station))];
+    sources.push({
+      name: `passe ${ens.instruments[c.sender].kind} → ${ens.instruments[c.receiver].kind}`,
+      matrix: new THREE.Matrix4(),
+      shots: c.shots,
+      before: c.before,
+      after: c.after,
+      stations: used.map((st) => [`passe ${ens.instruments[c.sender].kind} → ${ens.instruments[c.receiver].kind} n° ${c.stations.indexOf(st) + 1}`, st]),
+      skip: (e) => mounted.passView.barrels.has(e.mesh),
+    });
+  }
+  if (sources.length) {
+    const grid = new Map();
+    collectTriangles(scene, 'scène', grid, []);
+    const c = new THREE.Vector3();
+    const tmp = [0, 0, 0];
+    for (const source of sources)
+      for (const [label, st] of source.stations) {
+        // Toutes les billes d'une station suivent la même trajectoire : une seule suffit.
+        const r0 = st.ballRadius;
+        const hits = new Map();
+        for (let dt = -st.before; dt < st.after; dt += 1 / 960) {
+          if (!stationBall(st, dt, tmp)) continue;
+          c.set(...tmp).applyMatrix4(source.matrix);
+          const hit = sphereHit(grid, c, r0 * 0.97, source.skip);
+          if (!hit) continue;
+          const phase = dt < -st.flightIn ? 'dans le tuyau' : dt < 0 ? 'vol' : dt < st.flightOut ? 'rebond' : 'dans le cornet';
+          const key = `${hit.e.name} [${phase}]`;
+          const h = hits.get(key) ?? { depth: 0, at: fmt(c), dt };
+          h.depth = Math.max(h.depth, r0 - hit.d);
+          hits.set(key, h);
+        }
+        for (const [key, h] of hits) problems.push(`bille de ${label} ↔ ${key} : pénétration ${(h.depth * 100).toFixed(1)} cm, ex. ${h.dt.toFixed(3)} s après la frappe ${h.at}`);
+      }
+  }
+
+  // 1 ter. Billes entre elles, à chaque 1/240 s du morceau.
+  {
+    const ch = balls?.inst.model;
+    const active = [];
+    const tmp = [0, 0, 0];
+    const lifted = new THREE.Vector3();
+    let touching = 0;
+    let worst = null;
+    for (let t = ens.start - 1; t < ens.end + 1; t += 1 / 240) {
+      active.length = 0;
+      if (ch) {
+        const [s, e] = activeBallRange(ch, t);
+        for (let i = s; i < e; i++) {
+          if (ballScale(ch.balls[i], t) <= 0) continue;
+          ballPosition(ch, ch.balls[i], t, tmp);
+          active.push([tmp[0], tmp[1], tmp[2], ch.options.ballRadius, 'marimba']);
+        }
+      }
+      sources.forEach((source) => {
+        const s = lowerBound(source.shots, t - source.after, (x) => x.time);
+        const e = upperBound(source.shots, t + source.before, (x) => x.time);
+        for (let i = s; i < e; i++) {
+          const shot = source.shots[i];
+          if (!stationBall(shot.station, t - shot.time, tmp)) continue;
+          lifted.set(...tmp).applyMatrix4(source.matrix);
+          active.push([lifted.x, lifted.y, lifted.z, shot.station.ballRadius, source.name]);
+        }
+      });
+      for (let i = 0; i < active.length; i++)
+        for (let j = i + 1; j < active.length; j++) {
+          const [a, b] = [active[i], active[j]];
+          // Les billes de marimba qui se suivent dans la gouttière ne sont pas l'objet de ce contrôle.
+          if (a[4] === 'marimba' && b[4] === 'marimba') continue;
+          const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) - a[3] - b[3];
+          if (d >= 0) continue;
+          touching++;
+          if (!worst || d < worst.d) worst = { d, t, who: `${a[4]} ↔ ${b[4]}` };
+        }
+    }
+    if (touching) problems.push(`billes qui se touchent : ${touching} échantillons, pire ${worst.who} à t=${worst.t.toFixed(2)} (${(-worst.d * 100).toFixed(1)} cm)`);
   }
 
   // 2. Instruments entre eux : une surface de l'un passe-t-elle par une surface de
@@ -177,7 +271,7 @@ function check(name, song) {
       const sn = Math.sin(f.yaw);
       v.lift.updateMatrixWorld(true);
       v.lift.traverse((o) => {
-        if (!o.isMesh || o.isInstancedMesh || o.userData.fx || !o.visible) return;
+        if (!o.isMesh || o.isInstancedMesh || o.userData.fx || o.userData.pass || !o.visible) return;
         const pos = o.geometry.attributes.position;
         for (let i = 0; i < pos.count; i++) {
           p.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
@@ -204,17 +298,29 @@ function check(name, song) {
       problems.push(`${v.inst.kind} dépasse son encombrement déclaré : largeur +${e.w.toFixed(2)}, profondeur +${e.d.toFixed(2)}, hauteur +${e.h.toFixed(2)} m`);
   });
 
-  console.log(`\n== ${name} : ${ens.instruments.map((i) => i.kind).join(', ')}`);
+  console.log(`\n== ${name} [${style === 'balls' ? 'billes' : 'bras'}] : ${ens.instruments.map((i) => i.kind).join(', ')}`);
   if (!problems.length) console.log('  aucune interpénétration');
   for (const p of problems) console.log(`  ✗ ${p}`);
   return problems.length;
 }
 
+/** Morceau de démonstration, plus une frappe de chaque élément de batterie : toutes les stations sont contrôlées. */
+function fullKitDemo() {
+  const song = demoSong();
+  const drums = song.tracks.find((t) => t.percussion);
+  const proto = drums.notes[0];
+  [36, 38, 42, 41, 45, 48, 49, 51, 56].forEach((midi, i) => drums.notes.push({ ...proto, midi, time: 2 + i * 0.37 }));
+  drums.notes.sort((a, b) => a.time - b.time);
+  return song;
+}
+
 const files = process.argv.slice(2);
 let total = 0;
-if (!files.length) total += check('démo', demoSong());
-for (const file of files) {
-  const buf = readFileSync(file);
-  total += check(basename(file), parseMidi(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), basename(file)));
-}
+const songs = files.length
+  ? files.map((file) => {
+      const buf = readFileSync(file);
+      return [basename(file), () => parseMidi(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), basename(file))];
+    })
+  : [['démo', fullKitDemo]];
+for (const [name, load] of songs) for (const style of ['arms', 'balls']) total += check(name, load(), style);
 process.exitCode = total ? 1 : 0;

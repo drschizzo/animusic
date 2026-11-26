@@ -40,7 +40,7 @@ function rebuild() {
   showError('');
   // Expression (pédale de sustain, pitch bend, modulation) de chaque piste.
   const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
-  ensemble = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1));
+  ensemble = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1), { style: $('style').value });
   stage.build(ensemble, song.tracks.map((_, i) => colorFor(i)));
   shotPlan = planShots(ensemble);
 
@@ -417,6 +417,21 @@ window.addEventListener('drop', (e) => {
   $('drop').hidden = true;
   const files = [...e.dataTransfer.files];
   if (files.length) openFiles(files);
+});
+
+// Style de jeu : billes ou bras et mécanismes. La scène est reconstruite au changement.
+try {
+  $('style').value = localStorage.getItem('animusic.style') === 'arms' ? 'arms' : 'balls';
+} catch {
+  /* réglage non mémorisé */
+}
+$('style').addEventListener('change', (e) => {
+  try {
+    localStorage.setItem('animusic.style', e.target.value);
+  } catch {
+    /* réglage non mémorisé */
+  }
+  if (ensemble) rebuild();
 });
 
 // Qualité graphique. En mode auto, on part de « haute » et on descend d'un cran

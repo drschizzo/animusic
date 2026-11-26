@@ -9,6 +9,7 @@ import { LaserView } from './laserView.js';
 import { KeysView } from './keysView.js';
 import { BowedView } from './bowedView.js';
 import { WindsView } from './windsView.js';
+import { PassesView } from './passesView.js';
 import { Environment } from './environment.js';
 import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
@@ -108,7 +109,9 @@ export function mountInstruments(ensemble, trackColors, content, { freeze = true
     const times = Array.from({ length: 8 }, (_, i) => inst.start + ((i + 0.5) / 8) * (inst.end - inst.start));
     frozen += freezeStatic(lifts[k], view, view.group ?? view.content, (t) => view.update(t), times);
   });
-  return { lifts, views, hatches, frozen };
+  // Canons de passe : montés après la fusion (leurs fûts bougent), sur l'élévateur de l'instrument qui tire.
+  const passView = ensemble.passes?.cannons.length ? new PassesView(ensemble.passes, trackColors, lifts, content) : null;
+  return { lifts, views, hatches, frozen, passView };
 }
 
 /** Scène Three.js : construit les objets à partir d'une chorégraphie et les pose à l'instant t. */
@@ -281,6 +284,7 @@ export class Stage {
         halo.material.uniforms.uIntensity.value = 2.5 * rising + (d >= 1 ? 0.05 + 0.35 * activity : 0);
       }
     });
+    this.passView?.update(t);
     this.assignLamps();
     if (this.song) this.mood = sectionAt(this.song, t);
     // Battue du morceau (grosse caisse) : le décor respire avec elle.

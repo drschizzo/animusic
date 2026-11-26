@@ -17,6 +17,20 @@ export const DRUM_DEFAULTS = {
   upperLift: 0.35, // rotation (rad) de l'épaule à levée maximale
   forearmLift: 1.1, // rotation (rad) de l'avant-bras à levée maximale
   pedalLift: 0.9,
+
+  // Batterie jouée par des billes (player: 'balls') : une station par élément.
+  player: 'arms', // 'arms' = bras robotisés, 'balls' = billes
+  ballRadius: 0.04,
+  ballDrop: 1.0, // hauteur de la bouche du tuyau au-dessus du point de frappe
+  ballFlight: 0.265, // durée du vol de la bouche à la peau
+  ballDrift: 1.5, // vitesse horizontale (m/s) : écarte la bille qui repart de celle qui arrive
+  ballBounce: 0.55, // restitution du rebond
+  catchDrop: 0.2, // le cornet est plus bas que le point de frappe…
+  catchMinY: 0.5, // … sans descendre sous cette hauteur
+  pipeRadius: 0.058, // rayon extérieur des tuyaux
+  pipeFloorY: 0.1, // hauteur de l'axe du tuyau le long du sol
+  hornLength: 0.22, // partie droite du cornet, dans l'axe de la bille
+  nozzleLength: 0.55, // partie droite du tuyau avant la bouche (crosse comprise)
 };
 
 // Disposition (repère local du kit : +z vers la caméra). armDir = direction du socle du bras.
@@ -62,6 +76,7 @@ function upperBound(arr, value) {
 }
 
 import { springSum } from './util.js';
+import { planStrike, buildStation, assignShots, maxConcurrent, fallTime, fillet, GRAVITY } from './ballistics.js';
 
 const smoothstep = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -105,6 +120,7 @@ export function buildDrumKit(notes, options = {}) {
       const def = PIECES[name];
       const pos = [center[0] + def.pos[0], def.y, center[2] + def.pos[1]];
       const piece = { name, ...def, position: pos, hits: byPiece.get(name) };
+      if (o.player === 'balls') return withStation(piece, o);
 
       if (def.kind === 'kick') {
         // Pédale : batteur pivotant derrière la peau arrière.
@@ -135,7 +151,103 @@ export function buildDrumKit(notes, options = {}) {
       return piece;
     });
 
-  return { options: o, center, pieces };
+  const kit = { options: o, center, pieces, player: o.player, lead: o.strikeTime };
+  if (o.player === 'balls') {
+    // Toutes les billes du kit, triées par instant de frappe (réservoir de rendu).
+    kit.shots = pieces.flatMap((p, i) => p.shots.map((h) => ({ time: h.time, track: h.track, velocity: h.velocity, piece: i, station: p.station }))).sort((a, b) => a.time - b.time);
+    kit.maxBalls = maxConcurrent(kit.shots);
+    kit.before = Math.max(...pieces.map((p) => p.station.before));
+    kit.after = Math.max(...pieces.map((p) => p.station.after));
+    kit.lead = kit.before;
+    kit.extent = extentOf(pieces, center, o);
+  }
+  return kit;
+}
+
+const unit3 = (a) => {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
+const along = (p, d, s) => [p[0] + d[0] * s, p[1] + d[1] * s, p[2] + d[2] * s];
+
+/**
+ * Station de billes d'un élément. Fûts, cymbales et bloc : un tuyau en crosse crache la
+ * bille de haut, elle frappe, rebondit vers l'extérieur du kit et tombe dans un cornet ;
+ * cornet et crosse sont les deux bouts d'un même tuyau, qui descend au sol et remonte.
+ * Grosse caisse (peau verticale) : la bille est lancée du sol, derrière, frappe presque
+ * à l'horizontale et retombe dans un cornet ; le tuyau fait une boucle au sol.
+ */
+function withStation(piece, o) {
+  const r = o.ballRadius;
+  const pos = piece.position;
+  let strike;
+  let corners;
+  if (piece.kind === 'kick') {
+    const back = pos[2] - piece.depth / 2;
+    const hit = [pos[0], pos[1] + 0.1, back - r];
+    piece.hitPoint = [hit[0], hit[1], back];
+    const T = 0.26;
+    const v0 = [-0.3 / T, (0.25 + 0.5 * GRAVITY * T * T) / T, 0.9 / T];
+    const vIn = [v0[0], v0[1] - GRAVITY * T, v0[2]];
+    const flightOut = fallTime(vIn[1], 0.25); // la vitesse verticale est conservée par la peau verticale
+    strike = planStrike({ hit, normal: [0, 0, -1], vIn, flightIn: T, restitution: o.ballBounce, flightOut });
+    const m = unit3(strike.vCatch);
+    const n = unit3(strike.v0);
+    const y = o.pipeFloorY;
+    const cb = along(strike.catch, m, (strike.catch[1] - y) / -m[1]);
+    const c1 = along(strike.mouth, n, -(strike.mouth[1] - y) / n[1]);
+    const h = unit3([n[0], 0, n[2]]);
+    const cd = along(c1, h, -0.3);
+    corners = [strike.catch, cb, [cb[0], y, cd[2]], cd, c1, strike.mouth];
+  } else {
+    const d = norm2(piece.armDir);
+    const D = [d[0], 0, d[1]];
+    const cymbal = piece.kind === 'cymbal';
+    const offset = cymbal ? piece.radius * 0.75 : piece.radius * 0.35;
+    // Surface réellement frappée : la peau, le dessus du bloc, ou le bronze (profil de la cymbale).
+    const surface = cymbal ? pos[1] - 0.02 + 0.013 * (1 - (0.75 - 0.6) / 0.4) : pos[1];
+    piece.hitPoint = [pos[0] + d[0] * offset, surface, pos[2] + d[1] * offset];
+    const hit = [piece.hitPoint[0], surface + r * 1.004, piece.hitPoint[2]];
+    const T = o.ballFlight;
+    const down = (o.ballDrop - 0.5 * GRAVITY * T * T) / T + GRAVITY * T; // vitesse verticale à l'impact
+    const vIn = [D[0] * o.ballDrift, -down, D[2] * o.ballDrift];
+    const catchY = Math.max(hit[1] - o.catchDrop, o.catchMinY);
+    const flightOut = fallTime(o.ballBounce * down, hit[1] - catchY);
+    strike = planStrike({ hit, normal: [0, 1, 0], vIn, flightIn: T, restitution: o.ballBounce, flightOut });
+    const m = unit3(strike.vCatch);
+    const n = unit3(strike.v0);
+    const cb = along(strike.catch, m, o.hornLength);
+    const cc = [cb[0], o.pipeFloorY, cb[2]];
+    const cd = along(cc, D, 0.3);
+    const c1 = along(strike.mouth, n, -o.nozzleLength);
+    corners = [strike.catch, cb, cc, cd, [cd[0], c1[1], cd[2]], c1, strike.mouth];
+  }
+  // Axe du tuyau, du cornet à la bouche ; la bille n'en parcourt que les deux bouts.
+  const tube = fillet(corners, 0.17);
+  piece.station = buildStation(strike, { ballRadius: r, feed: tube, drain: tube });
+  piece.station.tube = tube;
+  // Pieds : sous le milieu de chaque tronçon posé au sol (là où l'arrondi des coudes ne l'a pas décollé).
+  const low = (c) => Math.abs(c[1] - o.pipeFloorY) < 1e-6;
+  piece.station.feet = corners.slice(1).flatMap((c, i) => (low(c) && low(corners[i]) ? [[(c[0] + corners[i][0]) / 2, 0, (c[2] + corners[i][2]) / 2]] : []));
+  piece.shots = assignShots(piece.station, piece.hits);
+  return piece;
+}
+
+/** Encombrement du kit à billes autour de son centre (tuyaux et éléments compris). */
+function extentOf(pieces, center, o) {
+  const e = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity, top: 0 };
+  const grow = (x, y, z, pad) => {
+    e.minX = Math.min(e.minX, x - center[0] - pad);
+    e.maxX = Math.max(e.maxX, x - center[0] + pad);
+    e.minZ = Math.min(e.minZ, z - center[2] - pad);
+    e.maxZ = Math.max(e.maxZ, z - center[2] + pad);
+    e.top = Math.max(e.top, y + pad);
+  };
+  for (const p of pieces) {
+    grow(p.position[0], p.position[1], p.position[2], p.radius + 0.35);
+    for (const q of p.station.tube) grow(q[0], q[1], q[2], o.pipeRadius + 0.2);
+  }
+  return e;
 }
 
 /** Levée de la baguette à l'instant t : 0 au contact, ~restLift au repos. */
