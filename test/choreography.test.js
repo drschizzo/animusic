@@ -31,7 +31,9 @@ test('chaque bille part du canon au tir et touche sa lame pile au moment de la n
     close(ballPosition(ch, ball, ball.launch), ball.p0);
     close(ballPosition(ch, ball, ball.impact), ch.bars[ball.bar].target, 1e-6);
     assert.equal(ch.bars[ball.bar].midi, ball.midi);
-    assert.ok(Math.abs(ball.impact - ball.launch - ch.options.flightTime) < 1e-12);
+    // Une bille qui va rebondir est tirée plus haut (vol plus long).
+    const flight = ball.hits > 1 ? ch.options.chainFlightTime : ch.options.flightTime;
+    assert.ok(Math.abs(ball.impact - ball.launch - flight) < 1e-12);
   }
 });
 
@@ -80,7 +82,12 @@ test('maxConcurrent couvre le pic de billes', () => {
 });
 
 // Phrase rapide sur une même piste : de quoi déclencher des rebonds en chaîne.
-const phrase = Array.from({ length: 24 }, (_, i) => ({ midi: 60 + ((i * 5) % 12), time: 2 + i * 0.4, velocity: 0.7, track: 0 }));
+// Gammes montantes et descendantes en croches régulières.
+const scale = [60, 62, 64, 65, 67, 69, 71, 72];
+const phrase = Array.from({ length: 32 }, (_, i) => {
+  const k = i % 14;
+  return { midi: scale[k < 8 ? k : 14 - k], time: 2 + i * 0.4, velocity: 0.7, track: 0 };
+});
 
 test('rebonds en chaîne : chaque note est frappée par une bille, pile à son instant', () => {
   const ch = buildChoreography(phrase);
@@ -105,5 +112,23 @@ test('trajectoire continue, du tir au retour dans la tourelle', () => {
     // Fin de parcours : au pied de la tourelle.
     const end = ballPosition(ch, b, b.end);
     assert.ok(Math.hypot(end[0], end[2]) < ch.options.launcherRadius + 1);
+  }
+});
+
+test('rebonds crédibles : amortis, même cap, allure régulière', () => {
+  const ch = buildChoreography(phrase);
+  const chained = ch.balls.filter((b) => b.hits > 1);
+  assert.ok(chained.length > 0);
+  for (const b of chained) {
+    const hops = ch.impacts.filter((im) => im.ball === b);
+    for (let i = 2; i < hops.length; i++) {
+      const [a, m, z] = [hops[i - 2], hops[i - 1], hops[i]];
+      // Durée (donc hauteur) d'un rebond : jamais (nettement) plus que le précédent.
+      assert.ok(z.time - m.time <= (m.time - a.time) * 1.04 + 1e-9);
+      // Pas de demi-tour.
+      const u = [m.position[0] - a.position[0], m.position[2] - a.position[2]];
+      const v = [z.position[0] - m.position[0], z.position[2] - m.position[2]];
+      assert.ok(u[0] * v[0] + u[1] * v[1] > 0, 'aller-retour');
+    }
   }
 });
