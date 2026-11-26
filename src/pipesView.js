@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { pipeState } from './pipes.js';
 import { mat, fx } from './materials.js';
-import { plinth, lathe } from './parts.js';
+import { plinth, lathe, lamp } from './parts.js';
 
 /** Rendu des tubes d'orgue lumineux (voir pipes.js). */
 export class PipesView {
@@ -64,7 +64,7 @@ export class PipesView {
     });
 
     // La lumière des tubes éclaire réellement les alentours.
-    this.lamp = fx(new THREE.PointLight(0xffffff, 0, 12, 1.6));
+    this.lamp = lamp(0xffffff, 0, 12, 1.6);
     this.lamp.position.set(0, baseH + 1.3, 0.5);
     g.add(this.lamp);
     this._c = new THREE.Color();

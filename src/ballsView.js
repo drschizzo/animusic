@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose } from './choreography.js';
 import { lowerBound, upperBound } from './util.js';
 import { mat, fx } from './materials.js';
-import { roundedBox, lathe, rod, ringOf, footShadow, channelGeometry, V } from './parts.js';
+import { roundedBox, lathe, rod, ringOf, footShadow, channelGeometry, V, lamp } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const TRAIL = 6; // fantômes lumineux derrière chaque bille
@@ -243,7 +243,7 @@ export class BallsView {
     this.trails = instanced(new THREE.SphereGeometry(o.ballRadius * 0.9, 12, 8), pool * TRAIL);
     this.sparks = instanced(new THREE.SphereGeometry(0.022, 6, 4), pool * SPARKS);
     this.hitLights = [0, 1].map(() => {
-      const light = fx(new THREE.PointLight(0xffffff, 0, 6, 1.8));
+      const light = lamp(0xffffff, 0, 6, 1.8);
       this.content.add(light);
       return light;
     });

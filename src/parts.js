@@ -42,6 +42,24 @@ export function plinth(width, depth, height, { bottom = 0, color = 0x49d8ff } = 
 }
 
 /**
+ * Lampe virtuelle : une lumière ponctuelle (couleur, intensité, portée) que la vue pose
+ * comme une vraie, mais que la scène confie à l'une des quelques lumières réelles
+ * réservées aux instruments (les plus vives à l'image). Le nombre de lumières reste
+ * constant : pas de recompilation de tous les shaders quand un instrument entre, et un
+ * coût par pixel borné quel que soit le nombre d'instruments.
+ */
+export function lamp(color = 0xffffff, intensity = 0, distance = 8, decay = 1.6) {
+  const o = new THREE.Object3D();
+  o.color = new THREE.Color(color);
+  o.intensity = intensity;
+  o.distance = distance;
+  o.decay = decay;
+  o.userData.lamp = true;
+  o.userData.fx = true;
+  return o;
+}
+
+/**
  * Estrade d'un gradin : bloc sombre (demi-côtés halfX, halfZ, hauteur h, du sol à h),
  * plateau laqué et filet lumineux dans la couleur de l'instrument sous le rebord.
  */

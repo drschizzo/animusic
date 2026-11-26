@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { bowPose, bowedString } from './bowed.js';
 import { mat, fx } from './materials.js';
-import { lathe, rod, roundedBox, V } from './parts.js';
+import { lathe, rod, roundedBox, V, lamp } from './parts.js';
 
 /** Rendu des cordes frottées (voir bowed.js). */
 export class BowedView {
@@ -134,7 +134,7 @@ export class BowedView {
       return { b, carriage, arm, holder, bow, hairMat, eyeMat };
     });
 
-    this.lamp = fx(new THREE.PointLight(0xffffff, 0, 8, 1.6));
+    this.lamp = lamp(0xffffff, 0, 8, 1.6);
     this.lamp.position.set(0, 1.6, R + 0.6);
     g.add(this.lamp);
     this._c = new THREE.Color();

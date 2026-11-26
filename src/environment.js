@@ -605,11 +605,11 @@ export class Environment {
 
   setQuality(level) {
     // Sonde de reflets : deux faces par image en qualité haute, une (plus petite) en moyenne.
-    this.probeFaces = level === 'high' ? 2 : level === 'medium' ? 1 : 0;
+    this.probeFaces = level === 'low' ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
     this.reflections = level !== 'low';
-    this.reflectionScale = level === 'high' ? 0.75 : 0.5;
+    this.reflectionScale = level === 'high' ? 0.6 : 0.5;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;
     this.key.castShadow = level !== 'low';
     this.key.shadow.mapSize.setScalar(level === 'high' ? 4096 : 2048);

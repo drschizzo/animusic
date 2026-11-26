@@ -15,6 +15,7 @@ import { hitPulse } from './drums.js';
 import { analyzeSong, deployAt, sectionAt } from './sections.js';
 import { floorHalo, riserBlock } from './parts.js';
 import { lowerBound } from './util.js';
+import { freezeStatic } from './freeze.js';
 
 /** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
 const PIXEL_BUDGET = {
@@ -22,6 +23,8 @@ const PIXEL_BUDGET = {
   medium: { cap: 1.5, budget: 1920 * 1080 },
   low: { cap: 1, budget: 1920 * 1080 },
 };
+
+const LAMP_POOL = 4;
 
 const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, bowed: BowedView, winds: WindsView, plucked: StringsView, keys: KeysView };
 
@@ -45,7 +48,7 @@ function solidBox(root) {
  * utilisé aussi par le détecteur d'interpénétrations (tools/collide.mjs).
  * @returns { lifts, views, hatches: [{ height, halo }] }
  */
-export function mountInstruments(ensemble, trackColors, content) {
+export function mountInstruments(ensemble, trackColors, content, { freeze = true } = {}) {
   const lifts = ensemble.instruments.map(() => {
     const lift = new THREE.Group();
     content.add(lift);
@@ -91,7 +94,14 @@ export function mountInstruments(ensemble, trackColors, content) {
     content.add(halo);
     return { height, halo };
   });
-  return { lifts, views, hatches };
+  // Pièces fixes fusionnées par matériau (voir freeze.js) : beaucoup moins d'appels de rendu.
+  let frozen = 0;
+  if (freeze) views.forEach((view, k) => {
+    const inst = ensemble.instruments[k];
+    const times = Array.from({ length: 8 }, (_, i) => inst.start + ((i + 0.5) / 8) * (inst.end - inst.start));
+    frozen += freezeStatic(lifts[k], view, view.group ?? view.content, (t) => view.update(t), times);
+  });
+  return { lifts, views, hatches, frozen };
 }
 
 /** Scène Three.js : construit les objets à partir d'une chorégraphie et les pose à l'instant t. */
@@ -123,6 +133,14 @@ export class Stage {
 
     this.content = new THREE.Group();
     scene.add(this.content);
+    // Lumières réservées aux instruments : toujours présentes (nombre constant, donc pas
+    // de recompilation des shaders), confiées chaque image aux lampes les plus vives.
+    this.lampPool = Array.from({ length: LAMP_POOL }, () => {
+      const light = new THREE.PointLight(0xffffff, 0, 8, 1.6);
+      light.userData.fx = true;
+      scene.add(light);
+      return light;
+    });
 
     // Le conteneur peut changer de taille sans que la fenêtre ne bouge (mise en page).
     new ResizeObserver(() => this.resize()).observe(container);
@@ -168,6 +186,8 @@ export class Stage {
     this.kick = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
     this.song = analyzeSong(ensemble);
     Object.assign(this, mountInstruments(ensemble, trackColors, this.content));
+    this.lamps = [];
+    this.lifts.forEach((lift, k) => lift.traverse((o) => o.userData.lamp && this.lamps.push({ o, k })));
     this.mood = sectionAt(this.song, 0);
     this.spots = ensemble.instruments.map((inst) => ({ center: new THREE.Vector3(...inst.focus.center), level: 0 }));
 
@@ -176,6 +196,21 @@ export class Stage {
     // Compile d'avance tous les shaders (y compris des objets encore vides, comme le
     // réservoir de billes) : sinon la première apparition fige l'image en pleine lecture.
     this.renderer.compileAsync(this.scene, this.camera).catch(() => {});
+    // Une image de rodage, tous les instruments en place : géométries envoyées au GPU,
+    // variantes d'ombre, de reflet et de profondeur compilées. Sans elle, un instrument
+    // qui entre en scène pour la première fois fait hoqueter l'image.
+    // Les pièces cachées au repos (rayons, éclairs, flou des cordes) sont montrées le temps de cette image.
+    if (this.container.clientWidth && this.container.clientHeight) {
+      const hidden = [];
+      this.content.traverse((o) => {
+        if (!o.visible) {
+          hidden.push(o);
+          o.visible = true;
+        }
+      });
+      this.render();
+      for (const o of hidden) o.visible = false;
+    }
   }
 
   /** Place la caméra (pose calculée par le réalisateur). */
@@ -214,10 +249,26 @@ export class Stage {
         halo.material.uniforms.uIntensity.value = 2.5 * rising + (d >= 1 ? 0.3 + 0.9 * activity : 0);
       }
     });
+    this.assignLamps();
     if (this.song) this.mood = sectionAt(this.song, t);
     // Battue du morceau (grosse caisse) : le décor respire avec elle.
     const kick = this.kick?.pieces.find((p) => p.name === 'kick');
     this.pulse = kick ? hitPulse(this.kick, kick, t).pulse : 0;
+  }
+
+  /** Confie les lumières réservées aux lampes d'instruments les plus vives. */
+  assignLamps() {
+    const lit = (this.lamps ?? []).filter(({ o, k }) => this.lifts[k].visible && o.intensity > 0.01).sort((a, b) => b.o.intensity - a.o.intensity);
+    this.lampPool.forEach((light, i) => {
+      const lamp = lit[i]?.o;
+      light.intensity = lamp ? lamp.intensity : 0;
+      if (!lamp) return;
+      lamp.updateWorldMatrix(true, false);
+      light.position.setFromMatrixPosition(lamp.matrixWorld);
+      light.color.copy(lamp.color);
+      light.distance = lamp.distance;
+      light.decay = lamp.decay;
+    });
   }
 
   /**

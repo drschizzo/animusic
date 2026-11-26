@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { windState } from './winds.js';
 import { mat, fx } from './materials.js';
-import { plinth, rod, lathe, V } from './parts.js';
+import { plinth, rod, lathe, V, lamp } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -141,11 +141,11 @@ export class WindsView {
       // Alimentation : de la nourrice à l'embouchure.
       const mouthWorld = new THREE.Vector3(0, -0.05, 0).applyQuaternion(horn.quaternion).add(horn.position);
       g.add(rod(V(p.x, manifoldY, -0.38), mouthWorld, 0.012, dark, 8));
-      Object.assign(v, { horn, bell, piston, pistonMat, coreMat, plumeMat, rest: piston.position.z });
+      Object.assign(v, { bell, piston, pistonMat, coreMat, plumeMat, rest: piston.position.z });
       return v;
     });
 
-    this.lamp = fx(new THREE.PointLight(0xffffff, 0, 8, 1.6));
+    this.lamp = lamp(0xffffff, 0, 8, 1.6);
     this.lamp.position.set(0, 1.4, 0.9);
     g.add(this.lamp);
     this._c = new THREE.Color();

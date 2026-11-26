@@ -185,6 +185,8 @@ export class DrumKitView {
       v.arm = this.buildArm(p);
       return v;
     });
+    // Matériaux de construction : jamais modifiés ensuite (les pièces fixes peuvent être fusionnées).
+    delete this.mats;
   }
 
   buildArm(p) {

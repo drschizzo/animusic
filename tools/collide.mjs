@@ -84,7 +84,7 @@ function check(name, song) {
   const ens = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1));
   const colors = song.tracks.map(() => new THREE.Color(1, 1, 1));
   const scene = new THREE.Group();
-  const mounted = mountInstruments(ens, colors, scene);
+  const mounted = mountInstruments(ens, colors, scene, { freeze: !process.env.NO_FREEZE });
   const views = ens.instruments.map((inst, k) => {
     const view = mounted.views[k];
     view.update(-100); // pose de repos

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { laserState, laserExpression } from './laser.js';
 import { mat, fx } from './materials.js';
-import { rod, plinth, lathe, V } from './parts.js';
+import { rod, plinth, lathe, V, lamp } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -69,7 +69,7 @@ export class LaserView {
     this.sky = fx(new THREE.Mesh(sky, this.skyMat));
     this.skyMat.side = THREE.DoubleSide;
     this.sky.position.copy(focus);
-    this.lamp = fx(new THREE.PointLight(0xffffff, 0, 14, 1.6));
+    this.lamp = lamp(0xffffff, 0, 14, 1.6);
     this.lamp.position.copy(focus);
     g.add(this.halo, this.sky, this.lamp);
 
