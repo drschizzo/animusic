@@ -260,22 +260,21 @@ function rimmed(material, edge = 0.7) {
  * @param pitch écart entre deux sillons (m)
  */
 function lathed(material, pitch = 0.006) {
-  const uniforms = { uLathe: { value: new THREE.Vector2((2 * Math.PI) / pitch, 0.38) } };
+  // uShimmer (force, phase) : vibration après une frappe, pilotée par la vue.
+  const uniforms = (material.userData.lathe = { uLathe: { value: new THREE.Vector2((2 * Math.PI) / pitch, 0.3) }, uShimmer: { value: new THREE.Vector2(0, 0) } });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vLatheP; varying mat3 vLatheBasis;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLatheP = position;\nvLatheBasis = normalMatrix;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec2 uLathe;\nvarying vec3 vLatheP; varying mat3 vLatheBasis;')
+      .replace('#include <common>', '#include <common>\nuniform vec2 uLathe; uniform vec2 uShimmer;\nvarying vec3 vLatheP; varying mat3 vLatheBasis;')
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
         float latheR = length(vLatheP.xz);
         float lathePhase = latheR * uLathe.x;
         float latheSharp = 1.0 - smoothstep(0.8, 2.4, fwidth(lathePhase));
-        // Sillons trop fins pour l'écran : leur effet moyen est une surface plus mate.
-        roughnessFactor = clamp(roughnessFactor + 0.16 * (1.0 - latheSharp), 0.04, 1.0);
         // Bandes larges : le tour laisse des zones plus ou moins polies.
         roughnessFactor = clamp(roughnessFactor + 0.07 * sin(latheR * 71.0) * sin(latheR * 23.0 + 1.3), 0.04, 1.0);`,
       )
@@ -283,7 +282,20 @@ function lathed(material, pitch = 0.006) {
         '#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>
         vec3 latheOut = vLatheBasis * vec3(vLatheP.x, 0.0, vLatheP.z);
-        vec3 latheBent = normal - latheOut / max(length(latheOut), 1e-5) * cos(lathePhase) * uLathe.y * latheSharp;
+        latheOut /= max(length(latheOut), 1e-5);
+        // Chaque sillon renvoie la lumière un peu plus vers le centre ou vers le bord : le
+        // reflet d'un projecteur s'étire en éventail le long du rayon. Quand les sillons
+        // passent sous le pixel, on tire leur pente au hasard par pixel : l'éventail
+        // reste, en grain fin, au lieu de se moirer ou de s'éteindre.
+        float latheDither = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) * 2.0 - 1.0;
+        vec3 latheBent = normal - latheOut * mix(latheDither, cos(lathePhase), latheSharp) * uLathe.y;
+        // Vibration : des ondes tournent autour de la cymbale et font courir les reflets,
+        // surtout vers le bord (le centre est tenu par le pied).
+        vec3 latheAround = vLatheBasis * vec3(-vLatheP.z, 0.0, vLatheP.x);
+        latheAround /= max(length(latheAround), 1e-5);
+        float latheAngle = atan(vLatheP.z, vLatheP.x);
+        float latheWave = sin(latheAngle * 5.0 + uShimmer.y) * sin(latheR * 38.0 - uShimmer.y * 0.6) + 0.6 * sin(latheAngle * 3.0 - uShimmer.y * 1.7);
+        latheBent += (latheOut * 0.5 + latheAround) * latheWave * uShimmer.x * 0.22 * smoothstep(0.03, 0.3, latheR);
         normal = latheBent / max(length(latheBent), 1e-4);`,
       );
   };
@@ -300,7 +312,9 @@ export const mat = {
   gunmetal: () => detail(S({ color: 0x23262f, roughness: 0.55, metalness: 0.9, roughnessMap: brushedTexture() }), { scale: 4.5, bump: 0.14, rough: 0.14 }),
   brass: () => detail(S({ color: 0xe0ac4a, roughness: 0.42, metalness: 1, roughnessMap: brushedTexture() }), { scale: 6, bump: 0.035, rough: 0.12 }),
   /** Bronze de cymbale, tourné : sillons concentriques autour de l'axe de la pièce. */
-  cymbal: () => lathed(S({ color: 0xd8a445, roughness: 0.38, metalness: 1, emissive: 0x000000, side: THREE.DoubleSide })),
+  cymbal: () => lathed(S({ color: 0xc8a258, roughness: 0.24, metalness: 1, emissive: 0x000000, side: THREE.DoubleSide })),
+  /** Cuivre martelé : mille petits coups de marteau, relief large et marqué. */
+  hammered: (color = 0xc9764e) => detail(S({ color, roughness: 0.34, metalness: 1 }), { scale: 2.2, bump: 0.55, rough: 0.1 }),
   copper: () => detail(S({ color: 0xd9825a, roughness: 0.3, metalness: 1, roughnessMap: brushedTexture() }), { scale: 6, bump: 0.035, rough: 0.12 }),
   gold: () => detail(S({ color: 0xffcf6a, roughness: 0.16, metalness: 1 }), { scale: 3, bump: 0, rough: 0.07 }),
   /** Laque sous vernis (fûts de batterie, carrosserie) : vernis tendu, poli marbré dessous. */

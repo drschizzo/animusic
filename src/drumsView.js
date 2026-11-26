@@ -23,12 +23,35 @@ function headGeometry(radius) {
 }
 
 /**
+ * Peau percée d'un évent : disque avec un vrai trou (toutes les passes de rendu le voient,
+ * ombres et profondeur comprises). UV comme ceux d'un disque plein.
+ * @param port [x, y, rayon] de l'évent
+ */
+function portedHeadGeometry(radius, [px, py, pr]) {
+  const shape = new THREE.Shape().absarc(0, 0, radius, 0, Math.PI * 2, false);
+  shape.holes.push(new THREE.Path().absarc(px, py, pr, 0, Math.PI * 2, true));
+  const geo = new THREE.ShapeGeometry(shape, 64);
+  const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, pos.getX(i) / (2 * radius) + 0.5, pos.getY(i) / (2 * radius) + 0.5);
+  return geo;
+}
+
+/**
  * Peau qui vibre selon ses premiers modes propres (fondamental, puis modes à un et
  * deux diamètres nodaux orientés par le point de frappe), excitée à chaque coup.
  * Le déplacement et l'inclinaison des normales sont calculés dans le shader.
+ *
+ * @param shared uniformes d'une autre membrane : la pièce (cerclage d'évent collé sur la
+ *   peau) suit exactement la même déformation
  */
-function membrane(material, radius, angle) {
-  const u = (material.userData.membrane = { uAmp: { value: 0 }, uSince: { value: 10 }, uRadius: { value: radius }, uAngle: { value: angle } });
+function membrane(material, radius, angle, { shared = null } = {}) {
+  const u = (material.userData.membrane = shared ?? {
+    uAmp: { value: 0 },
+    uSince: { value: 10 },
+    uRadius: { value: radius },
+    uAngle: { value: angle },
+  });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, u);
     shader.vertexShader = shader.vertexShader
@@ -50,11 +73,13 @@ function membrane(material, radius, angle) {
         float eps = uRadius * 0.02;
         float dx = (drumModes(position.xy + vec2(eps, 0.0), uSince) - drumModes(position.xy - vec2(eps, 0.0), uSince)) / (2.0 * eps);
         float dy = (drumModes(position.xy + vec2(0.0, eps), uSince) - drumModes(position.xy - vec2(0.0, eps), uSince)) / (2.0 * eps);
-        objectNormal = normalize(objectNormal + vec3(dx, dy, 0.0) * envN * 5.0);`,
+        objectNormal = normalize(objectNormal + vec3(dx, dy, 0.0) * envN * 9.0);`,
       )
       .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed.z -= uAmp * exp(-uSince * 7.0) * drumModes(position.xy, uSince);');
   };
   material.customProgramCacheKey = () => 'drum-membrane';
+  // Déformée dans le repère de la peau : jamais fusionnée avec les pièces fixes.
+  material.userData.freezable = false;
   return material;
 }
 
@@ -80,7 +105,12 @@ export class DrumKitView {
     parent.add(this.group);
 
     const m = (this.mats = {
-      shell: mat.lacquer(0x8f0f1f, 0.65),
+      // Cuivre martelé pour les fûts, laiton pour la caisse claire, érable pour les
+      // cercles de la grosse caisse : les matières du reste de l'orchestre, pas la laque
+      // rouge d'un kit de rock.
+      copper: mat.hammered(),
+      brass: mat.brass(),
+      maple: mat.paleWood(),
       chrome: mat.chrome(),
       robot: mat.shell(),
       joint: mat.gunmetal(),
@@ -95,30 +125,70 @@ export class DrumKitView {
       const [x, y, z] = p.position;
 
       if (p.kind === 'drum' || p.kind === 'kick') {
-        const shell = new THREE.Mesh(new THREE.CylinderGeometry(p.radius, p.radius, p.depth, 56, 1, true), m.shell);
-        const headMat = membrane(mat.skin(), p.radius * 0.985, p.armDir ? Math.atan2(p.armDir[1], p.armDir[0]) : 0);
-        const head = new THREE.Mesh(headGeometry(p.radius * 0.985), headMat);
-        const hoopGeo = new THREE.TorusGeometry(p.radius + 0.004, 0.016, 10, 56);
+        const R = p.radius;
+        const kettle = p.kind === 'drum' && p.name !== 'snare';
+        const headMat = membrane(mat.skin(), R * 0.985, p.armDir ? Math.atan2(p.armDir[1], p.armDir[0]) : 0);
+        const head = new THREE.Mesh(headGeometry(R * 0.985), headMat);
+        const hoopGeo = new THREE.TorusGeometry(R + 0.004, 0.016, 10, 56);
         const hoop = new THREE.Mesh(hoopGeo, m.chrome);
         const hoop2 = new THREE.Mesh(hoopGeo, m.chrome);
-        const lugs = ringOf(p.kind === 'kick' ? 10 : 8, p.radius + 0.014, lugGeo, m.chrome);
         const drum = new THREE.Group();
-        shell.castShadow = shell.receiveShadow = true;
         head.receiveShadow = true;
-        if (p.kind === 'drum') {
+        if (kettle) {
+          // Tom : petite timbale, cuve de cuivre martelé sous la peau. Le pied s'emboîte
+          // dans l'ouverture du fond.
+          const d = p.depth;
+          const bowl = lathe(
+            [
+              [0.03, -d],
+              [R * 0.34, -d * 0.97],
+              [R * 0.62, -d * 0.84],
+              [R * 0.84, -d * 0.6],
+              [R * 0.96, -d * 0.3],
+              [R, -0.05],
+              [R, 0],
+            ],
+            56,
+            m.copper,
+          );
+          head.rotation.x = -Math.PI / 2;
+          hoop.rotation.x = Math.PI / 2;
+          // Tirants courts sous le cercle, là où la cuve est encore droite.
+          const lugs = ringOf(6, R + 0.014, lugGeo, m.chrome, -0.045);
+          drum.add(bowl, head, hoop, lugs);
+          drum.position.set(x, y, z);
+          stand(this.group, x, z, y - d, m.chrome, m.joint);
+        } else if (p.kind === 'drum') {
+          // Caisse claire : fût de laiton, deux cercles, tirants, déclencheur du timbre.
+          const shell = new THREE.Mesh(new THREE.CylinderGeometry(R, R, p.depth, 56, 1, true), m.brass);
+          shell.castShadow = shell.receiveShadow = true;
           shell.position.y = -p.depth / 2;
           head.rotation.x = -Math.PI / 2;
           hoop.rotation.x = hoop2.rotation.x = Math.PI / 2;
           hoop2.position.y = -p.depth;
-          lugs.position.y = -p.depth / 2;
+          const lugs = ringOf(8, R + 0.014, lugGeo, m.chrome, -p.depth / 2);
           // Fond du fût : sombre, pour ne pas voir à travers.
-          const bottom = new THREE.Mesh(new THREE.CircleGeometry(p.radius * 0.985, 40), m.rubber);
+          const bottom = new THREE.Mesh(new THREE.CircleGeometry(R * 0.985, 40), m.rubber);
           bottom.rotation.x = Math.PI / 2;
           bottom.position.y = -p.depth;
-          drum.add(shell, head, hoop, hoop2, lugs, bottom);
+          // Déclencheur : boîtier posé contre le fût, entre deux tirants, côté opposé au bras.
+          const step = Math.PI / 4; // un tirant tous les 45° : le boîtier se cale à mi-chemin
+          const away = (Math.round((Math.atan2(p.armDir[1], p.armDir[0]) + Math.PI) / step - 0.5) + 0.5) * step;
+          const strainer = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.05), m.chrome);
+          strainer.position.set(Math.cos(away) * (R + 0.015), -p.depth / 2, Math.sin(away) * (R + 0.015));
+          strainer.rotation.y = -away;
+          strainer.castShadow = true;
+          drum.add(shell, head, hoop, hoop2, lugs, bottom, strainer);
           drum.position.set(x, y, z);
           stand(this.group, x, z, y - p.depth, m.chrome, m.joint);
         } else {
+          const shell = new THREE.Mesh(new THREE.CylinderGeometry(R, R, p.depth, 56, 1, true), m.copper);
+          shell.castShadow = shell.receiveShadow = true;
+          const lugs = ringOf(10, R + 0.014, lugGeo, m.chrome);
+          // Cercles en érable, plus épais que ceux des autres fûts.
+          const woodHoop = new THREE.TorusGeometry(R + 0.006, 0.022, 10, 56);
+          hoop.geometry = hoop2.geometry = woodHoop;
+          hoop.material = hoop2.material = m.maple;
           // Grosse caisse couchée, peaux vers ±z ; la peau arrière reçoit le batteur.
           shell.rotation.x = Math.PI / 2;
           lugs.rotation.x = Math.PI / 2;
@@ -126,16 +196,25 @@ export class DrumKitView {
           head.rotation.y = Math.PI;
           hoop.position.z = -p.depth / 2;
           hoop2.position.z = p.depth / 2;
-          const front = new THREE.Mesh(headGeometry(p.radius * 0.985), headMat);
+          // Peau avant (de résonance) : un vrai évent y est découpé. Elle vibre moins que
+          // la peau frappée ; son cerclage chromé, collé dessus, suit la même déformation.
+          const port = [R * 0.38, -R * 0.3, R * 0.26];
+          const frontMat = membrane(mat.skin(), R * 0.985, 0);
+          const front = new THREE.Mesh(portedHeadGeometry(R * 0.985, port), frontMat);
           front.position.z = p.depth / 2;
-          // Évent de la peau avant, cerclé de lumière.
-          const port = new THREE.Mesh(new THREE.CircleGeometry(p.radius * 0.26, 32), new THREE.MeshBasicMaterial({ color: 0x000000 }));
-          port.position.set(p.radius * 0.38, -p.radius * 0.3, p.depth / 2 + 0.002);
-          v.portMat = mat.glow(0xffffff, 0);
-          const portRing = new THREE.Mesh(new THREE.TorusGeometry(p.radius * 0.26, 0.012, 8, 32), v.portMat);
-          portRing.position.copy(port.position);
-          drum.add(shell, head, hoop, hoop2, lugs, front, port, portRing);
+          const ringGeo = new THREE.TorusGeometry(port[2] + 0.008, 0.008, 8, 40);
+          ringGeo.translate(port[0], port[1], 0);
+          const portRing = new THREE.Mesh(ringGeo, membrane(mat.chrome(), R * 0.985, 0, { shared: frontMat.userData.membrane }));
+          portRing.position.z = p.depth / 2 + 0.008;
+          // Intérieur du fût, visible par l'évent : paroi et cloison sombres. La cloison
+          // est à 6 cm de la peau frappée, hors de portée de sa vibration.
+          const liner = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.97, R * 0.97, p.depth, 40, 1, true), new THREE.MeshStandardMaterial({ color: 0x0b0a09, roughness: 0.9, side: THREE.BackSide }));
+          liner.rotation.x = Math.PI / 2;
+          const baffle = new THREE.Mesh(new THREE.CircleGeometry(R * 0.97, 40), m.rubber);
+          baffle.position.z = -p.depth / 2 + 0.06;
+          drum.add(shell, head, hoop, hoop2, lugs, front, portRing, liner, baffle);
           drum.position.set(x, y, z);
+          v.frontMat = frontMat;
           // Béquilles.
           for (const sx of [-1, 1]) {
             this.group.add(rod(V(x + sx * p.radius * 0.75, y - p.radius * 0.6, z + p.depth * 0.3), V(x + sx * (p.radius + 0.12), 0.01, z + p.depth * 0.3 + 0.2), 0.014, m.chrome, 8));
@@ -300,26 +379,39 @@ export class DrumKitView {
       const color = track >= 0 ? this.trackColors[track] : null;
       if (v.headMat) {
         if (color) v.headMat.emissive.copy(color);
-        v.headMat.emissiveIntensity = pulse * 1.3;
+        // La peau prend la couleur de la piste à l'impact, sans blanchir.
+        v.headMat.emissiveIntensity = pulse * 0.45;
         const mem = v.headMat.userData.membrane;
         if (mem) {
+          // Seule la peau bouge (le fût ne se déforme pas) : 2 % du rayon au plus fort,
+          // assez pour se voir, pas au point de faire une gelée.
           const h = p.hits[Math.max(0, upperHit(p.hits, t) - 1)];
-          mem.uSince.value = Number.isFinite(since) ? since : 10;
-          mem.uAmp.value = h ? 0.08 * p.radius * h.velocity : 0;
+          const s = Number.isFinite(since) ? since : 10;
+          const amp = h ? 0.02 * p.radius * h.velocity : 0;
+          mem.uSince.value = s;
+          mem.uAmp.value = amp;
+          const front = v.frontMat?.userData.membrane;
+          if (front) {
+            // La peau de résonance répond à l'air du fût : plus faiblement, un peu après.
+            front.uSince.value = Math.max(0, s - 0.012);
+            front.uAmp.value = s > 0.012 ? amp * 0.35 : 0;
+            if (color) v.frontMat.emissive.copy(color);
+            v.frontMat.emissiveIntensity = pulse * 0.2;
+          }
         }
-        const squash = pulse > 0.001 ? 0.03 * pulse * Math.sin(since * 50) : 0;
-        if (p.kind === 'kick') v.drum.scale.set(1 + squash, 1 + squash, 1);
-        else v.drum.scale.set(1 + squash, 1, 1 + squash);
-      }
-      if (v.portMat) {
-        if (color) v.portMat.emissive.copy(color);
-        v.portMat.emissiveIntensity = 0.3 + 5 * pulse;
       }
       if (v.pivot) {
-        const wobble = pulse > 0.001 ? 0.25 * pulse * Math.sin(since * 16) : 0;
+        // Une charleston fermée bouge à peine (ses deux cymbales sont à 2,5 cm l'une de
+        // l'autre) ; une cymbale libre se balance franchement.
+        const swing = p.name === 'hihat' ? 0.03 : 0.25;
+        const wobble = pulse > 0.001 ? swing * pulse * Math.sin(since * 16) : 0;
         v.pivot.rotation.set(wobble * 0.6, 0, wobble);
+        // La vibration se lit dans les reflets qui courent sur le bronze, pas dans une
+        // lueur : une cymbale qui s'allume devient blanche.
+        const lathe = v.glowMat.userData.lathe;
+        lathe.uShimmer.value.set(Math.min(1, pulse * 1.4), since * 55);
         if (color) v.glowMat.emissive.copy(color);
-        v.glowMat.emissiveIntensity = pulse * 0.5;
+        v.glowMat.emissiveIntensity = pulse * 0.08;
       }
     }
   }
