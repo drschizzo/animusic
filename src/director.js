@@ -96,15 +96,15 @@ export function planShots(ensemble, options = {}) {
     return { ...base, type: 'close', dist, height };
   };
 
-  /** Bille à suivre : lancée dans les premières secondes du plan, celle qui rebondit le plus longtemps. */
+  /** Bille à suivre : lancée dans les premières secondes du plan, la plus forte (note accentuée). */
   const followBall = (t) => {
     if (!ballsModel) return -1;
     const balls = ballsModel.balls;
     let best = -1;
-    let bestScore = 1.6; // au moins ~1,6 s entre le tir et la dernière lame
+    let bestScore = 0.8; // au moins 0,8 s de vol
     for (let i = lowerBound(balls, t + 0.2, (b) => b.launch); i < balls.length && balls[i].launch < t + 1.2; i++) {
       const b = balls[i];
-      const score = b.lastImpact - b.launch + 0.4 * b.hits;
+      const score = b.lastImpact - b.launch + 0.5 * b.velocity;
       if (score > bestScore) {
         bestScore = score;
         best = i;

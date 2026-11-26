@@ -19,8 +19,9 @@ test('les plans couvrent tout le morceau sans trou', () => {
 test('le solo de batterie est filmé', () => {
   const { shots } = planShots(ensemble);
   const drumsIndex = ensemble.instruments.findIndex((i) => i.kind === 'drums');
+  // Plans qui couvrent le solo (le plan d'entrée de la batterie commence avant).
+  assert.ok(shots.filter((s) => s.end > 20.5 && s.start < 31).some((s) => s.subject === drumsIndex));
   const solo = shots.filter((s) => s.start >= 20 && s.end <= 31);
-  assert.ok(solo.some((s) => s.subject === drumsIndex));
   // Pendant le solo, on ne filme jamais les billes (silencieuses).
   const ballsIndex = ensemble.instruments.findIndex((i) => i.kind === 'balls');
   assert.ok(solo.every((s) => s.subject !== ballsIndex));

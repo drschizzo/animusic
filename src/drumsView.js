@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { armAngles, hitPulse } from './drums.js';
 import { mat } from './materials.js';
-import { lathe, ringOf, rod, gear, Piston, CableBundle, V } from './parts.js';
+import { lathe, ringOf, rod, V } from './parts.js';
 
 /** Segment de bras caréné le long de +x, de 0 à length. */
 function linkGeometry(length, r0, r1) {
@@ -185,12 +185,6 @@ export class DrumKitView {
       v.arm = this.buildArm(p);
       return v;
     });
-    // Gaines d'alimentation : du pied de chaque colonne au coude du bras.
-    const arms = this.views.filter((v) => v.arm.segments.length > 1);
-    this.cables = new CableBundle(this.group, arms.length, { radius: 0.016, segments: 12 });
-    arms.forEach((v, i) => (v.cable = i));
-    this._a = new THREE.Vector3();
-    this._b = new THREE.Vector3();
   }
 
   buildArm(p) {
@@ -273,20 +267,7 @@ export class DrumKitView {
     fore.add(jointRing(0.07), foreMesh, grip, stick, tip);
     upper.add(fore);
 
-    // Motoréducteur de l'épaule : carter et roue dentée qui tourne avec le bras.
-    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.12, 18), m.joint);
-    motor.rotation.x = Math.PI / 2;
-    motor.position.set(-0.02, -0.133, 0.06);
-    motor.castShadow = true;
-    const wheel = gear(16, 0.1, 0.075, 0.025, mat.brass());
-    wheel.position.z = 0.135;
-    const pinion = gear(8, 0.05, 0.035, 0.025, m.chrome);
-    pinion.position.set(-0.02, -0.133, 0.135);
-    rootGroup.add(motor, wheel, pinion);
-    // Vérin entre la colonne et le bras.
-    const piston = new Piston(rootGroup, { radius: 0.026, body: 0.26, bodyMat: m.joint });
-    rootGroup.updateMatrix();
-    return { segments: [upper, fore], piston, wheel, pinion, rootGroup, base: -root[1] };
+    return { segments: [upper, fore] };
   }
 
   update(t) {
@@ -296,16 +277,6 @@ export class DrumKitView {
       const [s0, s1] = v.arm.segments;
       s0.rotation.z = a[0];
       if (s1) s1.rotation.z = a[1] - a[0];
-      const arm = v.arm;
-      if (arm.piston) {
-        const L1 = p.arm.links[0].length;
-        arm.piston.update(this._a.set(0.1, -0.5, -0.1), this._b.set(0.36 * Math.cos(a[0]), 0.36 * Math.sin(a[0]), -0.1));
-        arm.wheel.rotation.z = a[0] * 2;
-        arm.pinion.rotation.z = -a[0] * 4;
-        this._a.set(0.06, arm.base + 0.18, 0.08).applyMatrix4(arm.rootGroup.matrix);
-        this._b.set(L1 * Math.cos(a[0]), L1 * Math.sin(a[0]), 0.08).applyMatrix4(arm.rootGroup.matrix);
-        this.cables.set(v.cable, this._a, this._b, 0.12);
-      }
 
       const { pulse, since, track } = hitPulse(this.kit, p, t);
       const color = track >= 0 ? this.trackColors[track] : null;
@@ -333,7 +304,6 @@ export class DrumKitView {
         v.glowMat.emissiveIntensity = pulse * 0.5;
       }
     }
-    this.cables.commit();
   }
 }
 

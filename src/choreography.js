@@ -6,7 +6,7 @@
 // d'impact et la position de la lame ciblée ; on en déduit l'instant de
 // lancement et la vitesse initiale de la bille pour une parabole exacte.
 
-import { easeBack, springSum, steppedTotal, clamp } from './util.js';
+import { easeBack, springSum } from './util.js';
 
 export const DEFAULTS = {
   gravity: 9.8,
@@ -30,16 +30,6 @@ export const DEFAULTS = {
   barrelLength: 0.9,
   minLauncherGap: 0.09, // délai minimal entre deux tirs d'un même canon
   aimWindow: 0.35, // durée de la visée avant un tir
-
-  // Rebonds en chaîne : une bille qui vient de frapper une lame peut rebondir sur la
-  // lame de la note suivante au lieu qu'un canon tire une nouvelle bille.
-  chainChance: 0.65,
-  maxChain: 5, // lames frappées au plus par une même bille
-  minHop: 0.25, // durée minimale d'un rebond (s)
-  maxHop: 0.9,
-  minHopAngle: (25 * Math.PI) / 180, // angle de départ minimal d'un rebond (au-dessus de l'horizontale)
-  maxHopBars: 2.2, // distance maximale d'un rebond, en écarts entre lames
-  chainFlightTime: 1.55, // vol plus haut pour une bille qui va rebondir (arrivée presque verticale)
 
   // Récupération : gouttière en arc derrière les lames, puis tubes de retour vers la tourelle.
   exitTime: 0.5, // vol de la dernière lame à la gouttière
@@ -133,70 +123,22 @@ export function buildChoreography(notes, options = {}) {
     };
   });
 
-  // --- Billes : calcul inverse de chaque trajectoire, en deux passes.
+  // --- Billes : calcul inverse de chaque trajectoire.
   const g = o.gravity;
   /** Vitesse initiale d'une parabole de p à q en `dt` secondes. */
   const aim = (p, q, dt) => [(q[0] - p[0]) / dt, (q[1] - p[1] + 0.5 * g * dt * dt) / dt, (q[2] - p[2]) / dt];
 
-  // 1) Regroupement des notes en chaînes de rebonds crédibles. Les lames étant à la même
-  // hauteur, un rebond de durée T monte à g·T²/8 : pour qu'une suite de rebonds paraisse
-  // physique, chaque saut doit être au plus aussi long que le précédent (la bille perd de
-  // l'énergie à chaque choc, jamais n'en gagne), garder à peu près le même cap le long de
-  // l'arc (pas d'allers-retours) et une vitesse horizontale régulière et modérée.
-  const chains = [];
-  const maxHopDist = Math.max(1, o.maxHopBars * spacing);
-  sorted.forEach((note, ni) => {
+  // Une note = une bille, tirée par le canon le plus proche : le geste reste lisible.
+  const shots = sorted.map((note) => {
     const bar = barByMidi.get(note.midi);
     bar.hits.push({ time: note.time, velocity: note.velocity, track: note.track });
-    let chain = null;
-    if (hash01(ni) < o.chainChance) {
-      let best = Infinity;
-      for (let k = chains.length - 1; k >= 0; k--) {
-        const c = chains[k];
-        if (c.notes[0].time < note.time - (o.maxChain + 1) * o.maxHop) break;
-        const last = c.notes[c.notes.length - 1];
-        const dt = note.time - last.time;
-        if (c.track !== note.track || c.notes.length >= o.maxChain || dt < o.minHop || dt > o.maxHop) continue;
-        const from = last.bar.target;
-        const dx = bar.target[0] - from[0];
-        const dz = bar.target[2] - from[2];
-        const dist = Math.hypot(dx, dz);
-        // Ni rebond sur place, ni saut rasant (angle de départ trop faible : la bille
-        // filerait à plat), ni saut par-dessus plusieurs lames.
-        if (dist < 1e-6 || dist > maxHopDist || (g * dt * dt) / (2 * dist) < Math.tan(o.minHopAngle)) continue;
-        const hop = c.hop;
-        if (hop) {
-          // Amortissement : un saut ne dure pas plus longtemps que le précédent, ni beaucoup moins.
-          if (dt > hop.dt * 1.04 || dt < hop.dt * 0.55) continue;
-          // Même cap, vitesse horizontale proche.
-          const cos = (dx * hop.dx + dz * hop.dz) / (dist * hop.dist);
-          if (cos < Math.cos((40 * Math.PI) / 180)) continue;
-          const ratio = dist / dt / (hop.dist / hop.dt);
-          if (ratio > 1.3 || ratio < 0.5) continue;
-        }
-        // Préférence : lames voisines, rythme régulier.
-        const score = dist + (hop ? Math.abs(dt - hop.dt) * 2 : 0);
-        if (score < best) {
-          best = score;
-          chain = c;
-        }
-      }
-    }
-    if (chain) {
-      const from = chain.notes[chain.notes.length - 1];
-      const dx = bar.target[0] - from.bar.target[0];
-      const dz = bar.target[2] - from.bar.target[2];
-      chain.hop = { dx, dz, dist: Math.hypot(dx, dz), dt: note.time - from.time };
-      chain.notes.push({ ...note, bar });
-    } else chains.push({ track: note.track, notes: [{ ...note, bar }], hop: null });
+    return { track: note.track, notes: [{ ...note, bar }] };
   });
 
-  // 2) Trajectoires. Une bille qui va rebondir est tirée plus haut (vol plus long) : elle
-  // arrive presque à la verticale, et le changement de direction au premier choc reste naturel.
   const balls = [];
   const impacts = [];
-  chains
-    .map((c) => ({ c, launch: c.notes[0].time - (c.notes.length > 1 ? o.chainFlightTime : o.flightTime) }))
+  shots
+    .map((c) => ({ c, launch: c.notes[0].time - o.flightTime }))
     .sort((x, y) => x.launch - y.launch)
     .forEach(({ c, launch }) => {
       const first = c.notes[0];
@@ -253,7 +195,6 @@ export function buildChoreography(notes, options = {}) {
         }
         impacts.push({ time: n.time, position: n.bar.target, velocity: n.velocity, track: n.track, bar: n.bar.index, ball });
       });
-      ball.lastHop = c.hop?.dt ?? null;
       balls.push(ball);
     });
   impacts.sort((x, y) => x.time - y.time);
@@ -261,21 +202,11 @@ export function buildChoreography(notes, options = {}) {
   // --- Récupération : chaque bille, après sa dernière lame, saute dans la gouttière,
   // y roule jusqu'au bout le plus proche, tombe dans un tube et revient à la tourelle.
   const returns = buildReturnPaths(o, radius, arc);
-  const Rt = radius + o.troughGap;
   for (const b of balls) {
     const bar = bars[b.lastBar];
-    // Dernier saut vers la gouttière : il prolonge le mouvement le long de l'arc (même
-    // sens, même allure) et ne dure pas plus longtemps que le rebond précédent.
-    const exit = b.lastHop ? clamp(b.lastHop * 0.85, 0.3, o.exitTime) : o.exitTime;
-    let along = 0;
-    if (b.lastHop) {
-      const hop = b.segs[b.segs.length - 1];
-      // Vitesse tangentielle du dernier rebond (composante le long de l'arc, en rad/s au rayon de la gouttière).
-      const tx = Math.cos(bar.angle);
-      const tz = Math.sin(bar.angle);
-      along = ((hop.v[0] * tx + hop.v[2] * tz) * exit * 0.8) / Rt;
-    }
-    const landAngle = bar.angle + along;
+    // Saut de la lame vers la gouttière, juste derrière elle.
+    const exit = o.exitTime;
+    const landAngle = bar.angle;
     const side = landAngle > 1e-6 ? 1 : landAngle < -1e-6 ? 0 : b.launcher % 2;
     const path = returns[side];
     const s0 = path.troughAt(Math.abs(landAngle));
@@ -300,14 +231,7 @@ export function buildChoreography(notes, options = {}) {
 
   const first = balls.length ? balls[0].launch : 0;
   const last = balls.length ? Math.max(...balls.map((b) => b.end)) : 0;
-  const shotTimes = balls.map((b) => ({ time: b.launch }));
-  return { options: o, bars, launchers, balls, impacts, returns, radius, arc, maxConcurrent, maxLife, start: first, duration: last, shotTimes };
-}
-
-/** Pseudo-aléatoire déterministe (0..1) à partir d'un entier. */
-function hash01(i) {
-  const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
-  return x - Math.floor(x);
+  return { options: o, bars, launchers, balls, impacts, returns, radius, arc, maxConcurrent, maxLife, start: first, duration: last };
 }
 
 /**
@@ -462,11 +386,6 @@ export function launcherPose(ch, launcher, t) {
   const recoil = prev ? (0.6 + 0.4 * (prev.velocity ?? 1)) * Math.exp(-(t - prev.time) * 12) : 0;
   const shake = springSum(shots, t, { omega: 34, zeta: 0.16, amp: (e) => 0.05 * (0.4 + (e.velocity ?? 1)) });
   return { dir, recoil, shake };
-}
-
-/** Rotation (rad) de la couronne dentée de la tourelle : un cran à chaque tir. */
-export function turretSpin(ch, t) {
-  return steppedTotal(ch.shotTimes, t, (2 * Math.PI) / 48, 0.18);
 }
 
 /** Intensité d'éclat d'une lame à l'instant t, et piste de la dernière frappe. */

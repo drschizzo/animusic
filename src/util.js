@@ -96,13 +96,6 @@ export function easeBack(x, s = 0.9) {
   return y < 1 ? (y * y * ((c + 1) * y - c)) / 2 : ((y - 2) * (y - 2) * ((c + 1) * (y - 2) + c) + 2) / 2;
 }
 
-/** Cumul lissé de pas réguliers : chaque événement fait avancer la valeur de `step` en `dur` secondes. */
-export function steppedTotal(events, t, step, dur) {
-  const done = upperBound(events, t - dur, (e) => e.time);
-  let v = done * step;
-  for (let i = done; i < events.length && events[i].time <= t; i++) v += step * smoothstep((t - events[i].time) / dur);
-  return v;
-}
 
 /** Valeur d'un contrôleur continu (événements {time, value} triés) à l'instant t. */
 export function controlAt(events, t, fallback = 0) {
