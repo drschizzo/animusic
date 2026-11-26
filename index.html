@@ -14,14 +14,28 @@
         <button id="collapse" class="icon" title="Replier le panneau" aria-expanded="true">▾</button>
       </h1>
       <div id="panelBody">
-      <p class="hint">Glisse un fichier <b>.mid</b> ou un enregistrement (<b>.mp3</b>, .wav…) sur la page, ou :</p>
+      <p class="hint">Glisse un ou plusieurs fichiers <b>.mid</b> (playlist) ou un enregistrement (<b>.mp3</b>, .wav…) sur la page, ou :</p>
       <div class="row">
         <label class="btn">
           Ouvrir…
-          <input id="file" type="file" accept=".mid,.midi,audio/*,.mp3,.wav,.ogg,.flac,.m4a" hidden />
+          <input id="file" type="file" accept=".mid,.midi,audio/*,.mp3,.wav,.ogg,.flac,.m4a" multiple hidden />
         </label>
         <button id="demo" class="btn">Démo</button>
       </div>
+
+      <details id="playlist" open hidden>
+        <summary id="playlistSummary">Playlist</summary>
+        <ol id="playlistItems"></ol>
+        <div class="row">
+          <button id="prevSong" class="btn" title="Morceau précédent">⏮</button>
+          <button id="nextSong" class="btn" title="Morceau suivant">⏭</button>
+          <label class="btn" title="Ajouter des fichiers MIDI à la playlist">
+            Ajouter…
+            <input id="addFiles" type="file" accept=".mid,.midi" multiple hidden />
+          </label>
+          <button id="clearPlaylist" class="btn" title="Vider la playlist">Vider</button>
+        </div>
+      </details>
 
       <div id="song" hidden>
         <h2 id="songName"></h2>

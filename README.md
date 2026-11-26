@@ -15,6 +15,8 @@ change à chaque section et un réalisateur filme le tout comme un concert.
 ## Utilisation
 
 - Glisse un `.mid` sur la page (ou « Ouvrir… ») ; une démo se charge au démarrage.
+- **Playlist** : glisse (ou ouvre) plusieurs `.mid` à la fois ; les morceaux s'enchaînent, un clic en choisit un,
+  « Ajouter… » en ajoute, × en retire ; avec « Lecture en boucle », la playlist reprend au premier morceau.
 - **Ou un enregistrement** (`.mp3`, `.wav`, `.ogg`, `.flac`…) : il est transcrit dans le navigateur (rien n'est
   envoyé nulle part), puis la scène est animée **sur le vrai son** ; un sélecteur permet d'écouter la transcription.
 - Chaque piste reçoit automatiquement un instrument (**Billes**, **Basse**, **Orgue**, **Carillon**,

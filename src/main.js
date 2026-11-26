@@ -140,8 +140,103 @@ function updatePlayButton() {
   $('play').textContent = player.playing ? '⏸ Pause' : '▶ Lecture';
 }
 
-$('file').addEventListener('change', (e) => e.target.files[0] && loadFile(e.target.files[0]));
-$('demo').addEventListener('click', () => loadSong(demoSong()));
+$('file').addEventListener('change', (e) => {
+  openFiles([...e.target.files]);
+  e.target.value = '';
+});
+$('demo').addEventListener('click', () => {
+  playlist.index = -1;
+  renderPlaylist();
+  loadSong(demoSong());
+});
+
+// --- Playlist (fichiers MIDI) : les morceaux s'enchaînent ; « Lecture en boucle »
+// reprend au premier une fois le dernier terminé.
+const playlist = { files: [], index: -1 };
+const isMidi = (f) => /\.midi?$/i.test(f.name);
+
+/**
+ * Fichiers choisis ou déposés : plusieurs MIDI (ou un MIDI quand une playlist existe
+ * déjà) vont dans la playlist ; un fichier seul se charge directement, comme avant.
+ */
+function openFiles(files) {
+  const midi = files.filter(isMidi);
+  if (files.length === 1 && (!midi.length || !playlist.files.length)) {
+    playlist.index = -1;
+    renderPlaylist();
+    return loadFile(files[0]);
+  }
+  if (midi.length < files.length) showError('Seuls les fichiers MIDI vont dans la playlist.');
+  addToPlaylist(midi);
+}
+
+function addToPlaylist(files) {
+  if (!files.length) return;
+  const start = playlist.files.length;
+  playlist.files.push(...files);
+  renderPlaylist();
+  // Rien de la playlist en cours : on charge le premier ajouté (prêt à jouer).
+  if (playlist.index < 0) playFromPlaylist(start, false);
+}
+
+async function playFromPlaylist(i, autoplay = true) {
+  const file = playlist.files[i];
+  if (!file) return;
+  playlist.index = i;
+  renderPlaylist();
+  player.stop();
+  await loadFile(file);
+  if (autoplay && ensemble) await player.play();
+  updatePlayButton();
+}
+
+/** Morceau suivant (−1 en fin de playlist, sauf en boucle). */
+function nextIndex(step = 1) {
+  const n = playlist.files.length;
+  if (playlist.index < 0 || !n) return -1;
+  const i = playlist.index + step;
+  if (i >= 0 && i < n) return i;
+  return $('loop')?.checked ? (i + n) % n : -1;
+}
+
+function renderPlaylist() {
+  const n = playlist.files.length;
+  $('playlist').hidden = !n;
+  $('playlistSummary').textContent = `Playlist (${n} morceau${n > 1 ? 'x' : ''})`;
+  const list = $('playlistItems');
+  list.innerHTML = '';
+  playlist.files.forEach((file, i) => {
+    const li = document.createElement('li');
+    li.className = i === playlist.index ? 'current' : '';
+    li.innerHTML = '<span class="name"></span><button class="remove" title="Retirer de la playlist">×</button>';
+    li.querySelector('.name').textContent = file.name.replace(/\.midi?$/i, '');
+    li.title = file.name;
+    li.addEventListener('click', () => playFromPlaylist(i));
+    li.querySelector('.remove').addEventListener('click', (e) => {
+      e.stopPropagation();
+      playlist.files.splice(i, 1);
+      if (playlist.index > i) playlist.index--;
+      else if (playlist.index === i) playlist.index = -1; // le morceau chargé reste à l'écran
+      renderPlaylist();
+    });
+    list.appendChild(li);
+  });
+  $('prevSong').disabled = nextIndex(-1) < 0;
+  $('nextSong').disabled = nextIndex(1) < 0;
+}
+
+$('addFiles').addEventListener('change', (e) => {
+  addToPlaylist([...e.target.files].filter(isMidi));
+  e.target.value = '';
+});
+$('prevSong').addEventListener('click', () => playFromPlaylist(nextIndex(-1)));
+$('nextSong').addEventListener('click', () => playFromPlaylist(nextIndex(1)));
+$('clearPlaylist').addEventListener('click', () => {
+  playlist.files = [];
+  playlist.index = -1;
+  renderPlaylist();
+});
+$('loop')?.addEventListener('change', renderPlaylist);
 $('play').addEventListener('click', async () => {
   if (!ensemble) return;
   if (player.playing) player.pause();
@@ -302,8 +397,8 @@ window.addEventListener('drop', (e) => {
   e.preventDefault();
   dragDepth = 0;
   $('drop').hidden = true;
-  const file = e.dataTransfer.files[0];
-  if (file) loadFile(file);
+  const files = [...e.dataTransfer.files];
+  if (files.length) openFiles(files);
 });
 
 // Qualité graphique. En mode auto, on part de « haute » et on descend d'un cran
@@ -379,7 +474,9 @@ function frame() {
     if (camMode === 'director' && shotPlan) stage.setCamera(cameraAt(shotPlan, t));
     $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
     if (!seeking) $('seek').value = Math.max(0, t);
-    if (player.playing && t > duration + 0.5) {
+    // Fin de morceau dans une playlist : on enchaîne sur le suivant (pas pendant une vidéo).
+    if (player.playing && t > duration + 0.5 && !recorder && nextIndex(1) >= 0) playFromPlaylist(nextIndex(1));
+    else if (player.playing && t > duration + 0.5) {
       if (recorder) stopRecording();
       player.stop();
       updatePlayButton();
