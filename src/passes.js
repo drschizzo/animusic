@@ -297,7 +297,8 @@ export function planPasses(ensemble, options = {}) {
         return Math.abs(gc * ox - gs * oz) < g.halfW + 0.3 && Math.abs(gs * ox + gc * oz) < g.halfD + 0.3;
       });
       if (blocked) o.debug?.(`${send.kind} : emplacement occupé`);
-      if (blocked || taken.some((t) => Math.hypot(t[0] - x, t[1] - z) < 0.8)) return;
+      // … et pas sur un tuyau du réseau posé au sol.
+      if (blocked || o.trunks?.occupied(x, z, 0.32) || taken.some((t) => Math.hypot(t[0] - x, t[1] - z) < 0.8)) return;
       if (!best || range < best.range) best = { j, x, z, range };
     });
     // Sinon, le canon central de la tourelle du marimba, d'un bout à l'autre de la scène.

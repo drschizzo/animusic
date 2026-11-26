@@ -4,6 +4,7 @@ import { polyline, cupLift } from './ballistics.js';
 import { mat, fx } from './materials.js';
 import { lathe, rod, V } from './parts.js';
 import { upperBound } from './util.js';
+import { sweepGeometry } from './trunksView.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const Z = new THREE.Vector3(0, 0, 1);
@@ -64,6 +65,23 @@ export class BallRowView {
       const cap = new THREE.Mesh(new THREE.SphereGeometry(R * 1.02, 16, 10), chrome);
       cap.position.set(...a);
       group.add(cap);
+    }
+    // Colonnes de verre du réseau : elles sortent de l'estrade par une collerette, l'une monte
+    // jusqu'au bout de la rampe, l'autre descend du bout du collecteur.
+    if (row.risers) {
+      const glass = mat.glass();
+      for (const pts of [row.risers.feed, row.risers.back]) {
+        const column = new THREE.Mesh(sweepGeometry(pts, R, 10), glass);
+        column.renderOrder = 2;
+        column.name = 'colonne du réseau';
+        const foot = pts[0][1] < pts[pts.length - 1][1] ? pts[0] : pts[pts.length - 1];
+        const flange = new THREE.Mesh(new THREE.TorusGeometry(R + 0.03, 0.014, 8, 24), chrome);
+        flange.rotation.x = Math.PI / 2;
+        flange.position.set(foot[0], 0.02, foot[2]);
+        const plate = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.075, R + 0.085, 0.012, 24), dark);
+        plate.position.set(foot[0], 0.006, foot[2]);
+        group.add(column, flange, plate);
+      }
     }
     for (const [x, y, z] of row.posts) {
       group.add(rod(V(x, 0, z), V(x, y, z), 0.04, dark, 12));

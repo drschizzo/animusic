@@ -53,23 +53,7 @@ export function buildBallRow(targets, face, spacing, options = {}) {
   });
   const shots = stations.flatMap((station, index) => station.shots.map((h) => ({ time: h.time, track: h.track, velocity: h.velocity, station, index }))).sort((a, b) => a.time - b.time);
 
-  // Circuit : collecteur sous les cornets, coude et montée à droite, rampe des buses.
   const first = stations[0];
-  const [, yc, zc] = first.drain.points[1];
-  const [, ym, zm] = first.feed.points[0];
-  const W0 = targets[0].x - o.margin;
-  const W1 = targets[targets.length - 1].x + o.margin;
-  const loop = fillet(
-    [
-      [W0, yc, zc],
-      [W1, yc, zc],
-      [W1, yc, zm],
-      [W1, ym, zm],
-      [W0, ym, zm],
-    ],
-    0.15,
-  );
-  const R = o.pipeRadius;
   return {
     options: o,
     ballRadius,
@@ -80,17 +64,7 @@ export function buildBallRow(targets, face, spacing, options = {}) {
     maxBalls: maxConcurrent(shots),
     before: first.before,
     after: first.after,
-    loop,
-    // Poteaux (du sol jusque sous le tuyau) et entretoise du collecteur, côté gauche.
-    posts: [
-      [W0, ym - R, zm],
-      [W1, yc - R, zm],
-    ],
-    strut: [
-      [W0, yc, zm],
-      [W0, yc, zc],
-    ],
-    extent: { minX: W0 - R, maxX: W1 + R, maxZ: zm + R, top: Math.max(ym, first.mouth[1]) + R + 0.05 },
+    ...circuit(first, targets[0].x - o.margin, targets[targets.length - 1].x + o.margin, o.pipeRadius),
   };
 }
 
@@ -172,6 +146,7 @@ export function buildCupRow(targets, place, spacing, options = {}) {
 function circuit(first, W0, W1, R) {
   const [, yc, zc] = first.drain.points[first.drain.points.length - 1];
   const [, ym, zm] = first.feed.points[0];
+  const lip = R + 0.012; // les colonnes se posent contre les bouts des tuyaux, sans y entrer
   return {
     loop: fillet(
       [
@@ -191,7 +166,13 @@ function circuit(first, W0, W1, R) {
       [W0, yc, zm],
       [W0, yc, zc],
     ],
-    extent: { minX: W0 - R, maxX: W1 + R, maxZ: Math.max(Math.abs(zm), Math.abs(zc)) + R, top: Math.max(ym, first.mouth[1]) + R + 0.05 },
+    // Colonnes de verre du réseau, plantées dans l'estrade à gauche de la rangée : l'alimentation
+    // monte et entre par le bout de la rampe ; le retour sort du bout du collecteur et redescend.
+    risers: {
+      feed: fillet([[W0 - 0.5, 0, zm], [W0 - 0.5, ym, zm], [W0 - lip, ym, zm]], 0.12, 0.04),
+      back: fillet([[W0 - lip, yc, zc], [W0 - 0.25, yc, zc], [W0 - 0.25, 0, zc]], 0.1, 0.04),
+    },
+    extent: { minX: W0 - 0.5 - 0.12, maxX: W1 + R, maxZ: Math.max(Math.abs(zm), Math.abs(zc)) + R, top: Math.max(ym, first.mouth[1]) + R + 0.05 },
   };
 }
 

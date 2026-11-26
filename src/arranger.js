@@ -301,7 +301,16 @@ const leadOf = (model, fallback) => (model.row ? Math.max(fallback, model.row.be
  * des buses, en avant de l'instrument (l'estrade est centrée, d'où le facteur 2).
  */
 const rowSeat = (model, kind) =>
-  model.row ? { seat: { depth: Math.max(SEATS[kind].depth, 2 * (model.row.extent.maxZ + 0.3)), height: Math.max(SEATS[kind].height, model.row.extent.top + 0.1) } } : {};
+  model.row
+    ? {
+        seat: {
+          depth: Math.max(SEATS[kind].depth, 2 * (model.row.extent.maxZ + 0.3)),
+          height: Math.max(SEATS[kind].height, model.row.extent.top + 0.1),
+          // Les colonnes du réseau sont plantées à gauche de la rangée (l'estrade est centrée, d'où le facteur 2).
+          width: Math.max(model.width + (SEATS[kind].extraW ?? 0), 2 * (-model.row.extent.minX + 0.15)),
+        },
+      }
+    : {};
 
 const FACTORIES = {
   bass: (notes, ctx) => {
@@ -415,8 +424,11 @@ export const SEATS = {
 };
 
 const RISER_PAD = 0.35; // débord de l'estrade autour de l'instrument
-const AISLE = 0.7; // allée entre deux gradins (et entre l'arc de lames et le premier)
-const SEAT_GAP = 0.8; // espace entre deux estrades voisines
+// Allée entre deux gradins (et entre l'arc de lames et le premier) et espace entre deux estrades
+// voisines. Dans le style « billes », ils sont plus larges : c'est là que court le réseau de tuyaux.
+const SPACING = { arms: { aisle: 0.7, gap: 0.8 }, balls: { aisle: 1.5, gap: 1.5 } };
+let AISLE = SPACING.arms.aisle;
+let SEAT_GAP = SPACING.arms.gap;
 
 /** Hauteur d'estrade de chaque gradin, demi-ouverture maximale. */
 export const TIERS = [
@@ -474,6 +486,7 @@ function fillTier(items, r, maxA, place) {
  * @returns { instruments: [{kind, model, tracks, onsets, busy, focus:{center,radius}, front, start, end}], start, end, radius }
  */
 export function buildEnsemble(parts, controls = [], programs = [], { style = 'arms', passes: passOptions = {} } = {}) {
+  ({ aisle: AISLE, gap: SEAT_GAP } = SPACING[style === 'balls' ? 'balls' : 'arms']);
   const list = Array.isArray(parts)
     ? parts
     : Object.entries(parts)
