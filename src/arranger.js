@@ -126,16 +126,34 @@ export function assignRoles(tracks) {
       if (low.s.meanPitch < 58 && next.s.meanPitch - low.s.meanPitch >= 6 && low.s.polyphony < 1.6) roles[low.i] = 'bass';
     }
   }
-  // Les billes sont l'instrument vedette : s'il n'y en a pas, la piste de clavier
-  // (ou à défaut de carillon) la plus fournie leur est confiée.
-  if (!roles.includes('balls')) {
-    for (const from of ['keys', 'bells']) {
-      const candidates = tracks.map((t, i) => ({ i, n: t.notes.length })).filter(({ i }) => roles[i] === from);
-      if (!candidates.length) continue;
-      roles[candidates.sort((a, b) => b.n - a.n)[0].i] = 'balls';
-      break;
-    }
-  }
+  // Les billes sont l'instrument vedette, le plus spectaculaire : elles doivent porter
+  // une partie fournie, présente tout au long du morceau. Si aucune piste ne leur va
+  // (ou si la leur est maigre), la meilleure partie frappée ou pincée (clavier,
+  // carillon, cordes pincées : même attaque, même voix) leur est confiée.
+  const span = tracks.flatMap((t) => t.notes.map((n) => n.time));
+  const t0 = Math.min(...span);
+  const t1 = Math.max(...span);
+  const presence = (t) => {
+    if (!t.notes.length) return 0;
+    const windows = Math.max(1, Math.ceil((t1 - t0) / 8));
+    const hit = new Set(t.notes.map((n) => Math.floor((n.time - t0) / 8)));
+    const s = trackStats(t.notes);
+    const pitches = new Set(t.notes.map((n) => n.midi)).size;
+    // Nombre de notes, part du morceau couverte, mélodie (assez de hauteurs différentes :
+    // une piste de caisse claire ne fait pas jouer un arc de lames), attaque nette, peu d'accords.
+    return Math.sqrt(t.notes.length) * (hit.size / windows) * Math.min(1, pitches / 6) * (s.meanDuration < 0.7 ? 1 : 0.6) * (s.polyphony <= 2.5 ? 1 : 0.7);
+  };
+  const ballsScore = tracks.reduce((a, t, i) => a + (roles[i] === 'balls' ? presence(t) : 0), 0);
+  // D'abord les familles frappées ou pincées (même attaque) ; à défaut, un riff de synthé
+  // ou de vents en notes brèves (le son vient des échantillons du programme : il ne change pas).
+  const pick = (families, ok = () => true) =>
+    tracks
+      .map((t, i) => ({ i, score: families.includes(roles[i]) && (!ballsScore || t.notes.length >= 24) && ok(t) ? presence(t) : 0 }))
+      .filter((c) => c.score > 0)
+      .sort((a, b) => b.score - a.score);
+  let candidates = pick(['keys', 'bells', 'plucked']);
+  if (!candidates.length) candidates = pick(['laser', 'winds'], (t) => trackStats(t.notes).meanDuration < 0.5);
+  if (candidates.length && ballsScore < 0.6 * candidates[0].score) roles[candidates[0].i] = 'balls';
   return roles;
 }
 

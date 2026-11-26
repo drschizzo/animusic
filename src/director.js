@@ -356,7 +356,7 @@ export function planShots(ensemble, options = {}) {
         if (first[k] >= t && first[k] < end) score += 2;
         const ph = phraseStart(k, t - 0.2, (t + end) / 2);
         if (ph !== null && ph > first[k]) score += 0.6;
-        if (ins.kind === 'balls') score *= 1.25; // l'instrument vedette, le plus lisible
+        if (ins.kind === 'balls') score *= 1.6; // l'instrument vedette, le plus spectaculaire
         // Un instrument qui joue sans avoir été montré depuis longtemps finit par l'être.
         score += Math.min(1.2, (t - seen[k]) / 25);
         if (k === lastSubject) score *= repeat >= 2 ? 0.45 : 0.85; // variété, sans quitter la mélodie
@@ -416,6 +416,41 @@ export function planShots(ensemble, options = {}) {
   return { shots, options: o, balls: ballsModel, obstacles };
 }
 
+/**
+ * Bougé de caméra par type de plan : pos (m) et rot (rad) amplitudes de la dérive lente,
+ * jitter = part des tremblements rapides (caméra à l'épaule).
+ */
+const SHAKE = {
+  wide: { pos: 0.12, rot: 0.004, jitter: 0 },
+  dolly: { pos: 0.06, rot: 0.005, jitter: 0.15 },
+  crane: { pos: 0.06, rot: 0.004, jitter: 0.1 },
+  duo: { pos: 0.07, rot: 0.005, jitter: 0.15 },
+  close: { pos: 0.04, rot: 0.007, jitter: 0.5 },
+  low: { pos: 0.03, rot: 0.008, jitter: 0.6 },
+  follow: { pos: 0.05, rot: 0.009, jitter: 0.6 },
+};
+
+/** Bruit lisse et déterministe (somme de sinus de fréquences sans rapport simple), ≈ −1..1. */
+function wobble(t, seed, speed) {
+  return (
+    0.55 * Math.sin(t * 0.31 * speed + seed * 1.7) +
+    0.3 * Math.sin(t * 0.73 * speed + seed * 4.1) +
+    0.15 * Math.sin(t * 1.57 * speed + seed * 2.3)
+  );
+}
+
+/** Applique le bougé : dérive lente de la position et du cadrage, et tremblements fins. */
+function handheld(pose, t, { pos, rot, jitter }) {
+  const p = pose.position;
+  const q = pose.target;
+  const dist = Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) || 1;
+  const n = (seed) => (1 - jitter) * wobble(t, seed, 1) + jitter * wobble(t, seed + 10, 7.3);
+  const position = [p[0] + pos * n(1), p[1] + pos * 0.7 * n(2), p[2] + pos * n(3)];
+  // Le cadrage bouge un peu (petite rotation de la tête), surtout en panoramique.
+  const target = [q[0] + dist * rot * n(4), q[1] + dist * rot * 0.6 * n(5), q[2] + dist * rot * n(6)];
+  return { ...pose, position, target };
+}
+
 const tmp = [0, 0, 0];
 /** Position lissée d'une bille (moyenne sur ±0,25 s, bornée à sa durée de vie). */
 function smoothBall(ch, b, t, out) {
@@ -443,7 +478,10 @@ function shotPose(plan, shot, t) {
     return { position: [Math.sin(a) * r, 2.1 + target[1] * 0.3, -Math.cos(a) * r], target, aperture: 1 };
   }
   const [cx, cy, cz] = shot.center;
-  const a = shot.angle + shot.spin * (t - shot.start);
+  // Rotation lente, mais pas mécanique : elle démarre et s'achève en douceur (moitié
+  // linéaire, moitié en S), comme un opérateur qui accompagne le sujet.
+  const D = shot.end - shot.start;
+  const a = shot.angle + shot.spin * D * (0.5 * u + 0.5 * smoothstep(u));
   let height = shot.height;
   let px = cx + Math.sin(a) * shot.dist;
   let pz = cz + Math.cos(a) * shot.dist;
@@ -477,6 +515,17 @@ export function cameraAt(plan, t) {
     const s = smoothstep((t - shots[i].start) / options.blend);
     const mix = (a, b) => a.map((v, k) => lerp(v, b[k], s));
     pose = { position: mix(prev.position, pose.position), target: mix(prev.target, pose.target), aperture: lerp(prev.aperture, pose.aperture, s) };
+  }
+  // Caméra portée : steadicam (dérive lente) ou épaule (plus nerveuse), selon le plan.
+  {
+    const cur = SHAKE[shots[i].type] ?? SHAKE.close;
+    let amp = cur;
+    if (i > 0 && !shots[i].cut && t < shots[i].start + options.blend) {
+      const prev = SHAKE[shots[i - 1].type] ?? SHAKE.close;
+      const s = smoothstep((t - shots[i].start) / options.blend);
+      amp = { pos: lerp(prev.pos, cur.pos, s), rot: lerp(prev.rot, cur.rot, s), jitter: lerp(prev.jitter, cur.jitter, s) };
+    }
+    pose = handheld(pose, t, amp);
   }
   // Jamais à travers un instrument : la caméra le survole (rampe douce à l'approche).
   if (plan.obstacles) {

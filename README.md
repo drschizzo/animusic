@@ -84,6 +84,12 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   voisins qui se répondent sont cadrés ensemble (**dialogue**). Les plans alternent plans larges, rapprochés,
   contre-plongées, travellings, grues et **poursuites** d'une bille d'un rebond à l'autre ; un instrument qui entre
   est cadré pendant qu'il sort du sol. En qualité haute, la **mise au point** suit le sujet (profondeur de champ).
+- **Caméra portée** : chaque plan a son bougé, dérive lente façon steadicam pour les plans larges, travellings et
+  grues, tremblement fin façon caméra à l'épaule pour les plans rapprochés et les poursuites ; la rotation autour
+  du sujet démarre et s'achève en douceur.
+- **Performances** : les pièces fixes de chaque instrument sont fusionnées par matériau (`src/freeze.js`) ; les
+  lampes des instruments sont confiées à 4 lumières réelles, toujours présentes (pas de recompilation des shaders
+  quand un instrument entre) ; une image de rodage, à la construction de la scène, envoie tout au GPU.
 - **Rien ne se traverse** : chaque instrument déclare son encombrement (`SEATS`, `src/arranger.js`) ; la caméra
   survole un instrument dont elle approche (rampe douce) et choisit un angle d'où le sujet n'est pas masqué. Les
   billes rebondissent assez haut pour franchir le bout de leur lame et le bord de la gouttière, tombent dans
@@ -121,7 +127,7 @@ La famille du programme General MIDI décide du mécanisme, les statistiques des
 |---|---|
 | Batterie | canal de percussion |
 | Basse | basses (32-39), violoncelle / contrebasse monodiques, toute ligne grave monodique |
-| Billes (marimba) | marimba, xylophone, tympanon, timbales, percussions accordées |
+| Billes (marimba) | marimba, xylophone, tympanon, timbales, percussions accordées ; et toujours une partie fournie : si la leur est maigre (ou absente), la meilleure partie de clavier, carillon ou cordes pincées (à défaut un riff de synthé ou de vents en notes brèves) les rejoint |
 | Carillon | célesta, glockenspiel, boîte à musique, vibraphone, cloches tubulaires, kalimba |
 | Clavier | pianos, clavecin, clavinet |
 | Cordes pincées | guitares, harpe, pizzicato, sitar, banjo, shamisen, koto |

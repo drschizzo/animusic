@@ -289,3 +289,17 @@ test('vents : la soupape anticipe, le souffle dure autant que la note', () => {
   assert.ok(windState(m, p, 2.5).level > 0.8);
   assert.ok(windState(m, p, 3.5).level < 0.01);
 });
+
+test('passe globale : les billes reçoivent toujours une partie fournie', () => {
+  const line = (n, step, pitches = 7) => Array.from({ length: n }, (_, i) => ({ midi: 60 + (i % pitches) * 2, time: i * step, duration: 0.2, velocity: 0.7 }));
+  // Une caisse claire égarée sur un programme mélodique ne suffit pas : la guitare rejoint les billes.
+  const roles = assignRoles([
+    { program: 114, notes: line(40, 2, 1) },
+    { program: 25, notes: line(300, 0.25) },
+  ]);
+  assert.deepEqual(roles, ['balls', 'balls']);
+  // Sans clavier ni cordes pincées, un riff de synthé en notes brèves.
+  assert.deepEqual(assignRoles([{ program: 81, notes: line(200, 0.25) }, { program: 89, notes: [60, 64, 67].map((midi) => ({ midi, time: 0, duration: 40, velocity: 0.5 })) }]), ['balls', 'pads']);
+  // Une marimba bien présente garde les billes pour elle.
+  assert.deepEqual(assignRoles([{ program: 12, notes: line(300, 0.25) }, { program: 25, notes: line(300, 0.25) }]), ['balls', 'plucked']);
+});
