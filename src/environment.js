@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { tex, mat, fx } from './materials.js';
+import { FINITE } from './glsl.js';
 
 const HAZE = 0x070a14;
 const BLUR_LEVELS = 4;
@@ -64,6 +65,22 @@ class ReflectionProbe {
     this.pmrem = new THREE.PMREMGenerator(renderer);
     this.filtered = null;
     this.face = 0;
+    // Chaque face est d'abord rendue dans une image 2D, puis recopiée dans le cube par
+    // une passe qui remplace toute valeur non finie et écrête les pics : la sonde se
+    // filme elle-même (les métaux reflètent l'environnement qu'elle produit), un seul
+    // pixel NaN y deviendrait permanent et contaminerait toute la scène.
+    this.copy = new FullScreenQuad(
+      new THREE.ShaderMaterial({
+        uniforms: { tSource: { value: null }, uClamp: { value: 48 } },
+        vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: `
+          uniform sampler2D tSource; uniform float uClamp; varying vec2 vUv;
+          ${FINITE}
+          void main() { gl_FragColor = vec4(min(finite(texture2D(tSource, vUv).rgb), vec3(uClamp)), 1.0); }`,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
     this.setSize(256);
   }
 
@@ -71,9 +88,11 @@ class ReflectionProbe {
     if (this.size === size) return;
     this.size = size;
     this.target?.dispose();
+    this.faceTarget?.dispose();
     this.filtered?.dispose();
     this.filtered = null;
-    this.target = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType });
+    this.target = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.faceTarget = new THREE.WebGLRenderTarget(size, size, { type: THREE.HalfFloatType });
     this.camera = new THREE.CubeCamera(0.3, 200, this.target);
     this.camera.coordinateSystem = this.renderer.coordinateSystem;
     this.camera.updateCoordinateSystem();
@@ -87,11 +106,14 @@ class ReflectionProbe {
     const previous = renderer.getRenderTarget();
     this.camera.position.copy(position);
     this.camera.updateMatrixWorld();
+    this.copy.material.uniforms.tSource.value = this.faceTarget.texture;
     let fresh = null;
     for (let i = 0; i < faces; i++) {
-      renderer.setRenderTarget(this.target, this.face);
+      renderer.setRenderTarget(this.faceTarget);
       renderer.clear();
       renderer.render(scene, this.camera.children[this.face]);
+      renderer.setRenderTarget(this.target, this.face);
+      this.copy.render(renderer);
       this.face = (this.face + 1) % 6;
       if (this.face === 0) {
         this.filtered = this.pmrem.fromCubemap(this.target.texture, this.filtered);
@@ -120,7 +142,8 @@ class ReflectiveFloor {
         vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
         fragmentShader: `
           uniform sampler2D tSource; uniform vec2 uStep; uniform float uClamp; varying vec2 vUv;
-          vec3 tap(float k) { return min(texture2D(tSource, vUv + uStep * k).rgb, vec3(uClamp)); }
+          ${FINITE}
+          vec3 tap(float k) { return min(finite(texture2D(tSource, vUv + uStep * k).rgb), vec3(uClamp)); }
           void main() {
             // Gaussienne à 9 points (σ ≈ 2 texels de destination).
             vec3 c = tap(0.0) * 0.2042;
@@ -161,7 +184,7 @@ class ReflectiveFloor {
       shader.fragmentShader = shader.fragmentShader
         .replace(
           '#include <common>',
-          '#include <common>\nuniform sampler2D tReflect;\nuniform sampler2D tReflectBlur[' + BLUR_LEVELS + '];\nuniform float uReflect;\nuniform float uStageRadius;\nvarying vec4 vReflectUv;\nvarying vec3 vFloorPos;',
+          '#include <common>\n' + FINITE + '\nuniform sampler2D tReflect;\nuniform sampler2D tReflectBlur[' + BLUR_LEVELS + '];\nuniform float uReflect;\nuniform float uStageRadius;\nvarying vec4 vReflectUv;\nvarying vec3 vFloorPos;',
         )
         .replace(
           '#include <roughnessmap_fragment>',
@@ -182,15 +205,19 @@ class ReflectiveFloor {
           '#include <opaque_fragment>',
           `// Reflet planaire : net sur une surface lisse, puis de plus en plus flou avec la
           // rugosité (interpolation entre deux niveaux de la pyramide de flous).
+          // Sauté quand le reflet est coupé : 0 × NaN vaut NaN, une texture périmée
+          // ne doit pas pouvoir contaminer le sol.
+          if (uReflect > 0.0) {
           vec2 reflUv = vReflectUv.xy / vReflectUv.w;
           float reflLevel = clamp(0.15 + reflRough * 5.5, 0.0, float(${BLUR_LEVELS}));
           vec3 reflLo = texture2D(tReflect, reflUv).rgb;
           vec3 reflHi = texture2D(tReflectBlur[0], reflUv).rgb;
           ${Array.from({ length: BLUR_LEVELS - 1 }, (_, i) => `if (reflLevel > ${i + 1}.0) { reflLo = reflHi; reflHi = texture2D(tReflectBlur[${i + 1}], reflUv).rgb; }`).join('\n          ')}
-          vec3 refl = mix(reflLo, reflHi, reflLevel >= float(${BLUR_LEVELS}) ? 1.0 : fract(reflLevel));
+          vec3 refl = finite(mix(reflLo, reflHi, reflLevel >= float(${BLUR_LEVELS}) ? 1.0 : fract(reflLevel)));
           float reflFresnel = pow(1.0 - saturate(dot(normalize(vViewPosition), normal)), 4.0);
           float reflGloss = 1.0 - reflRough;
           outgoingLight += refl * uReflect * reflGloss * mix(0.5, 1.0, reflFresnel);
+          }
           #include <opaque_fragment>`,
         );
     };
@@ -281,7 +308,7 @@ function makeBackdrop() {
         vec3 glow = mix(uA, uB, 0.5 + 0.5 * sin(a * 1.0 + 0.6));
         vec3 col = uHaze + glow * (0.5 + 0.15 * uPulse) * pow(1.0 - h, 5.0);
         // Colonnes de lumière verticales, floues, perdues dans la brume.
-        float bars = pow(0.5 + 0.5 * cos(a * 28.0), 40.0) + 0.5 * pow(0.5 + 0.5 * cos(a * 12.0 + 1.3), 90.0);
+        float bars = pow(max(0.0, 0.5 + 0.5 * cos(a * 28.0)), 40.0) + 0.5 * pow(max(0.0, 0.5 + 0.5 * cos(a * 12.0 + 1.3)), 90.0);
         col += glow * bars * (0.55 + 0.4 * uPulse) * smoothstep(0.0, 0.08, h) * pow(1.0 - h, 2.2);
         gl_FragColor = vec4(col, 1.0);
       }`,
@@ -307,8 +334,14 @@ const beamFragment = `
   varying vec3 vNormalV; varying vec3 vViewDir; varying float vAlong;
   void main() {
     // Dense dans l'axe, transparent sur les bords ; s'éteint en s'éloignant du projecteur.
-    float facing = abs(dot(normalize(vNormalV), normalize(vViewDir)));
-    float a = pow(facing, 2.5) * pow(vAlong, 1.6);
+    // Les bornes ne sont pas décoratives : en anticrénelage multi-échantillon, les
+    // varyings sont extrapolés hors du triangle sur ses bords ; vAlong y devient
+    // légèrement négatif et pow(négatif, 1.6) vaut NaN (c'était la graine de
+    // l'écran noir : le NaN se propageait par le reflet du sol et la sonde).
+    vec3 n = vNormalV / max(length(vNormalV), 1e-5);
+    vec3 v = vViewDir / max(length(vViewDir), 1e-5);
+    float facing = clamp(abs(dot(n, v)), 0.0, 1.0);
+    float a = pow(facing, 2.5) * pow(clamp(vAlong, 0.0, 1.0), 1.6);
     gl_FragColor = vec4(uColor * uIntensity * a, 1.0);
   }`;
 

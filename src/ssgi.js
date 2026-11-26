@@ -23,7 +23,10 @@ const geometry = /* glsl */ `
     vec4 p = uProjectionInverse * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
     return p.xyz / p.w;
   }
-  vec3 viewNormal(vec2 uv) { return normalize(texture2D(tNormal, uv).xyz * 2.0 - 1.0); }
+  vec3 viewNormal(vec2 uv) {
+    vec3 n = texture2D(tNormal, uv).xyz * 2.0 - 1.0;
+    return n / max(length(n), 1e-5);
+  }
 `;
 
 /** Tampon géométrique : normales (espace caméra), couleur de base et profondeur. */
@@ -62,7 +65,9 @@ export class GBuffer {
         uniform vec3 uAlbedo;
         varying vec3 vViewNormal;
         void main() {
-          vec3 n = normalize(vViewNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+          // Normale dégénérée (triangle aplati) : direction caméra plutôt que NaN.
+          float len = length(vViewNormal);
+          vec3 n = (len > 1e-6 ? vViewNormal / len : vec3(0.0, 0.0, 1.0)) * (gl_FrontFacing ? 1.0 : -1.0);
           gNormal = vec4(n * 0.5 + 0.5, 1.0);
           gAlbedo = vec4(uAlbedo, 1.0);
         }`,
@@ -165,7 +170,7 @@ export class SSGIPass extends Pass {
               float u2 = (float(i) + fract(noise * 5.17 + 0.37)) / float(RAYS);
               float r = sqrt(u2);
               float phi = 6.2831853 * u1;
-              vec3 dir = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(1.0 - u2));
+              vec3 dir = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(max(0.0, 1.0 - u2)));
               float jitter = fract(noise * 3.31 + float(i) * 0.41);
               for (int s = 0; s < STEPS; s++) {
                 // Pas resserrés près de la surface, plus longs au loin.

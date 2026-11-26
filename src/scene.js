@@ -11,6 +11,13 @@ import { Environment } from './environment.js';
 import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
 
+/** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
+const PIXEL_BUDGET = {
+  high: { cap: 2, budget: 2560 * 1440 },
+  medium: { cap: 1.5, budget: 1920 * 1080 },
+  low: { cap: 1, budget: 1920 * 1080 },
+};
+
 const VIEWS = { balls: BallsView, drums: DrumKitView, bass: StringsView, pads: PipesView, bells: BellsView, laser: LaserView, keys: KeysView };
 
 /** Scène Three.js : construit les objets à partir d'une chorégraphie et les pose à l'instant t. */
@@ -18,7 +25,6 @@ export class Stage {
   constructor(container) {
     this.container = container;
     const renderer = (this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }));
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -42,13 +48,22 @@ export class Stage {
     this.content = new THREE.Group();
     scene.add(this.content);
 
-    window.addEventListener('resize', () => this.resize());
+    // Le conteneur peut changer de taille sans que la fenêtre ne bouge (mise en page).
+    new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
   }
 
   resize() {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
+    // Conteneur pas encore mis en page : des cibles de taille nulle rendraient les
+    // tampons incomplets (erreurs WebGL à chaque image).
+    if (!w || !h) return;
+    // Résolution interne plafonnée par un budget de pixels : sur un grand écran Retina,
+    // la chaîne HDR complète à 2× dépasserait vite la mémoire et le temps GPU.
+    const dpr = window.devicePixelRatio || 1;
+    const { cap, budget } = PIXEL_BUDGET[this.quality ?? 'high'];
+    this.renderer.setPixelRatio(Math.max(1, Math.min(dpr, cap, Math.sqrt(budget / (w * h)))));
     this.renderer.setSize(w, h);
     this.post.setSize(w, h);
     const ratio = this.renderer.getPixelRatio();
@@ -79,6 +94,9 @@ export class Stage {
 
     this.resetView();
     this.controls.update();
+    // Compile d'avance tous les shaders (y compris des objets encore vides, comme le
+    // réservoir de billes) : sinon la première apparition fige l'image en pleine lecture.
+    this.renderer.compileAsync(this.scene, this.camera).catch(() => {});
   }
 
   /** Place la caméra (pose calculée par le réalisateur). */
@@ -108,8 +126,6 @@ export class Stage {
    */
   setQuality(level) {
     this.quality = level;
-    const dpr = window.devicePixelRatio || 1;
-    this.renderer.setPixelRatio(level === 'high' ? Math.min(dpr, 2) : level === 'medium' ? Math.min(dpr, 1.5) : 1);
     this.renderer.shadowMap.enabled = level !== 'low';
     this.environment.setQuality(level);
     this.post.setQuality(level);

@@ -346,7 +346,14 @@ function measureFps() {
   fpsMeter.frames = 0;
   fpsMeter.since = now;
   $('fps').textContent = `${Math.round(fps)} img/s`;
-  if (qualityMode !== 'auto' || !player.playing) return;
+  if (qualityMode !== 'auto' || !player.playing) {
+    fpsMeter.playingSince = null;
+    return;
+  }
+  // Les premières secondes de lecture ne comptent pas : chargement des sons,
+  // premières compilations… un à-coup isolé ne doit pas dégrader toute la session.
+  fpsMeter.playingSince ??= now;
+  if (now - fpsMeter.playingSince < 3000) return;
   fpsMeter.slow = fps < 40 ? fpsMeter.slow + 1 : 0;
   const i = LEVELS.indexOf(stage.quality);
   if (fpsMeter.slow >= 3 && i < LEVELS.length - 1) {

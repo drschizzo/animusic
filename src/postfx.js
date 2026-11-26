@@ -10,6 +10,24 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GBuffer, SSGIPass } from './ssgi.js';
+import { FINITE } from './glsl.js';
+
+/**
+ * Première passe après le rendu : remplace les pixels non finis (NaN, Inf) et écrête
+ * les valeurs extrêmes. Sans elle, le halo (flou en cascade) transforme un seul pixel
+ * NaN en un grand rectangle noir, et la lumière indirecte le recopie à son tour.
+ */
+const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null }, uClamp: { value: 256 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uClamp; varying vec2 vUv;
+    ${FINITE}
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      gl_FragColor = vec4(min(max(finite(c.rgb), vec3(0.0)), vec3(uClamp)), 1.0);
+    }`,
+};
 
 const LensShader = {
   uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAberration: { value: 0.0016 }, uVignette: { value: 0.42 }, uGrain: { value: 0.035 } },
@@ -39,6 +57,7 @@ export class PostFX {
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
     const composer = (this.composer = new EffectComposer(renderer, target));
     composer.addPass(new RenderPass(scene, camera));
+    composer.addPass(new ShaderPass(SanitizeShader));
 
     // Tampon géométrique partagé (normales, couleur de base, profondeur), puis lumière indirecte.
     this.gbuffer = new GBuffer(scene, camera);
