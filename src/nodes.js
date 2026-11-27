@@ -491,9 +491,10 @@ export function floorHalo(spec, options) {
     spec,
     (u) => {
       const d = roundedRect(u.uSize, u.uHalf, 0.12, 0.12);
-      const line = exp(d.abs().mul(-40)).add(exp(d.abs().mul(-9)).mul(0.35));
-      const inside = select(d.lessThan(0), float(0.15), float(0));
-      return vec4(u.uColor.mul(u.uIntensity).mul(line.add(inside)), 1);
+      // Halo diffus vers l'extérieur seulement : le sol sous l'instrument ne se teinte pas.
+      const glow = select(d.lessThan(0), float(0), exp(d.mul(-9)).mul(0.35));
+      const line = exp(d.abs().mul(-40)).add(glow);
+      return vec4(u.uColor.mul(u.uIntensity).mul(line), 1);
     },
     options,
   );

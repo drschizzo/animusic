@@ -285,9 +285,10 @@ export function floorHalo(halfX, halfZ, color = 0x49d8ff) {
         void main() {
           vec2 p = abs((vUv - 0.5) * uSize) - uHalf + 0.12;
           float d = length(max(p, 0.0)) + min(max(p.x, p.y), 0.0) - 0.12;
-          float line = exp(-abs(d) * 40.0) + 0.35 * exp(-abs(d) * 9.0);
-          float inside = d < 0.0 ? 0.15 : 0.0;
-          gl_FragColor = vec4(uColor * uIntensity * (line + inside), 1.0);
+          // Liseré net, et halo diffus vers l'extérieur seulement : le sol sous
+          // l'instrument reste du plancher, il ne se teinte pas de sa couleur.
+          float line = exp(-abs(d) * 40.0) + 0.35 * exp(-max(d, 0.0) * 9.0) * step(0.0, d);
+          gl_FragColor = vec4(uColor * uIntensity * line, 1.0);
         }`,
     }),
   );
