@@ -33,6 +33,19 @@ export const DIRECTOR_DEFAULTS = {
   duoSpan: 9, // distance maximale (m) entre deux instruments cadrés ensemble
   phraseGap: 0.8, // silence (s) qui sépare deux phrases
   clearance: 0.6, // marge (m) au-dessus d'un instrument survolé
+
+  // Partage de l'écran : chaque instrument a droit à un temps d'écran en rapport avec ce qu'il joue.
+  fairness: 0.22, // poids du temps d'écran dû (par seconde due) dans le choix du sujet
+  maxRepeat: 2, // plans consécutifs au plus sur un même sujet, s'il y a quelqu'un d'autre à montrer
+  wideEvery: 6, // un plan d'ensemble tous les n plans cadrés
+
+  // Passage d'un plan à l'autre : la caméra ne glisse que vers un cadrage voisin ; sinon on coupe,
+  // comme une régie qui passe d'une caméra à une autre (une caméra ne traverse pas la scène en volant).
+  moveMax: 7, // distance (m) au-delà de laquelle on coupe
+  aimMax: 0.7, // écart de visée (rad) au-delà duquel on coupe
+  moveSpeed: 4, // vitesse (m/s) d'un glissement : sa durée s'allonge avec la distance
+  blendMax: 2.6,
+  cutSnap: 0.7, // une coupe se cale sur le temps fort le plus proche à ± cutSnap s
 };
 
 /**
@@ -166,6 +179,23 @@ export function planShots(ensemble, options = {}) {
 
   // Rythme moyen de chaque instrument, pour repérer ses moments forts.
   const rate = inst.map((i) => i.onsets.length / Math.max(1, t1 - t0));
+  // Un instrument joué par des billes se regarde, quel qu'il soit (batterie, basse, orgue compris).
+  const showy = inst.map((i) => Boolean(i.model.row || i.model.player === 'balls' || i.kind === 'balls'));
+  /** Part du temps où l'instrument joue dans [a, b) : fenêtres de 2 s qui contiennent une attaque. */
+  const playing = (k, a, b) => {
+    let n = 0;
+    let total = 0;
+    for (let x = a; x < b; x += 2, total++) if (countOnsets(inst[k].onsets, x, x + 2)) n++;
+    return total ? n / total : 0;
+  };
+  // Temps d'écran dû à chacun, en parts : ce qu'il joue sur tout le morceau (racine : le plus
+  // bavard n'écrase pas les autres), un peu plus pour les voix mélodiques.
+  // Un mécanisme discret (basse, orgue, batterie à bras) a droit à moitié moins.
+  const weight = inst.map((ins, k) => Math.sqrt(playing(k, t0, t1)) * (MELODIC.has(ins.kind) ? 1.25 : showy[k] ? 1 : 0.5));
+  const weights = weight.reduce((a, b) => a + b, 0) || 1;
+  const due = inst.map((_, k) => weight[k] / weights);
+  const shown = inst.map(() => 0); // temps d'écran déjà accordé (s)
+  let framedTime = 0; // durée cumulée des plans cadrés (hors plans d'ensemble)
   const first = inst.map((i) => i.onsets[0] ?? Infinity);
   // Entrées en scène : l'instrument sort du sol (voir sections.js) ; on le cadre pendant sa montée.
   const { rise } = SECTION_DEFAULTS;
@@ -260,9 +290,9 @@ export function planShots(ensemble, options = {}) {
     if (!n) return 0;
     if (ins.kind === 'drums') {
       const ratio = n / (rate[k] * (b - a) + 1);
-      return ratio > 1.3 ? 2.2 * (ratio - 0.8) : 0.25 * ratio;
+      return ratio > 1.3 ? 2.2 * (ratio - 0.8) : (showy[k] ? 0.9 : 0.25) * ratio;
     }
-    if (!MELODIC.has(ins.kind)) return 0.35 * Math.sqrt(n / (rate[k] * (b - a) + 1));
+    if (!MELODIC.has(ins.kind)) return (showy[k] ? 0.9 : 0.35) * Math.sqrt(n / (rate[k] * (b - a) + 1));
     const notes = notesIn(k, a, b);
     if (!notes.length) return 0.3;
     let pitch = 0;
@@ -373,10 +403,14 @@ export function planShots(ensemble, options = {}) {
         if (first[k] >= t && first[k] < end) score += 2;
         const ph = phraseStart(k, t - 0.2, (t + end) / 2);
         if (ph !== null && ph > first[k]) score += 0.6;
-        if (ins.kind === 'balls') score *= 1.6; // l'instrument vedette, le plus spectaculaire
+        if (ins.kind === 'balls') score *= 1.25; // l'instrument vedette
         // Un instrument qui joue sans avoir été montré depuis longtemps finit par l'être.
-        score += Math.min(1.2, (t - seen[k]) / 25);
-        if (k === lastSubject) score *= repeat >= 2 ? 0.45 : 0.85; // variété, sans quitter la mélodie
+        score += Math.min(2, (t - seen[k]) / 18);
+        // Temps d'écran dû : celui qui en a reçu moins que sa part passe devant, celui qui en a
+        // reçu plus s'efface (sans disparaître s'il porte la mélodie).
+        const owed = due[k] * framedTime - shown[k];
+        score *= clamp(1 + o.fairness * owed, 0.35, 3);
+        if (k === lastSubject) score *= repeat + 1 >= o.maxRepeat ? 0.05 : 0.8; // variété
         return score;
       });
       let best = -1;
@@ -393,7 +427,7 @@ export function planShots(ensemble, options = {}) {
         if (pe !== null) end = Math.min(t1, pe + 0.35);
       }
 
-      if (best < 0 || sinceWide >= 4 || (shots.length === 0 && inst.length > 1)) {
+      if (best < 0 || sinceWide >= o.wideEvery || (shots.length === 0 && inst.length > 1)) {
         shot = wide();
         sinceWide = 0;
       } else {
@@ -422,6 +456,11 @@ export function planShots(ensemble, options = {}) {
     }
     repeat = shot.subject === lastSubject ? repeat + 1 : 0;
     for (const k of [shot.subject, shot.partner]) if (k >= 0) seen[k] = end;
+    if (shot.subject >= 0) {
+      framedTime += end - t;
+      shown[shot.subject] += (end - t) * (shot.partner >= 0 ? 0.6 : 1);
+      if (shot.partner >= 0) shown[shot.partner] += (end - t) * 0.6;
+    }
     shot.start = t;
     shot.end = end;
     shot.spin = (random() < 0.5 ? -1 : 1) * o.orbitSpeed;
@@ -430,7 +469,36 @@ export function planShots(ensemble, options = {}) {
     lastSubject = shot.subject;
     t = end;
   }
-  return { shots, options: o, balls: ballsModel, obstacles };
+  const plan = { shots, options: o, balls: ballsModel, obstacles };
+  const attacks = [...new Set(inst.flatMap((i) => i.onsets))].sort((a, b) => a - b);
+  // Passages d'un plan à l'autre : glissement vers un cadrage voisin, coupe franche sinon.
+  for (let i = 1; i < shots.length; i++) {
+    const [prev, cur] = [shots[i - 1], shots[i]];
+    const a = shotPose(plan, prev, cur.start);
+    const b = shotPose(plan, cur, cur.start);
+    const move = Math.hypot(...a.position.map((v, k) => v - b.position[k]));
+    const aim = (q) => {
+      const d = q.target.map((v, k) => v - q.position[k]);
+      const l = Math.hypot(...d) || 1;
+      return d.map((v) => v / l);
+    };
+    const [da, db] = [aim(a), aim(b)];
+    const turn = Math.acos(clamp(da[0] * db[0] + da[1] * db[1] + da[2] * db[2], -1, 1));
+    // Durée d'un glissement tranquille ; si le plan est trop court pour le loger, on coupe aussi.
+    const glide = o.blend * 0.7 + move / o.moveSpeed;
+    if (cur.cut || move > o.moveMax || turn > o.aimMax || glide > Math.min(o.blendMax, (cur.end - cur.start) * 0.45)) cur.cut = true;
+    else cur.blend = glide;
+    if (!cur.cut) continue;
+    // Une coupe tombe sur un temps fort s'il y en a un tout près, sinon sur une attaque.
+    for (const [times, span] of [[beats, o.cutSnap], [attacks, o.cutSnap]]) {
+      const j = lowerBound(times, cur.start);
+      const near = [times[j - 2], times[j - 1], times[j], times[j + 1]].filter((x) => x !== undefined && Math.abs(x - cur.start) <= span && x - prev.start >= o.minShot * 0.5 && cur.end - x >= o.minShot * 0.5);
+      if (!near.length) continue;
+      prev.end = cur.start = near.sort((x, y) => Math.abs(x - cur.start) - Math.abs(y - cur.start))[0];
+      break;
+    }
+  }
+  return plan;
 }
 
 /**
@@ -442,9 +510,9 @@ const SHAKE = {
   dolly: { pos: 0.06, rot: 0.005, jitter: 0.15 },
   crane: { pos: 0.06, rot: 0.004, jitter: 0.1 },
   duo: { pos: 0.07, rot: 0.005, jitter: 0.15 },
-  close: { pos: 0.04, rot: 0.007, jitter: 0.5 },
-  low: { pos: 0.03, rot: 0.008, jitter: 0.6 },
-  follow: { pos: 0.05, rot: 0.009, jitter: 0.6 },
+  close: { pos: 0.04, rot: 0.005, jitter: 0.25 },
+  low: { pos: 0.03, rot: 0.006, jitter: 0.3 },
+  follow: { pos: 0.05, rot: 0.006, jitter: 0.3 },
 };
 
 /** Bruit lisse et déterministe (somme de sinus de fréquences sans rapport simple), ≈ −1..1. */
@@ -468,6 +536,9 @@ function handheld(pose, t, { pos, rot, jitter }) {
   return { ...pose, position, target };
 }
 
+/** Interpolation 0 → 1 à vitesse et accélération nulles aux deux bouts. */
+const smoother = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * x * (x * (6 * x - 15) + 10));
+
 const tmp = [0, 0, 0];
 /** Position lissée d'une bille (moyenne sur ±0,25 s, bornée à sa durée de vie). */
 function smoothBall(ch, b, t, out) {
@@ -489,10 +560,14 @@ function shotPose(plan, shot, t) {
     const ch = plan.balls;
     const b = ch.balls[shot.ball];
     const target = smoothBall(ch, b, clamp(t, b.launch, b.lastImpact + 0.5), [0, 0, 0]);
-    // Caméra à l'intérieur de l'arc, dans l'axe de la bille, un peu de côté et en hauteur.
-    const a = Math.atan2(target[0], -target[2]) + shot.side * 0.35;
-    const r = ch.radius * 0.42;
-    return { position: [Math.sin(a) * r, 2.1 + target[1] * 0.3, -Math.cos(a) * r], target, aperture: 1, fov: LENS.follow };
+    // Caméra fixe, derrière la tourelle et un peu de côté, dans l'axe du tir : la bille part
+    // devant elle et s'éloigne vers sa lame. Elle la suit d'un panoramique lent, au lieu de
+    // pivoter d'un coup comme si la bille lui passait sous le nez.
+    const [bx, , bz] = b.target;
+    const l = Math.hypot(bx, bz) || 1;
+    const back = ch.options.launcherRadius + 1.5;
+    const position = [(-bx / l) * back + (-bz / l) * shot.side * 1.3, 2.9, (-bz / l) * back + (bx / l) * shot.side * 1.3];
+    return { position, target, aperture: 1, fov: LENS.follow };
   }
   const [cx, cy, cz] = shot.center;
   // Rotation lente, mais pas mécanique : elle démarre et s'achève en douceur (moitié
@@ -526,10 +601,12 @@ export function cameraAt(plan, t) {
   let i = shots.findIndex((s) => t < s.end);
   if (i < 0) i = shots.length - 1;
   let pose = shotPose(plan, shots[i], t);
-  if (i > 0 && !shots[i].cut && t < shots[i].start + options.blend) {
-    // Glissement depuis le plan précédent (qui continue son mouvement pendant le fondu).
+  const blend = shots[i].blend ?? options.blend;
+  if (i > 0 && !shots[i].cut && t < shots[i].start + blend) {
+    // Glissement depuis le plan précédent (qui continue son mouvement pendant le fondu) :
+    // départ et arrivée très doux, comme un opérateur qui recadre.
     const prev = shotPose(plan, shots[i - 1], t);
-    const s = smoothstep((t - shots[i].start) / options.blend);
+    const s = smoother((t - shots[i].start) / blend);
     const mix = (a, b) => a.map((v, k) => lerp(v, b[k], s));
     // L'objectif glisse avec le reste : un zoom lent accompagne le changement de plan.
     pose = { position: mix(prev.position, pose.position), target: mix(prev.target, pose.target), aperture: lerp(prev.aperture, pose.aperture, s), fov: lerp(prev.fov, pose.fov, s) };
@@ -538,9 +615,9 @@ export function cameraAt(plan, t) {
   {
     const cur = SHAKE[shots[i].type] ?? SHAKE.close;
     let amp = cur;
-    if (i > 0 && !shots[i].cut && t < shots[i].start + options.blend) {
+    if (i > 0 && !shots[i].cut && t < shots[i].start + blend) {
       const prev = SHAKE[shots[i - 1].type] ?? SHAKE.close;
-      const s = smoothstep((t - shots[i].start) / options.blend);
+      const s = smoother((t - shots[i].start) / blend);
       amp = { pos: lerp(prev.pos, cur.pos, s), rot: lerp(prev.rot, cur.rot, s), jitter: lerp(prev.jitter, cur.jitter, s) };
     }
     pose = handheld(pose, t, amp);

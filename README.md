@@ -124,6 +124,12 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   voisins qui se répondent sont cadrés ensemble (**dialogue**). Les plans alternent plans larges, rapprochés,
   contre-plongées, travellings, grues et **poursuites** d'une bille d'un rebond à l'autre ; un instrument qui entre
   est cadré pendant qu'il sort du sol. En qualité haute, la **mise au point** suit le sujet (profondeur de champ).
+  **Partage de l'écran** : chaque instrument a droit à un temps d'écran en rapport avec ce qu'il joue (un
+  instrument joué par des billes compte autant qu'une voix mélodique) ; celui qui en a reçu moins que sa part passe
+  devant, et jamais plus de deux plans de suite sur le même sujet s'il y a quelqu'un d'autre à montrer.
+  **Passage d'un plan à l'autre** : la caméra ne glisse que vers un cadrage voisin (moins de 7 m, visée proche), en
+  prenant son temps ; sinon on coupe, sur un temps fort, comme une régie qui passe d'une caméra à une autre. Une
+  poursuite se filme de derrière la tourelle, dans l'axe du tir.
 - **Caméra portée** : chaque plan a son bougé, dérive lente façon steadicam pour les plans larges, travellings et
   grues, tremblement fin façon caméra à l'épaule pour les plans rapprochés et les poursuites ; la rotation autour
   du sujet démarre et s'achève en douceur.

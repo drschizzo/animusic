@@ -133,3 +133,55 @@ test('la caméra ne traverse jamais un instrument', () => {
     }
   }
 });
+
+test('la caméra ne traverse pas la scène en volant : glissement vers un cadrage voisin, coupe sinon', () => {
+  for (const ens of [orchestra, ensemble]) {
+    const plan = planShots(ens);
+    const dt = 1 / 30;
+    let prev = null;
+    for (let t = ens.start; t < ens.end; t += dt) {
+      const cam = cameraAt(plan, t);
+      const d = cam.target.map((v, k) => v - cam.position[k]);
+      const l = Math.hypot(...d);
+      const aim = d.map((v) => v / l);
+      const cut = plan.shots.some((s) => s.cut && s.start > t - dt - 1e-9 && s.start <= t + 1e-9);
+      if (prev && !cut) {
+        const speed = Math.hypot(...cam.position.map((v, k) => v - prev.position[k])) / dt;
+        const turn = Math.acos(Math.min(1, aim[0] * prev.aim[0] + aim[1] * prev.aim[1] + aim[2] * prev.aim[2])) / dt;
+        assert.ok(speed < 9, `caméra à ${speed.toFixed(1)} m/s à t=${t.toFixed(2)}`);
+        assert.ok(turn < 1.6, `panoramique à ${((turn * 180) / Math.PI).toFixed(0)} °/s à t=${t.toFixed(2)}`);
+      }
+      prev = { position: cam.position, aim };
+    }
+    // Un plan qui ne coupe pas glisse vers un cadrage proche, en un temps borné.
+    for (const s of plan.shots.filter((x) => !x.cut && x.blend)) assert.ok(s.blend <= options(plan).blendMax && s.blend <= (s.end - s.start) * 0.45 + 1e-9);
+  }
+});
+
+test('style « billes » : l\'écran se partage entre tous les instruments qui jouent', () => {
+  // Mélodie, basse et batterie jouent d'un bout à l'autre, deux minutes durant.
+  const n = 240;
+  const tune = Array.from({ length: n }, (_, i) => ({ midi: 72 + [0, 2, 4, 7, 9, 7, 4, 2][i % 8], time: i * 0.5, duration: 0.4, velocity: 0.85, track: 0 }));
+  const low = Array.from({ length: n }, (_, i) => ({ midi: 36 + (i % 4 === 3 ? 7 : 0), time: i * 0.5, duration: 0.4, velocity: 0.7, track: 1 }));
+  const kit = Array.from({ length: n * 2 }, (_, i) => ({ midi: [36, 42, 38, 42][i % 4], time: i * 0.25, duration: 0.1, velocity: 0.7, track: 2 }));
+  const chords = Array.from({ length: 30 }, (_, b) => [48, 55, 64].map((m) => ({ midi: m, time: b * 4, duration: 3.9, velocity: 0.5, track: 3 }))).flat();
+  const ens = buildEnsemble({ balls: tune, bass: low, drums: kit, pads: chords }, [], [], { style: 'balls' });
+  const plan = planShots(ens);
+  const time = ens.instruments.map(() => 0);
+  let framed = 0;
+  let run = 0;
+  let last = -9;
+  for (const s of plan.shots) {
+    if (s.subject < 0) continue;
+    time[s.subject] += s.end - s.start;
+    framed += s.end - s.start;
+    run = s.subject === last ? run + 1 : 1;
+    last = s.subject;
+    assert.ok(run <= options(plan).maxRepeat, 'trop de plans d\'affilée sur le même instrument');
+  }
+  ens.instruments.forEach((ins, k) => {
+    const share = time[k] / framed;
+    assert.ok(share >= 0.1, `${ins.kind} : ${(share * 100).toFixed(0)} % de l'écran`);
+    assert.ok(share <= 0.5, `${ins.kind} : ${(share * 100).toFixed(0)} % de l'écran`);
+  });
+});
