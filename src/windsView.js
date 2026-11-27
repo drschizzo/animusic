@@ -3,6 +3,7 @@ import { windState } from './winds.js';
 import { mat, fx } from './materials.js';
 import { plinth, rod, lathe, V, lamp } from './parts.js';
 import { attachRow } from './ballRowView.js';
+import { nodes } from './gpu.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -11,8 +12,12 @@ const UP = new THREE.Vector3(0, 1, 0);
  * bouche (l'air qui sort). uLevel = intensité du souffle, uTime = temps musical.
  */
 function plumeMaterial() {
+  const uniforms = { uColor: { value: new THREE.Color() }, uLevel: { value: 0 }, uTime: { value: 0 } };
+  const options = { transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false };
+  if (nodes) return nodes.plume(uniforms, options);
   return new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Color() }, uLevel: { value: 0 }, uTime: { value: 0 } },
+    ...options,
+    uniforms,
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: `
       uniform vec3 uColor; uniform float uLevel; uniform float uTime; varying vec2 vUv;
@@ -22,11 +27,6 @@ function plumeMaterial() {
         float a = uLevel * (0.25 + 0.75 * rings) * pow(1.0 - along, 1.6);
         gl_FragColor = vec4(uColor * a * 1.6, 1.0);
       }`,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    toneMapped: false,
   });
 }
 

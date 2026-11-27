@@ -343,7 +343,7 @@ function lathed(material, pitch = 0.006) {
   return material;
 }
 
-const lightMaterial = (o) => (nodes ? nodes.steadyVelocity(nodes.basic(o)) : new THREE.MeshBasicMaterial(o));
+const lightMaterial = (o) => (nodes ? nodes.seeThrough(nodes.basic(o)) : new THREE.MeshBasicMaterial(o));
 
 /** Fabriques de matériaux : chaque appel rend un matériau neuf (textures partagées). */
 export const mat = {

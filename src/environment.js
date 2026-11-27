@@ -523,11 +523,12 @@ class Rigging {
 
 /** Lointain, au-delà de la conque et côté salle : brume à l'horizon et colonnes de lumière perdues dans le noir. */
 function makeBackdrop() {
-  const material = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    depthWrite: false,
+  const uniforms = { uHaze: { value: new THREE.Color(HAZE) }, uA: { value: new THREE.Color(0x1a3a6a) }, uB: { value: new THREE.Color(0x4a1848) }, uPulse: { value: 0 } };
+  const options = { side: THREE.BackSide, depthWrite: false };
+  const material = nodes?.backdrop(uniforms, options) ?? new THREE.ShaderMaterial({
+    ...options,
     fog: false,
-    uniforms: { uHaze: { value: new THREE.Color(HAZE) }, uA: { value: new THREE.Color(0x1a3a6a) }, uB: { value: new THREE.Color(0x4a1848) }, uPulse: { value: 0 } },
+    uniforms,
     vertexShader: 'varying vec3 vPos; void main(){ vPos = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: `
       uniform vec3 uHaze; uniform vec3 uA; uniform vec3 uB; uniform float uPulse;
@@ -664,16 +665,11 @@ export class Environment {
       const lens = new THREE.Mesh(lensGeo, new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(2.2), toneMapped: false }));
       lens.rotation.x = Math.PI / 2;
       lens.position.y = -0.03;
-      const beamMat = new THREE.ShaderMaterial({
-        uniforms: { uColor: { value: color }, uIntensity: { value: 0.1 } },
-        vertexShader: beamVertex,
-        fragmentShader: beamFragment,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        fog: false,
-      });
+      const beamUniforms = { uColor: { value: color }, uIntensity: { value: 0.1 } };
+      const beamOptions = { transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide };
+      const beamMat =
+        nodes?.beam(beamUniforms, beamOptions) ??
+        new THREE.ShaderMaterial({ ...beamOptions, uniforms: beamUniforms, vertexShader: beamVertex, fragmentShader: beamFragment, fog: false });
       const beam = fx(new THREE.Mesh(cone, beamMat));
       pivot.add(body, lens, beam);
       this.rig.add(pivot);
@@ -693,8 +689,11 @@ export class Environment {
     const dustGeo = new THREE.BufferGeometry();
     dustGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
-    this.dustMat = new THREE.ShaderMaterial({
-      uniforms: { uTime: { value: 0 }, uRadius: { value: 12 }, uScale: { value: 1 } },
+    const dustUniforms = { uTime: { value: 0 }, uRadius: { value: 12 }, uScale: { value: 1 } };
+    // En WebGPU, des lutins instanciés : les points n'y font qu'un pixel.
+    const sprites = nodes?.dust(pos, seed, dustUniforms);
+    this.dustMat = sprites?.material ?? new THREE.ShaderMaterial({
+      uniforms: dustUniforms,
       vertexShader: `
         attribute float aSeed; uniform float uTime; uniform float uRadius; uniform float uScale; varying float vFade;
         void main() {
@@ -719,7 +718,7 @@ export class Environment {
       depthWrite: false,
       fog: false,
     });
-    this.dust = fx(new THREE.Points(dustGeo, this.dustMat));
+    this.dust = fx(sprites ?? new THREE.Points(dustGeo, this.dustMat));
     this.dust.frustumCulled = false;
     root.add(this.dust);
 

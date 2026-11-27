@@ -7,11 +7,12 @@
 //
 // Scène brute : matériaux, lumières et ombres seulement. Pas de post-traitement en WebGL
 // (?raw), ni reflet du sol, ni sonde de reflets ; en WebGPU, la chaîne d'effets en nœuds
-// de postfxNodes.js, le reflet du sol et la sonde. Les objets à shader GLSL écrit à la
-// main (ShaderMaterial : cônes des projecteurs, poussières, bordure du plateau…) sont
-// masqués, car WebGPURenderer ne sait pas les dessiner : il faudra les réécrire en TSL. Les retouches de matériaux par
-// onBeforeCompile (grain de surface, verre…) sont ignorées par WebGPURenderer : chacune a
-// son équivalent en nœuds TSL dans nodes.js, branché ici quand le prototype est actif.
+// de postfxNodes.js, le reflet du sol et la sonde. Les retouches de matériaux par
+// onBeforeCompile (grain de surface, verre…) et les ShaderMaterial écrits à la main
+// (lointain, cônes des projecteurs, poussières, ombres de contact, trappes, souffles)
+// sont ignorés par WebGPURenderer : chacun a son équivalent en nœuds TSL dans nodes.js,
+// branché ici quand le prototype est actif. Un ShaderMaterial resté sans équivalent est
+// masqué (hideUnsupported), et signalé dans la console.
 
 const params = typeof location === 'undefined' ? new URLSearchParams() : new URLSearchParams(location.search);
 
@@ -53,6 +54,7 @@ export function hideUnsupported(root) {
       if ((m.isShaderMaterial || m.isRawShaderMaterial) && m.visible) {
         m.visible = false;
         hidden++;
+        if (WEBGPU) console.warn('WebGPU : ShaderMaterial sans équivalent en nœuds, masqué', o.name || o.type, o);
       }
     }
   });

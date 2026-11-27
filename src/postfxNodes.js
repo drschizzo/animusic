@@ -13,7 +13,7 @@
 // volumetric.js, postfx.js), où sont leurs explications.
 // L'ordre suit github.com/marcofugaro/three-advanced-techniques.
 
-import { RenderPipeline, Matrix4, Vector2, Vector3, DepthTexture, LessEqualCompare, AgXToneMapping, SRGBColorSpace, NearestFilter } from 'three/webgpu';
+import { RenderPipeline, BlendMode, MaterialBlending, Matrix4, Vector2, Vector3, DepthTexture, LessEqualCompare, AgXToneMapping, SRGBColorSpace, NearestFilter } from 'three/webgpu';
 import {
   Fn,
   If,
@@ -145,7 +145,9 @@ export class PostFX {
 
     // --- Scène : couleur et vitesse, sans MSAA (TAAU anticrénelle).
     const scenePass = (this.scenePass = pass(scene, camera, { samples: 0 }));
-    scenePass.setMRT(mrt({ output, velocity }));
+    // La vitesse suit le mélange du matériau : les opaques l'écrivent, les effets
+    // additifs y ajoutent un zéro (nodes.seeThrough) et laissent celle de ce qu'ils couvrent.
+    scenePass.setMRT(mrt({ output, velocity }).setBlendMode('velocity', new BlendMode(MaterialBlending)));
     scenePass.contextNode = builtinAOContext(mix(1, occlusion.getTextureNode().sample(screenUV).r, u.ao));
     const depth = scenePass.getTextureNode('depth');
     const speed = scenePass.getTextureNode('velocity');

@@ -3,13 +3,28 @@
 // par le prototype (voir gpu.js) ; les explications de fond restent à côté des versions
 // GLSL, dans materials.js et dans les vues.
 
-import { MeshStandardNodeMaterial, MeshPhysicalNodeMaterial, MeshBasicNodeMaterial, NodeMaterial, QuadMesh, RenderTarget, CubeRenderTarget, Matrix4, Vector2 } from 'three/webgpu';
+import {
+  MeshStandardNodeMaterial,
+  MeshPhysicalNodeMaterial,
+  MeshBasicNodeMaterial,
+  NodeMaterial,
+  PointsNodeMaterial,
+  QuadMesh,
+  RenderTarget,
+  CubeRenderTarget,
+  InstancedBufferAttribute,
+  Sprite,
+  Matrix4,
+  Vector2,
+  AdditiveBlending,
+} from 'three/webgpu';
 import {
   Fn,
   If,
   uniform,
   uv,
   attribute,
+  instancedBufferAttribute,
   mrt,
   texture,
   varying,
@@ -29,6 +44,8 @@ import {
   exp,
   floor,
   fract,
+  mod,
+  pow,
   length,
   dFdx,
   dFdy,
@@ -44,6 +61,9 @@ import {
   modelScale,
   modelNormalMatrix,
   cameraViewMatrix,
+  modelViewMatrix,
+  viewportSize,
+  screenDPR,
   materialColor,
   materialRoughness,
   materialOpacity,
@@ -198,11 +218,14 @@ function overrideVelocity(material, node) {
 }
 
 /**
- * Effets lumineux (halos, traînées, étincelles) : seule la caméra compte. Leurs instances
- * changent de rang d'une image à l'autre, la vitesse que three en déduirait serait fausse.
+ * Effets additifs (halos, faisceaux, poussières, souffles) : ils n'écrivent aucune
+ * vitesse. La passe de scène additionne la vitesse avec le mélange du matériau
+ * (postfxNodes.js) : un zéro de couverture nulle laisse intacte celle de l'objet vu au
+ * travers. Sinon TAAU recalerait la bille qui passe derrière un faisceau sur le
+ * mouvement du faisceau, et le flou de mouvement la traînerait avec lui.
  */
-export function steadyVelocity(material) {
-  return overrideVelocity(material, screenVelocity(positionWorld, positionWorld));
+export function seeThrough(material) {
+  return overrideVelocity(material, vec4(0));
 }
 
 /**
@@ -350,4 +373,142 @@ export function stageFloor(material, u, sharp, blurred) {
     return light;
   })();
   return material;
+}
+
+// --- Effets écrits à la main en GLSL (ShaderMaterial) : leurs équivalents en nœuds.
+
+/**
+ * Matériau d'effet, à la place d'un ShaderMaterial : `uniforms` garde l'interface
+ * { nom: { value } } que pilotent les vues ; `color(u)` donne ce qu'écrivait
+ * gl_FragColor. Ni éclairage, ni brouillard, ni occlusion : la sortie est posée telle quelle.
+ */
+export function effect(spec, color, options = {}) {
+  const u = uniforms(spec);
+  const material = new NodeMaterial();
+  material.fog = false;
+  material.lights = false;
+  material.setValues(options);
+  material.uniforms = u;
+  material.outputNode = color(u);
+  return material.blending === AdditiveBlending ? seeThrough(material) : material;
+}
+
+/** Lointain : brume d'horizon et colonnes de lumière (environment.js, makeBackdrop). */
+export function backdrop(spec, options) {
+  return effect(
+    spec,
+    (u) => {
+      const p = positionGeometry;
+      const h = p.y.div(45).clamp(0, 1);
+      const fall = h.oneMinus();
+      const a = atan(p.x, p.z.negate());
+      const glow = mix(u.uA, u.uB, sin(a.add(0.6)).mul(0.5).add(0.5));
+      const lobe = (k, phase, sharp) => pow(max(0, cos(a.mul(k).add(phase)).mul(0.5).add(0.5)), sharp);
+      const bars = lobe(28, 0, 40).add(lobe(12, 1.3, 90).mul(0.5));
+      const haze = u.uHaze.add(glow.mul(u.uPulse.mul(0.1).add(0.3)).mul(pow(fall, 5)));
+      const columns = glow.mul(bars).mul(u.uPulse.mul(0.2).add(0.3)).mul(smoothstep(0, 0.08, h)).mul(pow(fall, 2.2));
+      return vec4(haze.add(columns), 1);
+    },
+    options,
+  );
+}
+
+/** Cône d'un projecteur : dense dans l'axe, éteint en s'éloignant (environment.js, beamFragment). */
+export function beam(spec, options) {
+  return effect(
+    spec,
+    (u) => {
+      const facing = unit(normalView, 1e-5).dot(unit(positionViewDirection, 1e-5)).abs().clamp(0, 1);
+      const a = pow(facing, 2.5).mul(pow(uv().y.clamp(0, 1), 1.6));
+      return vec4(u.uColor.mul(u.uIntensity).mul(a), 1);
+    },
+    options,
+  );
+}
+
+/**
+ * Poussières en suspension (environment.js) : `count` lutins instanciés, WebGPU ne
+ * dessinant les points qu'à un pixel. positions, seeds : mêmes tableaux que la
+ * géométrie de points GLSL. spec : { uTime, uRadius, uScale }.
+ */
+export function dust(positions, seeds, spec) {
+  const u = uniforms(spec);
+  const material = new PointsNodeMaterial({ transparent: true, blending: AdditiveBlending, depthWrite: false, sizeAttenuation: false });
+  material.fog = false;
+  material.lights = false;
+  material.uniforms = u;
+  const seed = instancedBufferAttribute(new InstancedBufferAttribute(seeds, 1));
+  const start = instancedBufferAttribute(new InstancedBufferAttribute(positions, 3));
+  const t = u.uTime;
+  const spread = u.uRadius.mul(1.35);
+  const p = vec3(
+    start.x.mul(spread).add(sin(t.mul(0.21).add(seed.mul(40))).mul(0.4)),
+    mod(start.y.mul(9).add(t.mul(seed.mul(0.05).add(0.03))), 9),
+    start.z.mul(spread).add(cos(t.mul(0.17).add(seed.mul(70))).mul(0.4)),
+  );
+  material.positionNode = p;
+  const distance = modelViewMatrix.mul(vec4(p, 1)).z.negate();
+  // Même taille à l'écran que gl_PointSize côté GLSL (uScale = hauteur en pixels / 720),
+  // exprimée en part de la hauteur de la cible : juste aussi quand TAAU rend plus petit.
+  material.sizeNode = viewportSize.y.mul(seed.mul(2.5).add(1.5)).mul(6 / 720).div(max(distance, 0.05)).div(screenDPR);
+  const fade = varying(
+    smoothstep(0, 1, p.y)
+      .mul(smoothstep(6, 9, p.y).oneMinus())
+      .mul(smoothstep(1, 4, distance))
+      .mul(seed.mul(0.6).add(0.4)),
+    'vDustFade',
+  );
+  // Coin du quad (−0,5 à 0,5) : la géométrie des lutins n'a pas d'uv pour WebGPU.
+  const d = length(positionGeometry.xy);
+  material.outputNode = vec4(vec3(0.75, 0.85, 1).mul(fade).mul(smoothstep(0, 0.5, d).oneMinus()).mul(0.5), 1);
+  seeThrough(material);
+  const sprites = new Sprite(material);
+  sprites.count = seeds.length;
+  return sprites;
+}
+
+/** Rectangle arrondi signé, en mètres, sur un carré de sol de côtés `size` (parts.js). */
+const roundedRect = (size, half, radius, inset = 0) => {
+  const q = uv().sub(0.5).mul(size).abs().sub(half).add(inset);
+  return length(max(q, 0)).add(min(max(q.x, q.y), 0)).sub(radius);
+};
+
+/** Ombre de contact au sol (parts.js, contactShadow). spec : { uSize, uHalf, uShape }. */
+export function contactShadow(spec, options) {
+  return effect(
+    spec,
+    (u) => {
+      const a = smoothstep(0, u.uShape.y, roundedRect(u.uSize, u.uHalf, u.uShape.x)).oneMinus();
+      return vec4(0, 0, 0, u.uShape.z.mul(a).mul(a));
+    },
+    options,
+  );
+}
+
+/** Trappe lumineuse au sol (parts.js, floorHalo). spec : { uSize, uHalf, uColor, uIntensity }. */
+export function floorHalo(spec, options) {
+  return effect(
+    spec,
+    (u) => {
+      const d = roundedRect(u.uSize, u.uHalf, 0.12, 0.12);
+      const line = exp(d.abs().mul(-40)).add(exp(d.abs().mul(-9)).mul(0.35));
+      const inside = select(d.lessThan(0), float(0.15), float(0));
+      return vec4(u.uColor.mul(u.uIntensity).mul(line.add(inside)), 1);
+    },
+    options,
+  );
+}
+
+/** Souffle visible des vents (windsView.js, plumeMaterial). spec : { uColor, uLevel, uTime }. */
+export function plume(spec, options) {
+  return effect(
+    spec,
+    (u) => {
+      const along = uv().y.clamp(0, 1);
+      const rings = pow(sin(along.mul(22).sub(u.uTime.mul(26))).mul(0.5).add(0.5), 3);
+      const a = u.uLevel.mul(rings.mul(0.75).add(0.25)).mul(pow(along.oneMinus(), 1.6));
+      return vec4(u.uColor.mul(a).mul(1.6), 1);
+    },
+    options,
+  );
 }
