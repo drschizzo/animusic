@@ -248,7 +248,7 @@ export class TrunksView {
         kit.add(M.chrome, sweepGeometry(rail, 0.0045, 8));
       }
       // Pieds : traverse, deux montants, patins réglables, sur les parties droites.
-      for (let s = 0.45; s < L - 0.3; s += 1.1) {
+      for (let s = 0.45; s < L - 0.3; s += 1.6) {
         const a = path.tangentAt(s - 0.08);
         const b = path.tangentAt(s + 0.08);
         if (a[0] * b[0] + a[2] * b[2] < 0.999) continue;
