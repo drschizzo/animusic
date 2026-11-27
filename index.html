@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Animusic — prototype</title>
+    <title>Animusic</title>
     <style>
       /* Écran de chargement : en ligne, pour s'afficher avant le script et sa feuille de style.
          Animations en transformations et opacité seulement : jouées hors du fil principal. */
@@ -20,20 +20,16 @@
         display: grid;
         place-items: center;
         background: radial-gradient(ellipse at 50% 42%, #141826 0%, #07080d 62%);
-        color: #e6e8f0;
-        font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
-        transition: opacity 0.5s ease, visibility 0s linear 0s;
-      }
-      #loader.veil {
-        background: rgba(7, 8, 13, 0.78);
-        /* Une reconstruction brève ne fait pas clignoter le voile. */
-        transition: opacity 0.25s ease 0.15s, visibility 0s linear 0s;
+        color: #e9eaf0;
+        font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        will-change: opacity;
+        transition: opacity 0.2s ease, visibility 0s linear 0s;
       }
       #loader.done {
         opacity: 0;
         visibility: hidden;
         pointer-events: none;
-        transition: opacity 0.5s ease, visibility 0s linear 0.5s;
+        transition: opacity 0.6s ease, visibility 0s linear 0.6s;
       }
       #loader.done * {
         animation-play-state: paused !important;
@@ -118,26 +114,32 @@
         }
       }
       .loader-title {
-        font-size: 22px;
-        font-weight: 600;
-        letter-spacing: 0.04em;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 17px;
+        font-weight: 500;
+        letter-spacing: 0.01em;
       }
       .loader-text {
         min-height: 1.4em;
-        margin: 6px 0 16px;
-        color: #8b93b0;
+        margin: 6px 0 18px;
+        color: rgba(233, 234, 240, 0.5);
+        font-size: 12px;
+        letter-spacing: 0.02em;
       }
       .loader-bar {
-        width: 100%;
-        height: 3px;
-        border-radius: 2px;
+        width: 160px;
+        height: 2px;
+        border-radius: 1px;
         overflow: hidden;
-        background: rgba(255, 255, 255, 0.09);
+        background: rgba(255, 255, 255, 0.08);
       }
       .loader-bar > div {
         height: 100%;
         border-radius: 2px;
-        background: linear-gradient(90deg, #ff8a3d, #ffe14d, #5cff8f, #3dc6ff, #b56bff);
+        background: rgba(255, 255, 255, 0.75);
         transform: scaleX(0);
         transform-origin: 0 50%;
         transition: transform 0.35s ease-out;
@@ -154,129 +156,176 @@
     </style>
   </head>
   <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a.6.6 0 0 0 .92.5l10.2-6.5a.6.6 0 0 0 0-1L8.92 5a.6.6 0 0 0-.92.5Z" fill="currentColor" /></symbol>
+        <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="3.6" height="14" rx="1" fill="currentColor" /><rect x="13.9" y="5" width="3.6" height="14" rx="1" fill="currentColor" /></symbol>
+        <symbol id="i-prev" viewBox="0 0 24 24"><path d="M18 6.2v11.6a.5.5 0 0 1-.78.42L9 12.42a.5.5 0 0 1 0-.84l8.22-5.8a.5.5 0 0 1 .78.42ZM6 6v12" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></symbol>
+        <symbol id="i-next" viewBox="0 0 24 24"><path d="M6 6.2v11.6a.5.5 0 0 0 .78.42L15 12.42a.5.5 0 0 0 0-.84L6.78 5.78A.5.5 0 0 0 6 6.2ZM18 6v12" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></symbol>
+        <symbol id="i-restart" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v3.7h3.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+        <symbol id="i-loop" viewBox="0 0 24 24"><path d="M17 3.5 20 6.5l-3 3M20 6.5H8a4 4 0 0 0-4 4v1M7 20.5l-3-3 3-3M4 17.5h12a4 4 0 0 0 4-4v-1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+        <symbol id="i-tracks" viewBox="0 0 24 24"><path d="M5 4v16M12 4v16M19 4v16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><circle cx="5" cy="14" r="2.2" fill="currentColor" /><circle cx="12" cy="8" r="2.2" fill="currentColor" /><circle cx="19" cy="16" r="2.2" fill="currentColor" /></symbol>
+        <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6.5h11M4 12h11M4 17.5h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /><path d="M17 15.5v-9l3.5 1.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><circle cx="15.6" cy="16.6" r="1.9" fill="currentColor" /></symbol>
+        <symbol id="i-open" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h3.8l2 2.2h7.2a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" /><path d="M12 11v5M9.5 13.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></symbol>
+        <symbol id="i-gear" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /><circle cx="15" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6" /><circle cx="9" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6" /></symbol>
+        <symbol id="i-camera" viewBox="0 0 24 24"><rect x="3.5" y="7" width="12" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.6" /><path d="m15.5 10.5 5-2.5v8l-5-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" /></symbol>
+        <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></symbol>
+        <symbol id="i-close" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></symbol>
+      </defs>
+    </svg>
+
     <div id="stage"></div>
 
-    <aside id="panel">
-      <h1>
-        Animusic <span>proto</span>
-        <button id="collapse" class="icon" title="Replier le panneau" aria-expanded="true">▾</button>
-      </h1>
-      <div id="panelBody">
-      <section class="choice">
-        <h3>Tes morceaux</h3>
-        <p class="hint">Ouvre un ou plusieurs fichiers <b>.mid</b> (ils forment une playlist), ou glisse-les sur la page.</p>
-        <div class="row">
-          <label class="btn primary">
-            Ouvrir des fichiers MIDI…
+    <!-- Titre : discret, en haut à gauche. -->
+    <header id="brand" class="chrome">
+      <div class="brand-mark">Animusic</div>
+      <div id="song" hidden>
+        <h1 id="songName"></h1>
+        <p id="trackSummary" class="sub"></p>
+      </div>
+    </header>
+
+    <!-- Premier lancement : l'audio ne peut démarrer que sur un geste. -->
+    <button id="bigPlay" class="big-play" aria-label="Lecture" hidden>
+      <svg><use href="#i-play" /></svg>
+    </button>
+
+    <!-- Barre de lecture, qui s'efface pendant la lecture quand la souris ne bouge plus. -->
+    <footer id="dock" class="chrome">
+      <div class="timeline">
+        <span id="time" class="time">0:00</span>
+        <input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Position dans le morceau" />
+        <span id="duration" class="time">0:00</span>
+      </div>
+      <div class="controls">
+        <div class="group">
+          <button id="prevSong" class="icon" title="Morceau précédent" aria-label="Morceau précédent" hidden><svg><use href="#i-prev" /></svg></button>
+          <button id="play" class="icon play" title="Lecture (espace)" aria-label="Lecture"><svg><use href="#i-play" /></svg></button>
+          <button id="nextSong" class="icon" title="Morceau suivant" aria-label="Morceau suivant" hidden><svg><use href="#i-next" /></svg></button>
+          <button id="restart" class="icon" title="Reprendre au début" aria-label="Reprendre au début"><svg><use href="#i-restart" /></svg></button>
+          <label class="icon toggle-icon" title="Lecture en boucle">
+            <input id="loop" type="checkbox" aria-label="Lecture en boucle" />
+            <svg><use href="#i-loop" /></svg>
+          </label>
+        </div>
+        <div class="group right">
+          <div class="segmented" role="radiogroup" aria-label="Caméra" title="Caméra">
+            <svg class="seg-icon"><use href="#i-camera" /></svg>
+            <button data-cam="director" role="radio" aria-checked="true" title="Le réalisateur choisit les plans">Réalisateur</button>
+            <button data-cam="orbit" role="radio" aria-checked="false" title="Lente orbite autour de la scène">Orbite</button>
+            <button data-cam="free" role="radio" aria-checked="false" title="Vue libre à la souris">Libre</button>
+          </div>
+          <select id="camMode" hidden aria-hidden="true" tabindex="-1">
+            <option value="director" selected>Réalisateur</option>
+            <option value="orbit">Orbite</option>
+            <option value="free">Libre</option>
+          </select>
+          <span class="sep"></span>
+          <button class="icon" data-sheet="tracksSheet" title="Pistes et instruments" aria-label="Pistes et instruments"><svg><use href="#i-tracks" /></svg></button>
+          <button class="icon" data-sheet="playlistSheet" title="Morceaux" aria-label="Morceaux"><svg><use href="#i-list" /></svg></button>
+          <button class="icon" data-sheet="settingsSheet" title="Réglages" aria-label="Réglages"><svg><use href="#i-gear" /></svg></button>
+          <button id="fullscreen" class="icon" title="Plein écran (F)" aria-label="Plein écran"><svg><use href="#i-full" /></svg></button>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Morceaux : ouvrir, démo, playlist. -->
+    <section id="playlistSheet" class="sheet" hidden aria-label="Morceaux">
+      <header><h2>Morceaux</h2><button class="icon small close" aria-label="Fermer"><svg><use href="#i-close" /></svg></button></header>
+      <div class="sheet-body">
+        <div class="actions">
+          <label class="btn">
+            <svg><use href="#i-open" /></svg> Ouvrir des fichiers MIDI
             <input id="file" type="file" accept=".mid,.midi" multiple hidden />
           </label>
+          <button id="demo" class="btn ghost"><span>Démo : <i>Chameleon</i></span></button>
         </div>
-      </section>
-      <section class="choice">
-        <h3>Pas de fichier MIDI ?</h3>
-        <p class="hint">Essaie avec le morceau de démonstration : <i>Chameleon</i> (Herbie Hancock).</p>
-        <div class="row">
-          <button id="demo" class="btn">▶ Écouter la démo</button>
+        <p class="hint">Plusieurs fichiers forment une playlist. On peut aussi les glisser sur la page.</p>
+        <div id="playlist" hidden>
+          <div class="list-head">
+            <span id="playlistSummary">Playlist</span>
+            <span class="list-actions">
+              <label class="link" title="Ajouter des fichiers MIDI à la playlist">Ajouter<input id="addFiles" type="file" accept=".mid,.midi" multiple hidden /></label>
+              <button id="clearPlaylist" class="link" title="Vider la playlist">Vider</button>
+            </span>
+          </div>
+          <ol id="playlistItems"></ol>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <details id="playlist" open hidden>
-        <summary id="playlistSummary">Playlist</summary>
-        <ol id="playlistItems"></ol>
-        <div class="row">
-          <button id="prevSong" class="btn" title="Morceau précédent">⏮</button>
-          <button id="nextSong" class="btn" title="Morceau suivant">⏭</button>
-          <label class="btn" title="Ajouter des fichiers MIDI à la playlist">
-            Ajouter…
-            <input id="addFiles" type="file" accept=".mid,.midi" multiple hidden />
-          </label>
-          <button id="clearPlaylist" class="btn" title="Vider la playlist">Vider</button>
-        </div>
-      </details>
+    <!-- Pistes : rôle de chaque piste MIDI. -->
+    <section id="tracksSheet" class="sheet" hidden aria-label="Pistes et instruments">
+      <header><h2>Pistes et instruments</h2><button class="icon small close" aria-label="Fermer"><svg><use href="#i-close" /></svg></button></header>
+      <div class="sheet-body">
+        <p class="hint">Chaque piste confiée à un instrument de la machine. Un changement reconstruit la scène.</p>
+        <ul id="tracks"></ul>
+      </div>
+    </section>
 
-      <div id="song" hidden>
-        <h2 id="songName"></h2>
-        <details id="trackBox">
-          <summary id="trackSummary">Pistes et instruments</summary>
-          <ul id="tracks"></ul>
-        </details>
-        <div class="row">
-          <button id="play" class="btn primary">▶ Lecture</button>
-          <button id="restart" class="btn">⏮ Début</button>
+    <!-- Réglages. -->
+    <section id="settingsSheet" class="sheet" hidden aria-label="Réglages">
+      <header><h2>Réglages</h2><button class="icon small close" aria-label="Fermer"><svg><use href="#i-close" /></svg></button></header>
+      <div class="sheet-body">
+        <h3>Image</h3>
+        <div class="field">
+          <label for="quality">Qualité</label>
+          <select id="quality">
+            <option value="auto" selected>Auto</option>
+            <option value="high">Haute</option>
+            <option value="medium">Moyenne</option>
+            <option value="low">Basse</option>
+          </select>
         </div>
-        <div class="row">
-          <label class="toggle" title="Reprend le morceau au début une fois terminé"><input id="loop" type="checkbox" /> Lecture en boucle</label>
+        <label class="field switch" title="La lumière des instruments éclaire les surfaces voisines (qualité haute uniquement)">
+          <span>Lumière indirecte <small>qualité haute</small></span>
+          <input id="gi" type="checkbox" checked /><i></i>
+        </label>
+        <div class="field">
+          <label for="style" title="Qui joue les instruments : des billes crachées par des tuyaux, ou des bras et des mécanismes">Interprètes</label>
+          <select id="style">
+            <option value="balls" selected>Tout en billes</option>
+            <option value="arms">Bras et mécanismes</option>
+          </select>
         </div>
-        <div class="row">
-          <button id="record" class="btn" title="Rejoue le morceau depuis le début et l'enregistre en vidéo">⏺ Vidéo</button>
-          <button id="exportGltf" class="btn" title="Animation complète au format glTF, à importer dans Blender">⇩ Blender</button>
+
+        <h3>Son</h3>
+        <label class="field switch">
+          <span>Sons réalistes <small>SoundFont MuseScore General</small></span>
+          <input id="samples" type="checkbox" checked /><i></i>
+        </label>
+        <div class="field" id="listenRow" hidden>
+          <label for="listen">Écouter</label>
+          <select id="listen">
+            <option value="original" selected>l’enregistrement</option>
+            <option value="transcription">la transcription</option>
+          </select>
         </div>
-        <p id="exportStatus" class="hint" hidden></p>
-        <div class="row">
-          <input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Position dans le morceau" />
-        </div>
-        <div class="row">
-          <span id="time">0:00</span>
-          <label class="toggle"
-            >Caméra
-            <select id="camMode">
-              <option value="director" selected>Réalisateur</option>
-              <option value="orbit">Orbite</option>
-              <option value="free">Libre</option>
-            </select></label
-          >
-        </div>
-        <div class="row">
-          <label for="offset" class="muted">Retard image</label>
+        <div class="field slider">
+          <label for="offset" title="Décale l'image par rapport au son (casque Bluetooth…)">Retard de l’image</label>
           <input id="offset" type="range" min="-300" max="800" step="10" value="0" />
-          <span id="offsetVal" class="muted">0 ms</span>
+          <output id="offsetVal">0 ms</output>
         </div>
-        <div class="row">
-          <label class="toggle" title="Qui joue les instruments : des bras et des mécanismes, ou des billes crachées par des tuyaux"
-            >Style
-            <select id="style">
-              <option value="balls" selected>Tout en billes</option>
-              <option value="arms">Bras et mécanismes</option>
-            </select></label
-          >
-        </div>
-        <div class="row">
-          <label class="toggle"
-            >Qualité
-            <select id="quality">
-              <option value="auto" selected>Auto</option>
-              <option value="high">Haute</option>
-              <option value="medium">Moyenne</option>
-              <option value="low">Basse</option>
-            </select></label
-          >
-          <span id="fps" class="muted"></span>
-        </div>
-        <div class="row">
-          <label class="toggle" title="La lumière des instruments éclaire les surfaces voisines (qualité haute uniquement)"
-            ><input id="gi" type="checkbox" checked /> Lumière indirecte (SSGI)</label
-          >
-        </div>
-        <div class="row" id="listenRow" hidden>
-          <label class="toggle"
-            >Écouter
-            <select id="listen">
-              <option value="original" selected>l’enregistrement original</option>
-              <option value="transcription">la transcription</option>
-            </select></label
-          >
-        </div>
-        <div class="row">
-          <label class="toggle"><input id="samples" type="checkbox" checked /> Sons réalistes (SoundFont MuseScore General)</label>
-        </div>
-        <p id="sound" class="hint"></p>
         <p id="latency" class="hint"></p>
-      </div>
-      <p id="error" class="error" hidden></p>
-      </div>
-    </aside>
 
-    <div id="drop" hidden>Dépose tes fichiers MIDI</div>
+        <h3>Exporter</h3>
+        <div class="actions two">
+          <button id="record" class="btn ghost" title="Rejoue le morceau depuis le début et l'enregistre en vidéo">Vidéo</button>
+          <button id="exportGltf" class="btn ghost" title="Animation complète au format glTF, à importer dans Blender">Blender (glTF)</button>
+        </div>
+
+        <p id="fps" class="stats"></p>
+      </div>
+    </section>
+
+    <!-- Messages passagers. -->
+    <div id="toasts" aria-live="polite">
+      <p id="exportStatus" class="toast" hidden></p>
+      <p id="sound" class="toast" hidden></p>
+      <p id="error" class="toast error" hidden></p>
+    </div>
+
+    <div id="drop" hidden><span>Dépose tes fichiers MIDI</span></div>
     <div id="loader" role="status" aria-live="polite" aria-busy="true">
       <div class="loader-box">
         <div class="loader-keys" aria-hidden="true">
@@ -289,7 +338,7 @@
           <span style="--i: 6; --c: #ff5c8a; --h: 70px"><i></i></span>
         </div>
         <div class="loader-title">Animusic</div>
-        <div class="loader-text">Chargement…</div>
+        <div class="loader-text">Chargement</div>
         <div class="loader-bar"><div></div></div>
       </div>
     </div>

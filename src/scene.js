@@ -295,9 +295,12 @@ export class Stage {
     try {
       onProgress(0.4, 'shaders');
       if (renderer.isWebGPURenderer) {
-        // WebGPURenderer compile sans bloquer, par une API prévue pour : pas d'images à blanc.
+        // Pas de compileAsync : ses objets ne portent pas les mêmes clés de cache que ceux
+        // du vrai rendu (contexte de passe, MRT), si bien que presque tout était construit
+        // deux fois (190 shaders au lieu de 98, 12 s de chargement au lieu de 4). Les vraies
+        // images ci-dessous compilent exactement ce qui servira ; l'écran de chargement,
+        // animé hors du fil principal, ne s'en ressent pas.
         hideUnsupported(this.scene);
-        await renderer.compileAsync(this.scene, this.camera);
       } else if (renderer.extensions.get('KHR_parallel_shader_compile')) {
         const before = renderer.info.programs.length;
         // Six images : les faces de la sonde et les cartes d'ombre se relaient d'une image à l'autre.
@@ -315,12 +318,14 @@ export class Stage {
         }
       }
       // Vraies images : le décor seul, puis chaque instrument seul, puis tout ensemble.
-      onProgress(0.85, 'scène');
+      // (En WebGPU, ce sont elles qui compilent : elles portent toute la fin de la barre.)
+      const from = renderer.isWebGPURenderer ? 0.4 : 0.85;
+      onProgress(from, 'scène');
       const lifts = this.lifts ?? [];
       for (let k = -1; k < lifts.length; k++) {
         lifts.forEach((lift, i) => (lift.visible = i === k));
         this.render();
-        onProgress(0.85 + (0.15 * (k + 2)) / (lifts.length + 2), 'scène');
+        onProgress(from + ((1 - from) * (k + 2)) / (lifts.length + 2), 'scène');
         await breathe();
       }
       lifts.forEach((lift) => (lift.visible = true));

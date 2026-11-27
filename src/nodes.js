@@ -17,6 +17,9 @@ import {
   Matrix4,
   Vector2,
   AdditiveBlending,
+  DataTexture,
+  RGBAFormat,
+  FloatType,
 } from 'three/webgpu';
 import {
   Fn,
@@ -74,6 +77,7 @@ import {
   roughness,
   clearcoatRoughness,
   screenCoordinate,
+  materialReference,
 } from 'three/tsl';
 
 export const standard = (o) => new MeshStandardNodeMaterial(o);
@@ -90,10 +94,38 @@ export function uniforms(spec) {
   return out;
 }
 
+const refType = (v) =>
+  typeof v === 'number' ? 'float' : v?.isColor ? 'color' : v?.isVector2 ? 'vec2' : v?.isVector3 ? 'vec3' : v?.isVector4 ? 'vec4' : null;
+
+/**
+ * Uniformes d'un graphe partagé : chacun est lu, au dessin, sur le matériau de l'objet
+ * (`material.<path>.<nom>.value`). Le même graphe sert ainsi à tous les matériaux de la
+ * recette, chacun avec ses valeurs. Renvoie { key, u } ; null si un type n'est pas pris en charge.
+ */
+function perMaterial(path, holders) {
+  const entries = Object.entries(holders).map(([name, h]) => [name, refType(h.value)]);
+  if (entries.some(([, type]) => !type)) return null;
+  const key = entries.map(([name, type]) => `${name}:${type}`).join(',');
+  return { key, make: () => Object.fromEntries(entries.map(([name, type]) => [name, materialReference(`${path}.${name}.value`, type)])) };
+}
+
 /** Image, dans le repère de la caméra, d'un vecteur de la pièce par la matrice des normales (non normalisée). */
 const axisView = (v) => cameraViewMatrix.mul(vec4(modelNormalMatrix.mul(v), 0)).xyz;
 
 const unit = (v, floor_ = 1e-4) => v.div(max(length(v), floor_));
+
+/**
+ * Nœuds partagés entre matériaux de même recette. three identifie chaque nœud par son
+ * numéro : deux graphes identiques mais construits séparément font deux shaders à
+ * générer (et à compiler) au lieu d'un. Le chargement passait l'essentiel de son temps
+ * à fabriquer ainsi des centaines de copies d'une poignée de shaders.
+ */
+const recipes = new Map();
+function recipe(key, make) {
+  let r = recipes.get(key);
+  if (!r) recipes.set(key, (r = make()));
+  return r;
+}
 
 /**
  * Taille apparente des lampes (voir materials.js) : rugosité minimale et part réduite pour
@@ -133,6 +165,14 @@ export function installLampModel(minRoughness, specular) {
 
 /** Grain de surface (materials.js, `detail`). */
 export function detail(material, map, { scale, bump, rough }) {
+  const { roughnessNode, normalNode } = recipe(`detail|${map.uuid}|${scale}|${bump}|${rough}`, () => detailNodes(map, { scale, bump, rough }));
+  material.roughnessNode = roughnessNode;
+  if (normalNode) material.normalNode = normalNode;
+  return material;
+}
+
+function detailNodes(map, { scale, bump, rough }) {
+  const out = {};
   const p = varying(positionGeometry.mul(modelScale), 'vDetailP');
   const axis = varying(normalGeometry, 'vDetailN').abs();
   const basis = [vec3(1, 0, 0), vec3(0, 1, 0), vec3(0, 0, 1)].map((e, i) => varying(axisView(e), `vDetailBasis${i}`));
@@ -148,7 +188,7 @@ export function detail(material, map, { scale, bump, rough }) {
   // Seconde lecture tournée de 37° et trois fois plus large.
   const turn = (v) => vec2(v.x.mul(0.2954).sub(v.y.mul(0.2225)), v.x.mul(0.2225).add(v.y.mul(0.2954)));
   const broad = texture(map, turn(uv).add(vec2(0.37, 0.61))).grad(turn(gx), turn(gy));
-  material.roughnessNode = materialRoughness.add(broad.b.sub(0.5).mul(2 * rough)).clamp(0.04, 1);
+  out.roughnessNode = materialRoughness.add(broad.b.sub(0.5).mul(2 * rough)).clamp(0.04, 1);
   if (bump > 0) {
     const fine = texture(map, uv).grad(gx, gy);
     const b = broad.rg.sub(0.5);
@@ -156,15 +196,17 @@ export function detail(material, map, { scale, bump, rough }) {
     const slope = fine.rg.sub(0.5).add(broadSlope.mul(0.7)).mul(2 * bump);
     const u = pick(basis[1], basis[0], basis[0]).normalize();
     const v = pick(basis[2], basis[2], basis[1]).normalize();
-    material.normalNode = unit(normalView.sub(u.mul(slope.x).add(v.mul(slope.y))));
+    out.normalNode = unit(normalView.sub(u.mul(slope.x).add(v.mul(slope.y))));
   }
-  return material;
+  return out;
 }
 
 /** Verre (materials.js, `rimmed`). */
 export function rimmed(material, edge) {
-  const glance = positionViewDirection.dot(normalView).abs().saturate().oneMinus();
-  material.opacityNode = mix(materialOpacity, edge, glance.mul(glance).mul(glance));
+  material.opacityNode = recipe(`rimmed|${edge}`, () => {
+    const glance = positionViewDirection.dot(normalView).abs().saturate().oneMinus();
+    return mix(materialOpacity, edge, glance.mul(glance).mul(glance));
+  });
   return material;
 }
 
@@ -214,7 +256,7 @@ export function useRenderer(r) {
  * matériau sans cible correspondante donne un shader invalide.
  */
 function overrideVelocity(material, node) {
-  const override = mrt({ velocity: node });
+  const override = node.isMRTNode ? node : mrt({ velocity: node });
   Object.defineProperty(material, 'mrtNode', { get: () => (renderer?.getMRT()?.has('velocity') ? override : null), set() {}, configurable: true });
   return material;
 }
@@ -227,7 +269,7 @@ function overrideVelocity(material, node) {
  * mouvement du faisceau, et le flou de mouvement la traînerait avec lui.
  */
 export function seeThrough(material) {
-  return overrideVelocity(material, vec4(0));
+  return overrideVelocity(material, recipe('seeThrough', () => mrt({ velocity: vec4(0) })));
 }
 
 /**
@@ -236,18 +278,61 @@ export function seeThrough(material) {
  * comparaison de deux images : elles changent de rang dans leur réservoir.
  */
 export function ballGlow(material) {
-  material.emissiveNode = diffuseColor.rgb.mul(0.4);
-  return overrideVelocity(material, screenVelocity(positionWorld, positionWorld.sub(attribute('instanceVelocity', 'vec3').mul(motion.uDt))));
+  const r = recipe('ballGlow', () => ({
+    emissive: diffuseColor.rgb.mul(0.4),
+    velocity: mrt({ velocity: screenVelocity(positionWorld, positionWorld.sub(attribute('instanceVelocity', 'vec3').mul(motion.uDt))) }),
+  }));
+  material.emissiveNode = r.emissive;
+  return overrideVelocity(material, r.velocity);
 }
 
 /** Lueur par instance (materials.js, `instanceGlow`) : attribut `instanceGlow` ajouté à l'émissif. */
 export function instanceGlow(material) {
-  material.emissiveNode = materialEmissive.add(attribute('instanceGlow', 'vec3'));
+  material.emissiveNode = recipe('instanceGlow', () => materialEmissive.add(attribute('instanceGlow', 'vec3')));
   return material;
 }
 
-/** Lueur par pièce d'un maillage fusionné (materials.js, `slotGlow`) : case `glowSlot` de la texture. */
+/**
+ * Lueurs des maillages fusionnés (materials.js, `slotGlow`) : une seule texture pour
+ * tous, chaque maillage y reçoit une plage de cases. Avec une texture chacun, chaque
+ * maillage aurait son propre shader. Les plages sont rendues quand leurs matériaux sont
+ * libérés ; la scène suivante repart du début.
+ */
+const GLOW_W = 256;
+const GLOW_H = 16;
+const glowAtlas = { data: new Float32Array(GLOW_W * GLOW_H * 4), texture: null, next: 0, live: 0 };
+
+/** Réserve `count` cases : { base, data, texture, release } ; null si la texture est pleine. */
+export function glowSlots(count) {
+  if (!glowAtlas.texture) {
+    glowAtlas.texture = new DataTexture(glowAtlas.data, GLOW_W, GLOW_H, RGBAFormat, FloatType);
+    glowAtlas.texture.needsUpdate = true;
+  }
+  if (glowAtlas.live === 0) glowAtlas.next = 0;
+  if (glowAtlas.next + count > GLOW_W * GLOW_H) return null;
+  const base = glowAtlas.next;
+  glowAtlas.next += count;
+  glowAtlas.live++;
+  glowAtlas.data.fill(0, base * 4, (base + count) * 4);
+  let released = false;
+  const release = () => {
+    if (!released) glowAtlas.live--;
+    released = true;
+  };
+  return { base, data: glowAtlas.data, texture: glowAtlas.texture, release };
+}
+
+/** Lueur par pièce d'un maillage fusionné : case `glowSlot` de la texture. */
 export function slotGlow(material, glow) {
+  if (glow === glowAtlas.texture) {
+    material.emissiveNode = recipe('slotGlow', () => {
+      const slot = attribute('glowSlot', 'float');
+      const x = mod(slot, GLOW_W).add(0.5).toInt();
+      const y = floor(slot.div(GLOW_W).add(0.5 / GLOW_W)).toInt();
+      return materialEmissive.add(textureLoad(glow, ivec2(x, y)).rgb);
+    });
+    return material;
+  }
   const slot = attribute('glowSlot', 'float').add(0.5).toInt();
   material.emissiveNode = materialEmissive.add(textureLoad(glow, ivec2(slot, 0)).rgb);
   return material;
@@ -285,11 +370,23 @@ export function membrane(material, u) {
 
 /** Rayon laser qui se courbe et ondule (laserView.js). u : { uBend, uWave, uTime }. */
 export function bendable(material, u) {
+  // Uniformes lus sur le matériau (laserView.js les range dans userData.uniforms).
+  if (material.userData.uniforms === u) {
+    const shared = perMaterial('userData.uniforms', u);
+    if (shared) {
+      material.positionNode = recipe(`bendable|${shared.key}`, () => bendNode(shared.make()));
+      return material;
+    }
+  }
+  material.positionNode = bendNode(u);
+  return material;
+}
+
+function bendNode(u) {
   const y = positionGeometry.y;
   const arch = y.mul(4).mul(y.oneMinus());
   const shift = arch.mul(u.uBend.add(u.uWave.mul(sin(y.mul(38).sub(u.uTime.mul(24))))));
-  material.positionNode = positionLocal.add(vec3(shift, 0, 0));
-  return material;
+  return positionLocal.add(vec3(shift, 0, 0));
 }
 
 /** Rampe au pied de la conque (environment.js, StageShell). u : { uWashA, uWashB, uWash }. */
@@ -370,7 +467,8 @@ export function effect(spec, color, options = {}) {
   material.lights = false;
   material.setValues(options);
   material.uniforms = u;
-  material.outputNode = color(u);
+  const shared = perMaterial('uniforms', u);
+  material.outputNode = shared ? recipe(`effect|${shared.key}|${color}`, () => color(shared.make())) : color(u);
   return material.blending === AdditiveBlending ? seeThrough(material) : material;
 }
 

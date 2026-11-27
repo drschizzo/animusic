@@ -22,6 +22,22 @@ const PALETTE = ['#ff8a3d', '#3dc6ff', '#b56bff', '#5cff8f', '#ff5c8a', '#ffe14d
 
 const $ = (id) => document.getElementById(id);
 const loader = new Loader();
+
+/**
+ * Habillage qui s'efface : pendant la lecture, titre et barre disparaissent quand la
+ * souris ne bouge plus (sauf panneau ouvert ou souris sur la barre).
+ */
+const idle = {
+  timer: 0,
+  poke() {
+    document.body.classList.remove('idle');
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      if (player?.playing && !openSheet && !$('dock').matches(':hover')) document.body.classList.add('idle');
+    }, 2800);
+  },
+};
+let openSheet = null;
 // L'écran de chargement d'abord : on laisse le navigateur l'afficher avant de créer le
 // moteur de rendu (délai de secours : un onglet en arrière-plan ne dessine pas).
 await new Promise((resolve) => {
@@ -41,9 +57,18 @@ function colorFor(i) {
   return new THREE.Color(PALETTE[i % PALETTE.length]);
 }
 
+/** Message passager en bas de l'écran ; `ms` : effacé après ce délai (0 : reste affiché). */
+const toastTimers = new Map();
+function toast(id, msg, ms = 0) {
+  const el = $(id);
+  clearTimeout(toastTimers.get(id));
+  el.textContent = msg ?? '';
+  el.hidden = !msg;
+  if (msg && ms) toastTimers.set(id, setTimeout(() => (el.hidden = true), ms));
+}
+
 function showError(msg) {
-  $('error').textContent = msg;
-  $('error').hidden = !msg;
+  toast('error', msg, 8000);
 }
 
 /**
@@ -53,18 +78,52 @@ function showError(msg) {
  */
 let buildQueue = Promise.resolve();
 let buildCount = 0;
+let pending = 0;
+/**
+ * Tout chargement passe par ici, l'un après l'autre, derrière l'écran de chargement :
+ * construction d'un morceau, changement de qualité, lumière indirecte. L'écran ne
+ * disparaît qu'une fois la file vide.
+ */
+function enqueue(job) {
+  pending++;
+  building = true; // dès maintenant : plus aucune image de la scène avant la fin
+  buildQueue = buildQueue
+    .then(job)
+    .catch((err) => console.error(err))
+    .finally(() => {
+      if (--pending) return; // une demande arrivée entre-temps prend la suite : l'écran reste
+      building = false;
+      loader.hide();
+      updatePlayButton();
+    });
+  return buildQueue;
+}
+
 function rebuild() {
   const n = ++buildCount;
-  building = true; // dès maintenant : plus aucune image de la scène avant la fin
-  buildQueue = buildQueue.then(async () => {
-    if (n !== buildCount) return;
-    await construct();
-    // Une demande arrivée entre-temps prend la suite : l'écran reste en place.
-    if (n !== buildCount) return;
-    building = false;
-    loader.hide();
+  return enqueue(async () => {
+    if (n === buildCount) await construct();
   });
-  return buildQueue;
+}
+
+/**
+ * Réglage qui recompile les matières (qualité, lumière indirecte) : appliqué derrière
+ * l'écran de chargement, puis rodé comme une construction, pour que la scène ne réapparaisse
+ * qu'une fois prête. La lecture est suspendue le temps du chargement.
+ */
+function refresh(apply) {
+  if (!ensemble && !pending) return apply(); // rien d'affiché : la prochaine construction rodera tout
+  return enqueue(async () => {
+    const resume = player.playing;
+    if (resume) player.pause();
+    updatePlayButton();
+    await loader.show(undefined, 'quality');
+    loader.progress(0.05, 'quality');
+    apply();
+    if (ensemble) await stage.warmUp((f, step) => loader.progress(0.05 + 0.95 * f, step === 'scène' ? 'quality' : step));
+    // Reprise, sauf si un autre chargement suit (il décidera).
+    if (resume && pending === 1) await player.play();
+  });
 }
 
 async function construct() {
@@ -77,8 +136,7 @@ async function construct() {
     return;
   }
   showError('');
-  // Premier chargement : écran plein. Ensuite : un voile sur la scène en place.
-  loader.show(ensemble !== null);
+  await loader.show(song.name, 'model');
   loader.progress(0, 'model');
   try {
     await breathe();
@@ -90,7 +148,10 @@ async function construct() {
     ensemble = built;
     shotPlan = planShots(ensemble);
     prepareSound(parts);
-    $('trackSummary').textContent = `${song.tracks.length} pistes → ${ensemble.instruments.length} instruments`;
+    const n = song.tracks.length;
+    const m = ensemble.instruments.length;
+    $('trackSummary').textContent = `${n} piste${n > 1 ? 's' : ''} · ${m} instrument${m > 1 ? 's' : ''}`;
+    $('duration').textContent = fmt(duration);
   } catch (err) {
     console.error(err);
     ensemble = null;
@@ -131,9 +192,9 @@ function prepareSound(parts) {
 /** Charge (en arrière-plan, une seule fois) le lecteur SoundFont. */
 async function loadSounds() {
   if (!player.useSamples) return;
-  if (!player.soundfont.ready) $('sound').textContent = 'Chargement des sons (40 Mo la première fois)…';
+  if (!player.soundfont.ready) toast('sound', 'Chargement des sons (40 Mo la première fois)…');
   const ok = await player.prepareSounds();
-  $('sound').textContent = ok ? '' : 'Les sons réalistes n\u2019ont pas pu être chargés : synthèse utilisée.';
+  toast('sound', ok ? '' : 'Les sons réalistes n\u2019ont pas pu être chargés : synthèse utilisée.', 6000);
 }
 
 function loadSong(s) {
@@ -198,8 +259,16 @@ async function loadFile(file) {
   }
 }
 
+let everPlayed = false;
 function updatePlayButton() {
-  $('play').textContent = player.playing ? '⏸ Pause' : '▶ Lecture';
+  const playing = player.playing;
+  everPlayed ||= playing;
+  $('play').querySelector('use').setAttribute('href', playing ? '#i-pause' : '#i-play');
+  $('play').setAttribute('aria-label', playing ? 'Pause' : 'Lecture');
+  $('play').title = playing ? 'Pause (espace)' : 'Lecture (espace)';
+  // Premier lancement : grand bouton au centre, tant que rien n'a été joué.
+  $('bigPlay').hidden = playing || everPlayed || !ensemble || building;
+  idle.poke();
 }
 
 $('file').addEventListener('change', (e) => {
@@ -289,7 +358,7 @@ function nextIndex(step = 1) {
 function renderPlaylist() {
   const n = playlist.files.length;
   $('playlist').hidden = !n;
-  $('playlistSummary').textContent = `Playlist (${n} morceau${n > 1 ? 'x' : ''})`;
+  $('playlistSummary').textContent = `Playlist · ${n} morceau${n > 1 ? 'x' : ''}`;
   const list = $('playlistItems');
   list.innerHTML = '';
   playlist.files.forEach((file, i) => {
@@ -308,6 +377,7 @@ function renderPlaylist() {
     });
     list.appendChild(li);
   });
+  $('prevSong').hidden = $('nextSong').hidden = n < 2;
   $('prevSong').disabled = nextIndex(-1) < 0;
   $('nextSong').disabled = nextIndex(1) < 0;
 }
@@ -340,7 +410,10 @@ $('restart').addEventListener('click', async () => {
 let seeking = false;
 $('seek').addEventListener('pointerdown', () => (seeking = true));
 window.addEventListener('pointerup', () => (seeking = false));
-$('seek').addEventListener('input', (e) => player.seek(Number(e.target.value)));
+$('seek').addEventListener('input', (e) => {
+  player.seek(Number(e.target.value));
+  fillRange(e.target);
+});
 // ---- Enregistrement vidéo (temps réel : canvas + mixage audio) ----
 let recorder = null;
 function download(blob, name) {
@@ -354,8 +427,8 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 function status(msg) {
-  $('exportStatus').hidden = !msg;
-  $('exportStatus').textContent = msg ?? '';
+  // Un message de fin (« terminé », « enregistrée ») s'efface ; un état en cours reste.
+  toast('exportStatus', msg, /en cours|%/.test(msg ?? '') ? 0 : 6000);
 }
 // Nom de fichier en ASCII : certains navigateurs ignorent les noms accentués.
 const safeName = () =>
@@ -388,8 +461,9 @@ async function startRecording() {
   recorder.start(1000);
   await player.play();
   updatePlayButton();
-  $('record').textContent = '⏹ Arrêter';
-  status('Enregistrement en cours… (le morceau est rejoué en entier)');
+  $('record').textContent = 'Arrêter la vidéo';
+  $('record').classList.add('recording');
+  status('Enregistrement en cours : le morceau est rejoué en entier.');
 }
 function stopRecording() {
   if (!recorder) return;
@@ -398,7 +472,8 @@ function stopRecording() {
   player.stopCapture();
   player.pause();
   updatePlayButton();
-  $('record').textContent = '⏺ Vidéo';
+  $('record').textContent = 'Vidéo';
+  $('record').classList.remove('recording');
 }
 $('record').addEventListener('click', () => (recorder ? stopRecording() : startRecording()));
 
@@ -447,20 +522,18 @@ $('samples').addEventListener('change', (e) => {
   if (ensemble) rebuild();
 });
 
-$('collapse').addEventListener('click', () => {
-  const collapsed = $('panel').classList.toggle('collapsed');
-  $('collapse').setAttribute('aria-expanded', String(!collapsed));
-});
 
 // Caméra : réalisateur automatique, orbite lente ou libre (souris).
 let camMode = 'director';
 function setCamMode(mode) {
   camMode = mode;
   $('camMode').value = mode;
+  for (const b of document.querySelectorAll('[data-cam]')) b.setAttribute('aria-checked', String(b.dataset.cam === mode));
   stage.controls.autoRotate = mode === 'orbit';
   if (mode === 'orbit') stage.resetView();
 }
 $('camMode').addEventListener('change', (e) => setCamMode(e.target.value));
+for (const b of document.querySelectorAll('[data-cam]')) b.addEventListener('click', () => setCamMode(b.dataset.cam));
 // Dès que l'utilisateur manipule la vue, on lui laisse la main.
 stage.controls.addEventListener('start', () => camMode === 'director' && setCamMode('free'));
 
@@ -469,6 +542,7 @@ function setOffset(ms) {
   player.manualOffset = ms / 1000;
   $('offset').value = ms;
   $('offsetVal').textContent = `${ms} ms`;
+  fillRange($('offset'));
   try {
     localStorage.setItem('animusic.offsetMs', String(ms));
   } catch {
@@ -482,7 +556,7 @@ try {
   setOffset(0);
 }
 setInterval(() => {
-  if (player.playing) $('latency').textContent = `Latence audio compensée : ${Math.round(player.compensation() * 1000)} ms`;
+  if (player.playing) $('latency').textContent = `Latence du son compensée : ${Math.round(player.compensation() * 1000)} ms.`;
 }, 500);
 
 // Glisser-déposer
@@ -539,7 +613,8 @@ async function startingQuality() {
 function setQuality(mode) {
   qualityMode = mode;
   $('quality').value = mode;
-  stage.setQuality(mode === 'auto' ? autoStart : mode);
+  const level = mode === 'auto' ? autoStart : mode;
+  if (level !== stage.quality) refresh(() => stage.setQuality(level));
   try {
     localStorage.setItem('animusic.quality', mode);
   } catch {
@@ -553,9 +628,16 @@ try {
   setQuality('auto');
 }
 // Lumière indirecte (SSGI) : coûteuse, donc débrayable ; elle n'agit qu'en qualité haute.
+let indirectLight = null;
 function setIndirectLight(on) {
   $('gi').checked = on;
-  stage.setIndirectLight(on);
+  // Sans effet hors qualité haute : rien à recompiler, la valeur est retenue pour plus tard.
+  if (on !== indirectLight) {
+    const changed = indirectLight !== null;
+    indirectLight = on;
+    if (changed && stage.quality === 'high') refresh(() => stage.setIndirectLight(on));
+    else stage.setIndirectLight(on);
+  }
   try {
     localStorage.setItem('animusic.gi', on ? '1' : '0');
   } catch {
@@ -578,7 +660,10 @@ function measureFps() {
   fpsMeter.frames = 0;
   fpsMeter.since = now;
   // Moteur utilisé (gpu.js) et temps processeur de rendu par image.
-  $('fps').textContent = `${Math.round(fps)} img/s · ${cpu.toFixed(1)} ms · ${backendName(stage.renderer)}`;
+  if (!$('settingsSheet').hidden) {
+    const names = { high: 'haute', medium: 'moyenne', low: 'basse' };
+    $('fps').textContent = `${Math.round(fps)} img/s · ${cpu.toFixed(1)} ms · ${backendName(stage.renderer)} · qualité ${names[stage.quality] ?? stage.quality}`;
+  }
   fpsMeter.cpu = 0;
   // Scène brute (?raw) : pas de baisse automatique de qualité, elle fausserait la comparaison.
   if (qualityMode !== 'auto' || !player.playing || RAW) {
@@ -591,8 +676,9 @@ function measureFps() {
   if (now - fpsMeter.playingSince < 3000) return;
   fpsMeter.slow = fps < 40 ? fpsMeter.slow + 1 : 0;
   const i = LEVELS.indexOf(stage.quality);
-  if (fpsMeter.slow >= 3 && i < LEVELS.length - 1) {
-    stage.setQuality(LEVELS[i + 1]);
+  if (fpsMeter.slow >= 3 && i < LEVELS.length - 1 && !building) {
+    const next = LEVELS[i + 1];
+    refresh(() => stage.setQuality(next));
     fpsMeter.slow = 0;
   }
 }
@@ -615,6 +701,7 @@ function displayLead(now) {
   return player.playing && !recorder ? Math.min(0.05, pacing.interval) : 0;
 }
 
+const frameState = { second: -1 };
 function frame(now = performance.now()) {
   requestAnimationFrame(frame);
   // Scène en construction : c'est elle qui tient le moteur de rendu.
@@ -623,8 +710,15 @@ function frame(now = performance.now()) {
     const t = player.currentTime() + displayLead(now);
     stage.update(t);
     if (camMode === 'director' && shotPlan) stage.setCamera(cameraAt(shotPlan, t));
-    $('time').textContent = `${fmt(t)} / ${fmt(duration)}`;
-    if (!seeking) $('seek').value = Math.max(0, t);
+    const shown = Math.floor(Math.max(0, t));
+    if (shown !== frameState.second) {
+      frameState.second = shown;
+      $('time').textContent = fmt(t);
+    }
+    if (!seeking) {
+      $('seek').value = Math.max(0, t);
+      fillRange($('seek'));
+    }
     // Fin de morceau dans une playlist : on enchaîne sur le suivant (pas pendant une vidéo).
     if (player.playing && t > duration + 0.5 && !recorder && nextIndex(1) >= 0) playFromPlaylist(nextIndex(1));
     else if (player.playing && t > duration + 0.5) {
@@ -641,6 +735,69 @@ function frame(now = performance.now()) {
   fpsMeter.cpu += performance.now() - before;
   measureFps();
 }
+
+// ---- Habillage : panneaux, masquage automatique, raccourcis ----
+
+/** Partie parcourue d'un curseur (dégradé de la piste, voir style.css). */
+function fillRange(input) {
+  const min = Number(input.min) || 0;
+  const max = Number(input.max) || 1;
+  input.style.setProperty('--fill', `${((Number(input.value) - min) / (max - min || 1)) * 100}%`);
+}
+
+/** Ouvre un panneau (un seul à la fois) ; `id` nul ou déjà ouvert : ferme. */
+function toggleSheet(id) {
+  const next = id && id !== openSheet ? id : null;
+  if (openSheet) {
+    $(openSheet).hidden = true;
+    document.querySelector(`[data-sheet="${openSheet}"]`)?.classList.remove('on');
+  }
+  openSheet = next;
+  if (next) {
+    $(next).hidden = false;
+    document.querySelector(`[data-sheet="${next}"]`)?.classList.add('on');
+  }
+  idle.poke();
+}
+for (const b of document.querySelectorAll('[data-sheet]')) b.addEventListener('click', () => toggleSheet(b.dataset.sheet));
+for (const b of document.querySelectorAll('.sheet .close')) b.addEventListener('click', () => toggleSheet(null));
+// Un clic hors du panneau le ferme ; sur la scène, il ne prend pas la caméra pour autant.
+window.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (!openSheet || e.target.closest('.sheet, [data-sheet]')) return;
+    toggleSheet(null);
+    if (e.target.closest('#stage')) e.stopPropagation();
+  },
+  true,
+);
+// Choisir un morceau referme le panneau : l'écran de chargement prend le relais.
+for (const id of ['demo', 'file', 'addFiles']) $(id).addEventListener(id === 'demo' ? 'click' : 'change', () => toggleSheet(null));
+$('playlistItems').addEventListener('click', (e) => e.target.closest('.remove') || toggleSheet(null));
+
+$('bigPlay').addEventListener('click', () => $('play').click());
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else document.documentElement.requestFullscreen?.().catch(() => {});
+}
+$('fullscreen').addEventListener('click', toggleFullscreen);
+
+for (const type of ['pointermove', 'pointerdown', 'wheel']) window.addEventListener(type, () => idle.poke(), { passive: true });
+window.addEventListener('keydown', (e) => {
+  idle.poke();
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const field = e.target.closest?.('input, select, textarea, button, label');
+  if (e.key === 'Escape') toggleSheet(null);
+  else if (e.key === ' ' && !field) {
+    e.preventDefault();
+    $('play').click();
+  } else if ((e.key === 'f' || e.key === 'F') && !field) toggleFullscreen();
+  else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !field && ensemble && !building) {
+    const t = Math.min(duration, Math.max(0, player.currentTime() + (e.key === 'ArrowLeft' ? -5 : 5)));
+    player.seek(t);
+  }
+});
 
 loadDemo();
 frame();

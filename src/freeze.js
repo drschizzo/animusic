@@ -110,19 +110,25 @@ export function freezeStatic(lift, view, root, probe, times = []) {
     // Pièces à lueur propre : chaque matériau d'origine a sa case, que le maillage fusionné
     // lit par un attribut de sommet.
     const glows = key.startsWith('lueur|') ? [...new Set(list.map(({ o }) => o.material))] : null;
+    const first = list[0].o;
+    const material = glows ? slotGlow(first.material, glows) : first.material;
+    // Première case du maillage dans la texture de lueurs (commune à tous en WebGPU).
+    const base = material.glowBase ?? 0;
     const geos = list.map(({ o, m }) => {
       let g = o.geometry.clone();
       if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);
       for (const name of Object.keys(g.morphAttributes)) delete g.morphAttributes[name];
       g.applyMatrix4(m);
-      if (glows) g.setAttribute('glowSlot', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(glows.indexOf(o.material)), 1));
+      if (glows) g.setAttribute('glowSlot', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(base + glows.indexOf(o.material)), 1));
       return g;
     });
     const geometry = mergeGeometries(geos, false);
     geos.forEach((g) => g.dispose());
-    if (!geometry) continue;
-    const first = list[0].o;
-    const mesh = new THREE.Mesh(geometry, glows ? slotGlow(first.material, glows) : first.material);
+    if (!geometry) {
+      if (glows) material.dispose();
+      continue;
+    }
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = first.castShadow;
     mesh.receiveShadow = first.receiveShadow;
     mesh.layers.mask = first.layers.mask;

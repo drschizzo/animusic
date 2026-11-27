@@ -447,17 +447,21 @@ export function slotGlow(source, sources) {
   if (Object.hasOwn(source, 'customProgramCacheKey')) material.customProgramCacheKey = source.customProgramCacheKey;
   material.emissive.setRGB(0, 0, 0);
   material.emissiveIntensity = 1;
-  const data = new Float32Array(sources.length * 4);
-  const glow = new THREE.DataTexture(data, sources.length, 1, THREE.RGBAFormat, THREE.FloatType);
-  glow.needsUpdate = true;
+  // WebGPU : une plage de la texture commune (un seul shader pour tous les fusionnés).
+  const slots = nodes?.glowSlots(sources.length);
+  const base = (material.glowBase = slots?.base ?? 0);
+  const data = slots?.data ?? new Float32Array(sources.length * 4);
+  const glow = slots?.texture ?? new THREE.DataTexture(data, sources.length, 1, THREE.RGBAFormat, THREE.FloatType);
+  if (slots) material.addEventListener('dispose', slots.release);
+  else glow.needsUpdate = true;
   material.syncGlow = () => {
     let changed = false;
     sources.forEach((m, i) => {
       const k = m.emissiveIntensity;
       const rgb = [m.emissive.r * k, m.emissive.g * k, m.emissive.b * k];
       for (let c = 0; c < 3; c++)
-        if (data[i * 4 + c] !== rgb[c]) {
-          data[i * 4 + c] = rgb[c];
+        if (data[(base + i) * 4 + c] !== rgb[c]) {
+          data[(base + i) * 4 + c] = rgb[c];
           changed = true;
         }
     });
