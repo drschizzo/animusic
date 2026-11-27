@@ -932,6 +932,9 @@ export class Environment {
     for (const light of [this.key, ...this.follows.map((f) => f.light)]) {
       light.castShadow = level !== 'low';
       light.shadow.mapSize.setScalar(level === 'high' ? 2048 : 1024);
+      // WebGPURenderer redimensionne lui-même la carte à la taille demandée, et ses
+      // matériaux gardent la leur : la détruire les laisserait lire une texture détruite.
+      if (WEBGPU) continue;
       light.shadow.map?.dispose();
       light.shadow.map = null;
     }

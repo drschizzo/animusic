@@ -16,7 +16,7 @@
 // L'ordre et l'occlusion viennent de github.com/marcofugaro/three-advanced-techniques
 // (copie dans src/vendor/).
 
-import { RenderPipeline, BlendMode, MaterialBlending, Matrix4, Vector2, Vector3, DepthTexture, LessEqualCompare, AgXToneMapping, SRGBColorSpace, NearestFilter } from 'three/webgpu';
+import { RenderPipeline, HalfFloatType, RGFormat, BlendMode, MaterialBlending, Matrix4, Vector2, Vector3, DepthTexture, LessEqualCompare, AgXToneMapping, SRGBColorSpace, NearestFilter } from 'three/webgpu';
 import {
   Fn,
   If,
@@ -129,7 +129,10 @@ export class PostFX {
     // --- Occlusion ambiante : passe préalable (normales, profondeur) des seuls objets opaques.
     const prePass = (this.prePass = pass(scene, camera, { samples: 0 }));
     prePass.transparent = false;
-    prePass.setMRT(mrt({ output: normalView, albedo: giAlbedo }));
+    // Elle écrit aussi la vitesse, pour que l'occlusion suive ce qui bouge (les billes : vitesse
+    // écrite à la main, nodes.ballGlow) au lieu de repartir de zéro derrière chaque bille.
+    prePass.setMRT(mrt({ output: normalView, albedo: giAlbedo, velocity }));
+    Object.assign(prePass.getTexture('velocity'), { type: HalfFloatType, format: RGFormat });
     prePass.contextNode = context({ getAO: null }); // elle ne lit pas l'occlusion qu'elle nourrit
     // Géométrie des seules surfaces opaques, lue par la lumière indirecte et les faisceaux.
     const solidDepth = prePass.getTextureNode('depth');
@@ -143,7 +146,7 @@ export class PostFX {
     // Demi-résolution, débruitée et accumulée d'une image à l'autre ; remontée à pleine
     // résolution dans le shader des matériaux, contre leur profondeur (pas de halo aux
     // silhouettes). Le décalage de caméra de TAAU est pris en compte par le module.
-    const occlusion = (this.occlusion = xeGTAO(solidDepth, camera, { normalNode: solidNormal, radius: 0.5 }));
+    const occlusion = (this.occlusion = xeGTAO(solidDepth, camera, { normalNode: solidNormal, velocityNode: prePass.getTextureNode('velocity'), radius: 0.5 }));
 
     // --- Scène : couleur et vitesse, sans MSAA (TAAU anticrénelle).
     const scenePass = (this.scenePass = pass(scene, camera, { samples: 0 }));
