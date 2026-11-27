@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { laserState, laserExpression } from './laser.js';
 import { mat, fx } from './materials.js';
+import { nodes, shared } from './gpu.js';
 import { rod, plinth, lathe, V, lamp } from './parts.js';
 import { attachRow } from './ballRowView.js';
 
@@ -79,7 +80,8 @@ export class LaserView {
     const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 32, true);
     beamGeo.translate(0, 0.5, 0);
     const bendable = (material) => {
-      const u = (material.userData.uniforms = { uBend: { value: 0 }, uWave: { value: 0 }, uTime: { value: 0 } });
+      const u = (material.userData.uniforms = shared({ uBend: { value: 0 }, uWave: { value: 0 }, uTime: { value: 0 } }));
+      if (nodes) return nodes.bendable(material, u);
       material.onBeforeCompile = (shader) => {
         Object.assign(shader.uniforms, u);
         shader.vertexShader = shader.vertexShader

@@ -54,7 +54,7 @@ export function freezeStatic(lift, view, root, probe, times = []) {
   lift.traverse((o) => {
     if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || o.userData.fx || !o.visible) return;
     const m = o.material;
-    if (Array.isArray(m) || m.isShaderMaterial || (m.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile && !m.userData.freezable)) return;
+    if (Array.isArray(m) || m.isShaderMaterial || m.userData.freezable === false || (m.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile && !m.userData.freezable)) return;
     if (o.name || o.renderOrder !== 0 || o.morphTargetInfluences || refs.has(m)) return; // pièce nommée : gardée telle quelle
     for (let p = o; p && p !== lift; p = p.parent) if (refs.has(p) || !p.visible) return;
     candidates.push({ o, m: local(o) });

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { armAngles, hitPulse } from './drums.js';
 import { BallPool } from './ballPool.js';
 import { mat } from './materials.js';
+import { nodes, shared as uniforms } from './gpu.js';
 import { lathe, ringOf, rod, V } from './parts.js';
 import { upperBound } from './util.js';
 
@@ -64,12 +65,15 @@ function portedHeadGeometry(radius, [px, py, pr]) {
  *   peau) suit exactement la même déformation
  */
 function membrane(material, radius, angle, { shared = null } = {}) {
-  const u = (material.userData.membrane = shared ?? {
+  const u = (material.userData.membrane = shared ?? uniforms({
     uAmp: { value: 0 },
     uSince: { value: 10 },
     uRadius: { value: radius },
     uAngle: { value: angle },
-  });
+  }));
+  // Déformée dans le repère de la peau : jamais fusionnée avec les pièces fixes.
+  material.userData.freezable = false;
+  if (nodes) return nodes.membrane(material, u);
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, u);
     shader.vertexShader = shader.vertexShader
@@ -96,8 +100,6 @@ function membrane(material, radius, angle, { shared = null } = {}) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed.z -= uAmp * exp(-uSince * 7.0) * drumModes(position.xy, uSince);');
   };
   material.customProgramCacheKey = () => 'drum-membrane';
-  // Déformée dans le repère de la peau : jamais fusionnée avec les pièces fixes.
-  material.userData.freezable = false;
   return material;
 }
 

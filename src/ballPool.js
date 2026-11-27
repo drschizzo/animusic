@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mat, fx } from './materials.js';
+import { mat, fx, ballMaterial } from './materials.js';
 import { stationBall } from './ballistics.js';
 import { lowerBound, upperBound } from './util.js';
 
@@ -20,13 +20,7 @@ export class BallPool {
     this.trailGain = comet ? 2.5 : 0.22;
     this.trailSize = comet ? 2.2 : 1;
     const pool = Math.max(1, count);
-    const material = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.14, envMapIntensity: 1.6 });
-    material.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <emissivemap_fragment>',
-        '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance += vColor.rgb * 0.4;\n#endif',
-      );
-    };
+    const material = ballMaterial();
     const balls = (this.balls = new THREE.InstancedMesh(new THREE.SphereGeometry(radius, 24, 16), material, pool));
     balls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pool * 3), 3);
     // Vitesse de chaque bille (m/s), lue par le tampon géométrique pour le flou de mouvement.

@@ -3,6 +3,7 @@
 // grain (voir `detail`) : relief fin et poli inégal, projetés dans le repère des pièces.
 
 import * as THREE from 'three';
+import { nodes, shared } from './gpu.js';
 
 /**
  * Taille apparente des lampes. Les lumières de three.js sont des points : sur une matière
@@ -35,6 +36,7 @@ export const LAMP_SPECULAR = 0.55;
     THREE.ShaderChunk.lights_physical_pars_fragment = patched;
   }
 }
+nodes?.installLampModel(LAMP_MIN_ROUGHNESS, LAMP_SPECULAR);
 
 const textures = new Map();
 
@@ -187,8 +189,11 @@ function blotchTexture() {
 
 export const tex = { wood: woodTexture, brushed: brushedTexture, blotch: blotchTexture, drumhead: drumheadTexture, detail: detailTexture };
 
-const P = (o) => new THREE.MeshPhysicalMaterial(o);
-const S = (o) => new THREE.MeshStandardMaterial(o);
+// Sous WebGPURenderer (gpu.js), les matériaux retouchés sont des matériaux à nœuds.
+const P = (o) => (nodes ? nodes.physical(o) : new THREE.MeshPhysicalMaterial(o));
+const S = (o) => (nodes ? nodes.standard(o) : new THREE.MeshStandardMaterial(o));
+/** Matériaux de base à retoucher hors de ce fichier (billes, sol, rayons…). */
+export const base = { standard: S, physical: P, basic: (o) => (nodes ? nodes.basic(o) : new THREE.MeshBasicMaterial(o)) };
 
 /**
  * Grain de surface : ajoute à une matière le relief fin et les marbrures de la texture
@@ -204,6 +209,9 @@ const S = (o) => new THREE.MeshStandardMaterial(o);
  *   amplitude des variations de rugosité (marbrures)
  */
 function detail(material, { scale = 8, bump = 0.2, rough = 0.1 } = {}) {
+  // Le grain est exprimé dans le repère de la pièce : la fusion des pièces fixes le conserve.
+  material.userData.freezable = true;
+  if (nodes) return nodes.detail(material, detailTexture(), { scale, bump, rough });
   const uniforms = { tDetail: { value: detailTexture() }, uDetail: { value: new THREE.Vector3(scale, bump, rough) } };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -258,8 +266,6 @@ function detail(material, { scale = 8, bump = 0.2, rough = 0.1 } = {}) {
         normal = detailBent / max(length(detailBent), 1e-4);`,
       );
   };
-  // Le grain est exprimé dans le repère de la pièce : la fusion des pièces fixes le conserve.
-  material.userData.freezable = true;
   return material;
 }
 
@@ -269,6 +275,8 @@ function detail(material, { scale = 8, bump = 0.2, rough = 0.1 } = {}) {
  * non comme un voile uniforme.
  */
 function rimmed(material, edge = 0.7) {
+  material.userData.freezable = true;
+  if (nodes) return nodes.rimmed(material, edge);
   const uniforms = { uRim: { value: edge } };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -281,7 +289,6 @@ function rimmed(material, edge = 0.7) {
         #include <opaque_fragment>`,
       );
   };
-  material.userData.freezable = true;
   return material;
 }
 
@@ -293,7 +300,9 @@ function rimmed(material, edge = 0.7) {
  */
 function lathed(material, pitch = 0.006) {
   // uShimmer (force, phase) : vibration après une frappe, pilotée par la vue.
-  const uniforms = (material.userData.lathe = { uLathe: { value: new THREE.Vector2((2 * Math.PI) / pitch, 0.3) }, uShimmer: { value: new THREE.Vector2(0, 0) } });
+  const uniforms = (material.userData.lathe = shared({ uLathe: { value: new THREE.Vector2((2 * Math.PI) / pitch, 0.3) }, uShimmer: { value: new THREE.Vector2(0, 0) } }));
+  material.userData.freezable = true;
+  if (nodes) return nodes.lathed(material, uniforms);
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
@@ -331,7 +340,6 @@ function lathed(material, pitch = 0.006) {
         normal = latheBent / max(length(latheBent), 1e-4);`,
       );
   };
-  material.userData.freezable = true;
   return material;
 }
 
@@ -385,8 +393,21 @@ export const mat = {
   glow: (color = 0xffffff, intensity = 0) => S({ color: 0x050506, roughness: 0.4, emissive: color, emissiveIntensity: intensity }),
   /** Lumière pure additive (rayons, halos), ignorée par les ombres et l'occlusion. */
   light: (color = 0xffffff) =>
-    new THREE.MeshBasicMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+    base.basic({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
 };
+
+/** Chrome des billes, teinté par la couleur de l'instance et légèrement lumineux dans cette couleur. */
+export function ballMaterial() {
+  const material = S({ color: 0xffffff, metalness: 1, roughness: 0.14, envMapIntensity: 1.6 });
+  if (nodes) return nodes.ballGlow(material);
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <emissivemap_fragment>',
+      '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance += vColor.rgb * 0.4;\n#endif',
+    );
+  };
+  return material;
+}
 
 /** Couleur vive poussée au-delà de 1 pour déclencher le halo (bloom). */
 export const hdr = (color, gain) => color.clone().multiplyScalar(gain);

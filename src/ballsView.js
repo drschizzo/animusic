@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { activeBallRange, ballPosition, ballScale, barPulse, launcherPose } from './choreography.js';
 import { lowerBound, upperBound } from './util.js';
-import { mat, fx } from './materials.js';
+import { mat, fx, ballMaterial } from './materials.js';
 import { roundedBox, lathe, rod, ringOf, footShadow, channelGeometry, V, lamp } from './parts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -218,13 +218,7 @@ export class BallsView {
 
     // --- Billes (pool instancié) : chrome teinté, légèrement lumineux
     const pool = Math.max(1, ch.maxConcurrent);
-    const ballMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.14, envMapIntensity: 1.6 });
-    ballMat.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <emissivemap_fragment>',
-        '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance += vColor.rgb * 0.4;\n#endif',
-      );
-    };
+    const ballMat = ballMaterial();
     const balls = new THREE.InstancedMesh(new THREE.SphereGeometry(o.ballRadius, 32, 20), ballMat, pool);
     balls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pool * 3), 3);
     // Vitesse de chaque bille (m/s), lue par le tampon géométrique pour le flou de mouvement :

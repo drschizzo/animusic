@@ -9,12 +9,19 @@
 // reflet du sol ni de sonde de reflets, et les objets à shader GLSL écrit à la main
 // (ShaderMaterial : faisceaux, poussières…) sont masqués, car WebGPURenderer ne sait pas
 // les dessiner : il faudra les réécrire en TSL. Les retouches de matériaux par
-// onBeforeCompile (grain de surface, verre…) sont ignorées par WebGPURenderer.
+// onBeforeCompile (grain de surface, verre…) sont ignorées par WebGPURenderer : chacune a
+// son équivalent en nœuds TSL dans nodes.js, branché ici quand le prototype est actif.
 
 const params = typeof location === 'undefined' ? new URLSearchParams() : new URLSearchParams(location.search);
 
 export const WEBGPU = params.has('webgpu');
 export const RAW = WEBGPU || params.has('raw');
+
+/** Retouches de matériaux en TSL (null hors prototype : les vues gardent alors leur GLSL). */
+export const nodes = WEBGPU ? await import('./nodes.js') : null;
+
+/** Uniformes pilotés par les vues ({ nom: { value } }), dans la forme attendue par le moteur. */
+export const shared = (spec) => (nodes ? nodes.uniforms(spec) : spec);
 
 /** Moteur de rendu du prototype, déjà initialisé (null hors prototype). */
 export const gpuRenderer = WEBGPU ? await createRenderer() : null;

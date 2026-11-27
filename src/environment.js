@@ -4,9 +4,9 @@
 
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
-import { tex, mat, fx } from './materials.js';
+import { tex, mat, fx, base } from './materials.js';
 import { FINITE } from './glsl.js';
-import { WEBGPU, RAW } from './gpu.js';
+import { WEBGPU, RAW, nodes, shared } from './gpu.js';
 
 // Le préfiltrage d'environnement de WebGPURenderer est le sien (prototype, voir gpu.js).
 const PMREM = WEBGPU ? (await import('three/webgpu')).PMREMGenerator : THREE.PMREMGenerator;
@@ -181,14 +181,9 @@ class ReflectiveFloor {
       }),
     );
     this.camera = new THREE.PerspectiveCamera();
-    this.uniforms = {
-      tReflect: { value: this.target.texture },
-      tReflectBlur: { value: this.levels.map((l) => l.blurred.texture) },
-      uReflectMatrix: { value: new THREE.Matrix4() },
-      uReflect: { value: 1 },
-      uStageRadius: { value: 12 },
-    };
-    const material = new THREE.MeshStandardMaterial({
+    const blurred = this.levels.map((l) => l.blurred.texture);
+    this.uniforms = shared({ uReflectMatrix: { value: new THREE.Matrix4() }, uReflect: { value: 1 }, uStageRadius: { value: 12 } });
+    const material = base.standard({
       color: 0x1d1a17, // plancher peint en noir, assez clair pour que les poursuites y dessinent leur flaque
       roughness: 0.5,
       metalness: 0.0,
@@ -196,8 +191,9 @@ class ReflectiveFloor {
       envMapIntensity: 0.25,
     });
     material.roughnessMap.repeat.set(14, 14);
-    material.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, this.uniforms);
+    if (nodes) nodes.stageFloor(material, this.uniforms, this.target.texture, blurred);
+    else material.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, this.uniforms, { tReflect: { value: this.target.texture }, tReflectBlur: { value: blurred } });
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nuniform mat4 uReflectMatrix;\nvarying vec4 vReflectUv;\nvarying vec3 vFloorPos;')
         .replace(
@@ -353,8 +349,9 @@ const PLINTH_H = 1;
 class StageShell {
   constructor() {
     this.group = new THREE.Group();
-    this.uniforms = { uWashA: { value: new THREE.Color(0x14294a) }, uWashB: { value: new THREE.Color(0x1c1a3c) }, uWash: { value: 1 } };
+    this.uniforms = shared({ uWashA: { value: new THREE.Color(0x14294a) }, uWashB: { value: new THREE.Color(0x1c1a3c) }, uWash: { value: 1 } });
     const wash = (material) => {
+      if (nodes) return nodes.wash(material, this.uniforms);
       material.onBeforeCompile = (shader) => {
         Object.assign(shader.uniforms, this.uniforms);
         shader.vertexShader = shader.vertexShader
@@ -390,11 +387,11 @@ class StageShell {
       return mesh;
     };
     // Paroi porteuse, presque noire : on la devine entre les lattes.
-    this.wall = arc(wash(new THREE.MeshStandardMaterial({ color: 0x0d0c0c, roughness: 0.92, side: THREE.BackSide })));
+    this.wall = arc(wash(base.standard({ color: 0x0d0c0c, roughness: 0.92, side: THREE.BackSide })));
     this.plinth = arc(new THREE.MeshStandardMaterial({ color: 0x131318, roughness: 0.45, metalness: 0.3, side: THREE.BackSide }));
     const slats = (this.slats = new THREE.InstancedMesh(
       new THREE.BoxGeometry(0.3, 1, 0.07), // lattes de 30 cm tous les 42 cm : le plein domine, pas de zébrure
-      wash(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 })),
+      wash(base.standard({ color: 0xffffff, roughness: 0.6 })),
       SLAT_TIERS * SLAT_MAX,
     ));
     slats.receiveShadow = true;
