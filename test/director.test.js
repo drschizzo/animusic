@@ -185,3 +185,29 @@ test('style « billes » : l\'écran se partage entre tous les instruments qui j
     assert.ok(share <= 0.5, `${ins.kind} : ${(share * 100).toFixed(0)} % de l'écran`);
   });
 });
+
+test('style « billes » : de rares inserts sur les machines, les instruments restent les vedettes', () => {
+  const D = 180;
+  const seq = (m0, track, step, dur, from = 0, to = D) =>
+    Array.from({ length: Math.floor((to - from) / step) }, (_, i) => ({ midi: m0 + ((i * 5) % 12), time: from + i * step, duration: dur, velocity: 0.7 + 0.3 * (i % 4 === 0), track }));
+  const e = buildEnsemble(
+    { balls: seq(60, 0, 0.4, 0.2), bass: seq(36, 1, 0.5, 0.3), keys: seq(64, 2, 0.3, 0.2, 20, 160), bells: seq(72, 3, 0.8, 0.5, 40), pads: seq(48, 4, 2, 1.8) },
+    [],
+    [],
+    { style: 'balls' },
+  );
+  const { shots } = planShots(e);
+  const inserts = shots.filter((s) => s.type === 'machine');
+  assert.ok(inserts.length >= 1, 'au moins un insert sur un morceau de trois minutes');
+  const total = shots[shots.length - 1].end - shots[0].start;
+  assert.ok(inserts.reduce((a, s) => a + s.end - s.start, 0) < 0.06 * total, 'moins de 6 % du temps d\'écran');
+  for (const s of inserts) {
+    assert.ok(s.end - s.start <= 4, `insert de ${(s.end - s.start).toFixed(1)} s`);
+    assert.ok(s.cut, 'on coupe vers l\'insert');
+    const next = shots[shots.indexOf(s) + 1];
+    if (next) assert.ok(next.type !== 'machine' && next.cut, 'puis on coupe vers un instrument');
+  }
+  for (let i = 1; i < inserts.length; i++) assert.ok(inserts[i].start - inserts[i - 1].start >= 30, 'au moins 30 s entre deux inserts');
+  // Hors du style « billes », pas de machines à montrer.
+  assert.ok(planShots(ensemble).shots.every((s) => s.type !== 'machine'));
+});

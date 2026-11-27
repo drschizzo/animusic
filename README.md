@@ -161,6 +161,11 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   **Passage d'un plan à l'autre** : la caméra ne glisse que vers un cadrage voisin (moins de 7 m, visée proche), en
   prenant son temps ; sinon on coupe, sur un temps fort, comme une régie qui passe d'une caméra à une autre. Une
   poursuite se filme de derrière la tourelle, dans l'axe du tir.
+- **Inserts sur les machines** (style *Tout en billes*) : de temps en temps, un plan court (2,5 à 3,5 s, calé sur un
+  temps fort, coupe franche à l'entrée et à la sortie) montre une machine du réseau : la porte d'échappement ou la
+  cabine de peinture du tapis qui alimente l'instrument qu'on écoute, ou la machine à vapeur. C'est rare : au moins
+  six plans d'instruments et trente secondes entre deux inserts, jamais sur une entrée d'instrument, et pas à chaque
+  occasion ; les instruments restent les vedettes. Ces plans ne comptent pas dans le temps d'écran des instruments.
 - **Caméra portée** : chaque plan a son bougé, dérive lente façon steadicam pour les plans larges, travellings et
   grues, tremblement fin façon caméra à l'épaule pour les plans rapprochés et les poursuites ; la rotation autour
   du sujet démarre et s'achève en douceur.

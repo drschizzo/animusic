@@ -540,4 +540,21 @@ loadSong(demoSong());
 frame();
 
 // Accès pour le débogage depuis la console.
-window.animusic = { stage, player, get recorder() { return recorder; }, get ensemble() { return ensemble; } };
+window.animusic = {
+  stage,
+  player,
+  get recorder() {
+    return recorder;
+  },
+  get ensemble() {
+    return ensemble;
+  },
+  get shotPlan() {
+    return shotPlan;
+  },
+  /** Recalcule les plans du réalisateur avec d'autres réglages (essais, captures). */
+  replan(options) {
+    shotPlan = planShots(ensemble, options);
+    return shotPlan.shots.map(({ type, machine, start, end }) => ({ type, machine, start, end }));
+  },
+};

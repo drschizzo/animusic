@@ -46,6 +46,15 @@ export const DIRECTOR_DEFAULTS = {
   moveSpeed: 4, // vitesse (m/s) d'un glissement : sa durée s'allonge avec la distance
   blendMax: 2.6,
   cutSnap: 0.7, // une coupe se cale sur le temps fort le plus proche à ± cutSnap s
+
+  // Inserts sur les machines du réseau (style « billes ») : de courts plans, rares ; les
+  // instruments restent les vedettes, ce sont eux qui font suivre la musique.
+  machineChance: 0.35, // probabilité d'un insert quand il est permis
+  machineEvery: 6, // plans d'instruments au moins entre deux inserts
+  machineGap: 30, // secondes au moins entre deux inserts
+  machineMin: 2.4, // durée d'un insert (s)
+  machineMax: 3.6,
+  machineOnly: null, // essais : ne montrer que ces machines (['gate'], ['paint'], ['engine'])
 };
 
 /**
@@ -53,7 +62,7 @@ export const DIRECTOR_DEFAULTS = {
  * réglées pour 40° ; un plan à l'objectif plus long recule d'autant (même cadrage du
  * sujet, arrière-plan écrasé et plus flou), un plan au grand-angle s'approche.
  */
-export const LENS = { wide: 40, close: 30, low: 48, dolly: 35, crane: 40, duo: 34, follow: 40 };
+export const LENS = { wide: 40, close: 30, low: 48, dolly: 35, crane: 40, duo: 34, follow: 40, machine: 32 };
 const REFERENCE_FOV = 40;
 const half = (fov) => Math.tan((fov * Math.PI) / 360);
 /** Facteur de recul pour garder le cadrage de référence avec l'objectif d'un type de plan. */
@@ -163,6 +172,28 @@ function strongBeats(ensemble) {
  * @param ensemble résultat de buildEnsemble
  * @returns { shots: [{start,end,type,subject,angle,dist,height,center,cut,…}], options, balls }
  */
+/**
+ * Points de vue sur les machines du réseau : la porte d'échappement et la cabine de
+ * peinture de chaque tapis d'alimentation (rattachées à leur instrument), la machine à
+ * vapeur. `along` : direction du tapis au sol.
+ */
+function machinePoints(ensemble) {
+  const tr = ensemble.trunks;
+  if (!tr) return [];
+  const out = [];
+  for (const l of tr.lines) {
+    if (l.kind !== 'feed' || !l.balls?.length || l.gateAt === undefined) continue;
+    for (const [kind, s] of [['gate', l.gateAt], ['paint', l.paintAt]]) {
+      const [x, , z] = l.maze.pointAt(s);
+      const d = l.maze.tangentAt(s);
+      out.push({ kind, instrument: l.instrument, center: [x, 0.2, z], along: [d[0], d[2]] });
+    }
+  }
+  const e = tr.engine;
+  if (e?.kind === 'steam') out.push({ kind: 'engine', instrument: -1, center: [e.xe + e.side * 0.3, 0.45, e.z + e.dir * 0.45], along: [0, e.dir] });
+  return out;
+}
+
 export function planShots(ensemble, options = {}) {
   const o = { ...DIRECTOR_DEFAULTS, ...options };
   const R = ensemble.radius;
@@ -348,8 +379,47 @@ export function planShots(ensemble, options = {}) {
     return best;
   };
 
+  // Insert sur une machine : celle qui alimente l'instrument qu'on écoute, ou à défaut le
+  // plus en vue de ceux qui jouent et ont une ligne (le marimba et les archets n'en ont pas).
+  const machines = machinePoints(ensemble);
+  const machineShot = (ranked, duration) => {
+    const k = ranked.find((i) => machines.some((m) => m.instrument === i)) ?? -1;
+    const own = machines.filter((m) => m.instrument === k);
+    const engine = machines.filter((m) => m.kind === 'engine');
+    const r = random();
+    const pool = r < 0.55 ? own.filter((m) => m.kind === 'gate') : r < 0.75 ? own.filter((m) => m.kind === 'paint') : engine;
+    let choices = pool.length ? pool : own.length ? own : engine;
+    if (o.machineOnly) choices = machines.filter((x) => o.machineOnly.includes(x.kind) && (x.instrument === k || x.kind === 'engine'));
+    if (!choices.length) return null;
+    const m = choices[Math.floor(random() * choices.length)];
+    // Reculs et hauteurs essayés dans l'ordre : de l'insert serré au plan un peu plus large
+    // (une porte est au pied d'une estrade, que la caméra ne doit pas frôler).
+    const looks = {
+      gate: [[1.1, 0.38], [1.6, 0.5], [2.2, 0.65], [2.8, 0.85]],
+      paint: [[1.25, 0.75], [1.8, 0.9], [2.4, 1.05]],
+      engine: [[2.3, 0.8], [2.9, 1.0]],
+    }[m.kind];
+    // De côté, un peu en aval : on voit la file de billes arriver vers la machine.
+    const sideAngle = Math.atan2(m.along[1], -m.along[0]);
+    const sides = random() < 0.5 ? [sideAngle, sideAngle + Math.PI] : [sideAngle + Math.PI, sideAngle];
+    for (const [dist, height] of looks)
+      for (const base of sides)
+        for (const da of [0.45, -0.45, 0.8, -0.8]) {
+          const angle = base + da;
+          const ok = [angle - 0.06 * duration, angle + 0.06 * duration].every((a) => {
+            const p = eye(m.center, a, dist, height);
+            const floor = minCameraHeight(obstacles, p[0], p[2], o.clearance);
+            return floor <= p[1] + 0.05 && Math.hypot(p[0], p[2]) < stageR - 0.5 && !blocked(obstacles, p, m.center);
+          });
+          if (ok) return { type: 'machine', machine: m.kind, subject: -1, owner: m.instrument, center: m.center, angle, dist, height, fov: LENS.machine };
+        }
+    return null;
+  };
+
   const shots = [];
   let t = t0;
+  let lastMachine = -Infinity;
+  let sinceMachine = 0;
   let lastSubject = -2;
   let repeat = 0; // plans consécutifs sur le même sujet
   const seen = inst.map(() => t0); // dernier passage à l'écran de chaque instrument
@@ -427,10 +497,26 @@ export function planShots(ensemble, options = {}) {
         if (pe !== null) end = Math.min(t1, pe + 0.35);
       }
 
+      // Insert sur une machine : rare, court, jamais sur une entrée ni à l'approche d'une entrée.
+      const insertOk =
+        machines.length && best >= 0 && !imminent && !(first[best] >= t && first[best] < end) && t - lastMachine >= o.machineGap && sinceMachine >= o.machineEvery && t > t0 + 12;
+      const ranked = scores.map((sc, k) => [sc, k]).filter(([sc]) => sc > 0).sort((a, b) => b[0] - a[0]).map(([, k]) => k);
+      const insert = insertOk && random() < o.machineChance ? machineShot(ranked, o.machineMax) : null;
       if (best < 0 || sinceWide >= o.wideEvery || (shots.length === 0 && inst.length > 1)) {
         shot = wide();
         sinceWide = 0;
+      } else if (insert) {
+        shot = insert;
+        end = Math.min(t1, t + lerp(o.machineMin, o.machineMax, random()));
+        // Fin calée sur un temps fort tout proche, puis coupe franche vers les instruments.
+        const i = lowerBound(beats, end);
+        const near = [beats[i - 1], beats[i]].filter((b) => b !== undefined && Math.abs(b - end) <= 0.5 && b > t + o.machineMin * 0.8);
+        if (near.length) end = near.sort((a, b) => Math.abs(a - end) - Math.abs(b - end))[0];
+        cutPending = true;
+        lastMachine = t;
+        sinceMachine = 0;
       } else {
+        sinceMachine++;
         const ball = best === ballsIndex && random() < o.followChance ? followBall(t) : -1;
         // Partenaire de dialogue : une autre voix mélodique presque aussi présente, qui alterne avec le sujet.
         let partner = -1;
@@ -464,7 +550,7 @@ export function planShots(ensemble, options = {}) {
     shot.start = t;
     shot.end = end;
     shot.spin = (random() < 0.5 ? -1 : 1) * o.orbitSpeed;
-    shot.cut = cut;
+    shot.cut = cut || shot.type === 'machine';
     shots.push(shot);
     lastSubject = shot.subject;
     t = end;
@@ -513,6 +599,7 @@ const SHAKE = {
   close: { pos: 0.04, rot: 0.005, jitter: 0.25 },
   low: { pos: 0.03, rot: 0.006, jitter: 0.3 },
   follow: { pos: 0.05, rot: 0.006, jitter: 0.3 },
+  machine: { pos: 0.02, rot: 0.003, jitter: 0.12 },
 };
 
 /** Bruit lisse et déterministe (somme de sinus de fréquences sans rapport simple), ≈ −1..1. */
@@ -587,7 +674,8 @@ function shotPose(plan, shot, t) {
   } else if (shot.type === 'crane') {
     height = lerp(shot.height, shot.height2, smoothstep(u));
   }
-  const aperture = shot.type === 'wide' ? 0.25 : shot.type === 'duo' ? 0.35 : shot.type === 'low' ? 0.9 : 0.7;
+  // Insert sur une machine : faible profondeur de champ, la machine se détache du décor.
+  const aperture = shot.type === 'wide' ? 0.25 : shot.type === 'duo' ? 0.35 : shot.type === 'low' || shot.type === 'machine' ? 0.9 : 0.7;
   return { position: [px, cy + height, pz], target, aperture, fov: shot.fov ?? REFERENCE_FOV };
 }
 
