@@ -162,14 +162,23 @@
         <button id="collapse" class="icon" title="Replier le panneau" aria-expanded="true">▾</button>
       </h1>
       <div id="panelBody">
-      <p class="hint">Glisse un ou plusieurs fichiers <b>.mid</b> (playlist) ou un enregistrement (<b>.mp3</b>, .wav…) sur la page, ou :</p>
-      <div class="row">
-        <label class="btn">
-          Ouvrir…
-          <input id="file" type="file" accept=".mid,.midi,audio/*,.mp3,.wav,.ogg,.flac,.m4a" multiple hidden />
-        </label>
-        <button id="demo" class="btn">Démo</button>
-      </div>
+      <section class="choice">
+        <h3>Tes morceaux</h3>
+        <p class="hint">Ouvre un ou plusieurs fichiers <b>.mid</b> (ils forment une playlist), ou glisse-les sur la page.</p>
+        <div class="row">
+          <label class="btn primary">
+            Ouvrir des fichiers MIDI…
+            <input id="file" type="file" accept=".mid,.midi" multiple hidden />
+          </label>
+        </div>
+      </section>
+      <section class="choice">
+        <h3>Pas de fichier MIDI ?</h3>
+        <p class="hint">Essaie avec le morceau de démonstration : <i>Chameleon</i> (Herbie Hancock).</p>
+        <div class="row">
+          <button id="demo" class="btn">▶ Écouter la démo</button>
+        </div>
+      </section>
 
       <details id="playlist" open hidden>
         <summary id="playlistSummary">Playlist</summary>
@@ -267,7 +276,7 @@
       </div>
     </aside>
 
-    <div id="drop" hidden>Dépose ton fichier MIDI ou audio</div>
+    <div id="drop" hidden>Dépose tes fichiers MIDI</div>
     <div id="loader" role="status" aria-live="polite" aria-busy="true">
       <div class="loader-box">
         <div class="loader-keys" aria-hidden="true">

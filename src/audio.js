@@ -211,6 +211,11 @@ export class Player {
     this.soundfont.send(msgs, Math.max(Tone.now(), this.rawContext.currentTime, (this.soundfont.queuedUntil ?? 0) + 0.002) + 0.003);
   }
 
+  /** Débloque le contexte audio : à appeler pendant le geste de l'utilisateur. */
+  unlock() {
+    return Tone.start();
+  }
+
   async play() {
     await Tone.start();
     this.restoreControllers();

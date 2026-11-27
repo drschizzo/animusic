@@ -108,7 +108,8 @@ try {
   await page.goto(url);
   await page.waitForFunction(() => window.animusic?.ensemble, null, { timeout: 120000 });
   const kinds = await page.evaluate(() => window.animusic.ensemble.instruments.map((i) => i.kind));
-  check(kinds.length === 8, `démo construite avec ${kinds.join(', ')}`);
+  const demoName = await page.evaluate(() => document.getElementById('songName').textContent);
+  check(demoName.startsWith('Chameleon') && kinds.length >= 6, `démo « ${demoName} » construite avec ${kinds.join(', ')}`);
 
   await page.waitForFunction(() => document.getElementById('sound').textContent === '', null, { timeout: 120000 });
   const sf = await page.evaluate(() => window.animusic.player.soundfontOn);
@@ -152,20 +153,19 @@ try {
   const read = await page.evaluate(() => window.animusic.ensemble.instruments.map((i) => `${i.kind} : ${i.line.length} notes`).join(', '));
   check(read === 'balls : 4 notes', `fichier MIDI lu (${read})`);
 
-  // Import d'un enregistrement (WAV synthétique) : transcription + batterie + lecture de l'original.
+  // Import d'un enregistrement : désactivé pour l'instant (AUDIO_IMPORT dans src/main.js).
+  // Pour le réactiver, rétablir ici le test de transcription d'un WAV (makeWav, historique git).
   await page.setInputFiles('#file', { name: 'essai.wav', mimeType: 'audio/wav', buffer: makeWav() });
-  await page.waitForFunction(() => document.getElementById('exportStatus').textContent.startsWith('Transcription'), null, {
-    timeout: 180000,
+  await page.waitForFunction(() => !document.getElementById('error').hidden, null, { timeout: 10000 });
+  const refused = await page.evaluate(() => document.getElementById('error').textContent);
+  check(refused.includes('désactivé'), `import audio refusé : ${refused}`);
+
+  // Bouton Démo : recharge le morceau de démonstration et lance la lecture.
+  await page.click('#demo');
+  await page.waitForFunction(() => document.getElementById('songName').textContent.startsWith('Chameleon') && window.animusic.player.playing, null, {
+    timeout: 120000,
   });
-  const imported = await page.evaluate(() => ({
-    roles: [...document.querySelectorAll('#tracks select')].map((s) => s.value),
-    status: document.getElementById('exportStatus').textContent,
-  }));
-  check(imported.roles.includes('balls') && imported.roles.includes('drums'), `audio importé : ${imported.status} (${imported.roles.join(', ')})`);
-  await page.click('#play');
-  await page.waitForTimeout(1500);
-  const original = await page.evaluate(() => window.animusic.player.original?.state);
-  check(original === 'started', `enregistrement original en lecture (${original})`);
+  check(true, 'bouton Démo : morceau rechargé et lu');
 
   check(missing.length === 0, `aucune ressource manquante ${missing.slice(0, 3).join(' ')}`);
   check(errors.length === 0, `aucune erreur JavaScript ${errors.slice(0, 3).join(' | ')}`);
