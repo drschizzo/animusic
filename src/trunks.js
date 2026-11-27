@@ -12,17 +12,25 @@
 // d'avance dans son tuyau.
 
 import { polyline, fillet } from './ballistics.js';
+import { lowerBound, upperBound } from './util.js';
 import { frameOf } from './passes.js';
 
 export const TRUNK_DEFAULTS = {
-  speed: 5, // vitesse des billes dans le réseau (m/s)
-  radius: 0.058, // rayon extérieur des tuyaux
-  axisY: 0.1, // hauteur de l'axe des tuyaux posés au sol
-  cell: 0.16, // pas de la grille au sol : deux tuyaux voisins sont à 16 cm d'axe en axe
+  speed: 2, // vitesse des tapis (m/s)
+  riserSpeed: 5, // vitesse des billes dans les colonnes de verre des estrades
+  radius: 0.058, // demi-largeur du bâti d'un tapis
+  beltWidth: 0.1, // largeur de la bande
+  beltY: 0.13, // hauteur du dessus de la bande
+  slack: 0.6, // avance (s) d'une bille sur sa porte : elle attend dans la file au bout du tapis
+  gateSetback: 0.16, // la porte d'échappement est à cette distance du bout du tapis
+  spacing: 2.2, // écart d'axe en axe de deux billes dans la file, en rayons
+  paintAt: 0.36, // abscisse de la cabine de peinture le long d'un tapis d'alimentation
+  paintLength: 0.26,
+  cell: 0.16, // pas de la grille au sol : deux tapis voisins sont à 16 cm d'axe en axe
   margin: 0.11, // distance minimale de l'axe d'un tuyau à un obstacle
   manifold: 2.6, // les lignes partent alignées à cette distance derrière l'axe de la tourelle
   pitch: 2, // écart entre deux départs, en cases
-  lead: 4, // longueur (en cases) du tronçon droit de départ
+  lead: 4, // longueur (en cases) du tronçon droit de départ (distributeur, cabine de peinture)
   turnCost: 14, // coût d'un coude, en cases : de longs tronçons droits, peu de coudes
   bundle: 0.3, // rabais d'une case le long d'un tuyau déjà posé : les lignes se rangent en faisceaux
   rounds: 4, // nombre maximal d'essais de tracé
@@ -119,7 +127,7 @@ export function floorGrid(ensemble, o) {
           for (const r of [ch.radius - 0.3, ch.radius + 0.3]) disc(Math.sin(a) * r, -Math.cos(a) * r, 0.1 + o.margin);
         }
         // Résonateurs des lames graves : ils descendent presque jusqu'au sol.
-        for (const bar of ch.bars) if (0.028 + 0.65 * bar.u < o.axisY + o.radius + 0.1) disc(bar.position[0], bar.position[2], bar.width * 0.37 + o.margin);
+        for (const bar of ch.bars) if (0.028 + 0.65 * bar.u < o.beltY + 0.15) disc(bar.position[0], bar.position[2], bar.width * 0.37 + o.margin);
       }
       for (const path of ch.returns ?? []) {
         if (!ch.balls.length) break;
@@ -243,13 +251,12 @@ function route(grid, from, to, heading, pipes, o) {
   return cells.reverse();
 }
 
-/** Tracé d'une ligne : ses tronçons droits, de la tourelle au pied de l'estrade, entre deux plongées dans le sol. */
+/** Tracé d'une ligne : ses tronçons droits, de la tourelle au pied de l'estrade, à hauteur de la bande. */
 function trace(cells, grid, o) {
   // Seuls les coins comptent : les cases alignées forment un tronçon droit.
   const corners = cells.filter((c, q) => q === 0 || q === cells.length - 1 || (c[0] - cells[q - 1][0]) * (cells[q + 1][1] - c[1]) !== (c[1] - cells[q - 1][1]) * (cells[q + 1][0] - c[0]));
-  const at = ([i, j], y = o.axisY) => [i * grid.cell, y, j * grid.cell];
-  const points = [at(corners[0], -0.14), ...corners.map((c) => at(c)), at(corners[corners.length - 1], -0.14)];
-  return { points: smoothJoints(points, Math.min(0.07, o.cell * 0.42)), ends: [at(corners[0], 0), at(corners[corners.length - 1], 0)], turns: corners.length - 2 };
+  const at = ([i, j]) => [i * grid.cell, o.beltY, j * grid.cell];
+  return { points: smoothJoints(corners.map((c) => at(c)), Math.min(0.07, o.cell * 0.42)), turns: corners.length - 2 };
 }
 
 /** Arrondit les coudes d'une polyligne. */
@@ -340,9 +347,9 @@ export function planTrunks(ensemble, options = {}) {
   const { lines, grid, pipes } = best;
   for (const l of lines) {
     const m = trace(l.cells, grid, o);
-    // Alimentation : de la tourelle vers l'instrument ; retour : dans l'autre sens.
+    // Alimentation : de la tourelle vers l'instrument ; retour : dans l'autre sens. La bande
+    // avance toujours dans le sens de l'abscisse.
     l.maze = polyline(l.kind === 'feed' ? m.points : m.points.reverse());
-    l.grommets = m.ends;
     l.turns = m.turns;
     l.balls = [];
   }
@@ -367,6 +374,11 @@ export function planTrunks(ensemble, options = {}) {
  * le choix des passes). `ball.time` est l'instant où la bille arrive au bout de la rampe
  * (alimentation) ou quitte le bout du collecteur (retour). Deux billes d'une même ligne
  * ne se touchent pas.
+ *
+ * Alimentation : la bille, encore brute, tombe du distributeur sur le tapis (`born`), passe
+ * dans la cabine de peinture, puis attend dans la file au bout du tapis, contre la porte
+ * d'échappement, qui la lâche à l'instant `gate`. Retour : elle tombe du collecteur sur le
+ * tapis et roule jusqu'à la tourelle.
  */
 export function scheduleTrunks(trunks) {
   const o = trunks.options;
@@ -376,58 +388,132 @@ export function scheduleTrunks(trunks) {
     if (line.kind === 'feed') for (let i = balls.length - 2; i >= 0; i--) balls[i].time = Math.min(balls[i].time, balls[i + 1].time - gap);
     else for (let i = 1; i < balls.length; i++) balls[i].time = Math.max(balls[i].time, balls[i - 1].time + gap);
     line.balls = balls;
-    line.riserSpan = line.riser ? line.riser.length / o.speed : 0;
+    line.riserSpan = line.riser ? line.riser.length / o.riserSpeed : 0;
+    line.hidden = line.riser ? o.hidden : 0; // sous le sol, entre le bout du tapis et la colonne
     line.mazeSpan = line.maze.length / o.speed;
-    // Vie d'une bille autour de son instant de référence : [−before, +after].
-    const total = line.riserSpan + (line.riser ? o.hidden : 0) + line.mazeSpan;
-    line.before = line.kind === 'feed' ? total : 0;
-    line.after = line.kind === 'feed' ? 0 : total;
+    line.gateAt = Math.max(0.2, line.maze.length - o.gateSetback);
+    line.paintAt = Math.min(o.paintAt, line.gateAt / 2);
+    if (line.kind === 'feed') {
+      for (const b of balls) {
+        b.gate = b.time - line.riserSpan - line.hidden;
+        b.born = b.gate - line.gateAt / o.speed - o.slack;
+      }
+      line.before = line.riserSpan + line.hidden + line.gateAt / o.speed + o.slack;
+      line.after = 0;
+    } else {
+      line.before = 0;
+      line.after = line.riserSpan + line.hidden + line.mazeSpan;
+    }
   }
   return trunks;
 }
 
 /**
- * Position d'une bille du réseau à l'instant t : dans les lacets, ou dans la colonne de
- * son instrument. Renvoie false quand elle est sous le sol (ou hors de sa vie) ; sinon
- * écrit sa position dans `out` et sa direction dans `dir`.
+ * Billes d'une ligne à l'instant t. Pour chacune, appelle
+ * `emit(ball, position, vitesse, peinte, surTapis)`
+ * (les tableaux sont réutilisés d'un appel à l'autre). Sur un tapis d'alimentation, une
+ * bille avance avec la bande tant que rien ne l'arrête ; arrêtée par la porte ou par la
+ * bille de devant, elle glisse sur la bande (tapis d'accumulation) : la file se resserre
+ * contre la porte, qui lâche ses billes une à une, chacune à son instant. Rien n'est
+ * simulé : la position de chaque bille ne dépend que de t et de celle de devant.
  */
-export function trunkBall(trunks, line, ball, t, out = [0, 0, 0], dir = null) {
-  const v = trunks.options.speed;
-  const gapT = line.riser ? trunks.options.hidden : 0;
-  let path;
-  let s;
+export function lineBalls(trunks, line, t, emit) {
+  const o = trunks.options;
+  const v = o.speed;
+  const r = line.ballRadius;
+  const balls = line.balls;
+  const p = [0, 0, 0];
+  const vel = [0, 0, 0];
+  const onBelt = (x, moving) => {
+    line.maze.pointAt(x, p);
+    p[1] += r;
+    const d = line.maze.tangentAt(x);
+    for (let c = 0; c < 3; c++) vel[c] = moving ? d[c] * v : 0;
+  };
+  const inRiser = (s, sign) => {
+    line.riser.pointAt(s, p);
+    const d = line.riser.tangentAt(s);
+    for (let c = 0; c < 3; c++) vel[c] = d[c] * o.riserSpeed * sign;
+  };
   if (line.kind === 'feed') {
-    const left = ball.time - t; // temps restant avant l'arrivée
-    if (left < 0) return false;
-    if (left <= line.riserSpan) {
-      path = line.riser;
-      s = path.length - v * left;
-    } else {
-      path = line.maze;
-      s = path.length - v * (left - line.riserSpan - gapT);
+    const G = line.gateAt;
+    const d = o.spacing * r;
+    const lo = upperBound(balls, t, (b) => b.time);
+    // La bille de devant (déjà passée) : elle a franchi la porte à vitesse de bande.
+    let prevX = lo > 0 ? G + v * (t - balls[lo - 1].gate) : Infinity;
+    let prevMoving = true;
+    for (let i = lo; i < balls.length; i++) {
+      const b = balls[i];
+      if (t < b.born) break;
+      let x;
+      let moving;
+      if (t >= b.gate) {
+        x = G + v * (t - b.gate);
+        moving = true;
+      } else {
+        const free = v * (t - b.born);
+        x = Math.min(free, G, prevX - d);
+        moving = x === free || (x === prevX - d && prevMoving && x < G);
+      }
+      prevX = x;
+      prevMoving = moving;
+      if (x <= line.maze.length) {
+        onBelt(x, moving);
+        emit(b, p, vel, x >= line.paintAt, true);
+        continue;
+      }
+      // Passée la porte : sous le sol, puis dans la colonne de son instrument.
+      const left = b.time - t;
+      if (line.riser && left <= line.riserSpan) {
+        inRiser(line.riser.length - o.riserSpeed * left, 1);
+        emit(b, p, vel, true, false);
+      }
     }
-  } else {
-    const since = t - ball.time;
-    if (since < 0) return false;
-    if (since <= line.riserSpan) {
-      path = line.riser;
-      s = v * since;
-    } else {
-      path = line.maze;
-      s = v * (since - line.riserSpan - gapT);
+    return;
+  }
+  const lo = lowerBound(balls, t - line.after, (b) => b.time);
+  for (let i = lo; i < balls.length; i++) {
+    const b = balls[i];
+    const since = t - b.time;
+    if (since < 0) break;
+    if (line.riser && since <= line.riserSpan) {
+      inRiser(o.riserSpeed * since, 1);
+      emit(b, p, vel, true, false);
+      continue;
     }
+    const x = v * (since - line.riserSpan - line.hidden);
+    if (x < 0 || x > line.maze.length) continue;
+    onBelt(x, true);
+    emit(b, p, vel, true, true);
   }
-  // Sous le sol : entre le labyrinthe et la colonne, et dans les plongées.
-  if (!path || s < 0 || s > path.length) return false;
-  path.pointAt(s, out);
-  if (out[1] < trunks.options.axisY * 0.5 && path === line.maze) return false;
-  if (dir) {
-    const d = path.tangentAt(s);
-    dir[0] = d[0];
-    dir[1] = d[1];
-    dir[2] = d[2];
+}
+
+/** Ouverture (0..1) de la porte d'échappement d'un tapis d'alimentation à l'instant t. */
+export function gateOpening(line, t) {
+  const i = lowerBound(line.balls, t - 0.12, (b) => b.gate);
+  let open = 0;
+  for (let k = i; k < line.balls.length; k++) {
+    const dt = t - line.balls[k].gate;
+    if (dt < -0.05) break;
+    // Le cliquet se lève juste avant le lâcher et retombe aussitôt la bille passée.
+    open = Math.max(open, dt < 0 ? 1 + dt / 0.05 : Math.max(0, 1 - dt / 0.12));
   }
-  return true;
+  return open;
+}
+
+/** Dernière bille peinte à l'instant t sur un tapis d'alimentation, et depuis combien de temps (s). */
+export function lastPainted(trunks, line, t) {
+  const tPaint = (b) => b.born + line.paintAt / trunks.options.speed;
+  let lo = 0;
+  let hi = line.balls.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (tPaint(line.balls[m]) <= t) lo = m + 1;
+    else hi = m;
+  }
+  if (!lo) return null;
+  const b = line.balls[lo - 1];
+  return { ball: b, since: t - tPaint(b) };
 }
 
 /** Distance d'un point aux colonnes de verre des instruments (au-delà de 1 m : simplement « loin »). */

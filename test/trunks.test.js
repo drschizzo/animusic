@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { trunkBall, trunkDistance } from '../src/trunks.js';
+import { lineBalls, gateOpening, trunkDistance } from '../src/trunks.js';
 import { frameOf } from '../src/passes.js';
 import { stationBall } from '../src/ballistics.js';
 import { buildEnsemble } from '../src/arranger.js';
@@ -22,13 +22,12 @@ test('réseau : au sol, de la tourelle vers les estrades, en tronçons droits su
   assert.ok(tr.lines.filter((l) => l.kit).length <= 1);
   for (const l of tr.lines) {
     const pts = l.maze.points;
-    for (const p of pts) assert.ok(p[1] <= o.axisY + 1e-9, 'jamais au-dessus du sol');
-    // Les deux bouts plongent dans le sol ; l'un est dans la rangée des départs, derrière la tourelle.
-    assert.ok(pts[0][1] < 0 && pts[pts.length - 1][1] < 0);
+    for (const p of pts) assert.ok(Math.abs(p[1] - o.beltY) < 1e-9, 'tapis à plat, à hauteur de bande');
+    // L'un des bouts est dans la rangée des départs, derrière la tourelle.
     const hub = l.kind === 'feed' ? pts[0] : pts[pts.length - 1];
     assert.ok(Math.abs(hub[2] + o.manifold) < o.cell);
     // Tracé propre : des tronçons parallèles ou perpendiculaires au bord de scène, peu de coudes.
-    const flat = pts.filter((p) => p[1] > o.axisY - 1e-6);
+    const flat = pts;
     let skew = 0;
     for (let i = 1; i < flat.length; i++) if (Math.abs(flat[i][0] - flat[i - 1][0]) > 1e-6 && Math.abs(flat[i][2] - flat[i - 1][2]) > 1e-6) skew += Math.hypot(flat[i][0] - flat[i - 1][0], flat[i][2] - flat[i - 1][2]);
     // De biais seulement dans l'arrondi des coudes (quelques centimètres chacun).
@@ -41,8 +40,8 @@ test('réseau : au sol, de la tourelle vers les estrades, en tronçons droits su
   }
 });
 
-test('réseau : deux tuyaux ne se touchent jamais, et aucun ne passe sous une estrade', () => {
-  const flats = tr.lines.map((l) => l.maze.points.filter((p) => p[1] > o.axisY - 1e-6));
+test('réseau : deux tapis ne se touchent jamais, et aucun ne passe sous une estrade', () => {
+  const flats = tr.lines.map((l) => l.maze.points);
   for (let i = 0; i < flats.length; i++)
     for (let j = i + 1; j < flats.length; j++)
       for (const p of flats[i]) for (const q of flats[j]) assert.ok(Math.hypot(p[0] - q[0], p[2] - q[2]) > 2 * o.radius + 0.01, `lignes ${i} et ${j} à ${Math.hypot(p[0] - q[0], p[2] - q[2]).toFixed(3)} m`);
@@ -74,30 +73,59 @@ test('colonnes : plantées dans l\'estrade, raccordées aux bouts de la rampe et
   }
 });
 
-test('billes : une par tir, dans le verre ou sous le sol, jamais deux au même endroit', () => {
-  const p = [0, 0, 0];
+/** Billes d'une ligne à l'instant t : [{ ball, p, v, painted, belt }]. */
+const at = (l, t) => {
+  const out = [];
+  lineBalls(tr, l, t, (ball, p, v, painted, belt) => out.push({ ball, p: [...p], v: [...v], painted, belt }));
+  return out;
+};
+
+test('billes : une par tir, brutes au départ, peintes après la cabine, lâchées une à une par la porte', () => {
   for (const l of tr.lines) {
     const count = l.kit ? e.instruments[l.instrument].model.shots.length : e.instruments[l.instrument].model.row.shots.length;
     assert.equal(l.balls.length, count);
     const gap = (2 * l.ballRadius) / o.speed;
     for (let i = 1; i < l.balls.length; i++) assert.ok(l.balls[i].time - l.balls[i - 1].time >= gap, 'billes qui se touchent');
     const b = l.balls[0];
+    const find = (t) => at(l, t).find((x) => x.ball === b);
+    const near = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
     if (l.kind === 'feed') {
-      // Dans les lacets bien avant, sous le sol entre les deux, dans la colonne juste avant, disparue après.
-      assert.ok(trunkBall(tr, l, b, b.time - l.before + l.mazeSpan / 2, p) && p[1] <= o.axisY + 1e-9);
-      assert.equal(trunkBall(tr, l, b, b.time + 0.05, p), false);
+      // Tombée du distributeur, encore brute ; peinte une fois la cabine passée.
+      const born = find(b.born + 0.01);
+      assert.ok(born && born.belt && !born.painted);
+      assert.ok(near(born.p, l.maze.pointAt(0)) < 0.05);
+      assert.ok(find(b.born + (l.paintAt + 0.05) / o.speed).painted);
+      // Elle attend contre la porte, immobile, puis la porte s'ouvre et la lâche.
+      const waiting = find(b.gate - 0.01);
+      assert.ok(near(waiting.p, l.maze.pointAt(l.gateAt)) < l.ballRadius + 1e-6);
+      assert.equal(Math.hypot(...waiting.v), 0);
+      assert.ok(gateOpening(l, b.gate) > 0.9 && gateOpening(l, b.gate - 0.3) < 0.1);
+      assert.equal(find(b.time + 0.05), undefined, 'disparue après la rampe');
       if (l.riser) {
-        assert.equal(trunkBall(tr, l, b, b.time - l.riserSpan - o.hidden / 2, p), false, 'sous le sol');
-        assert.ok(trunkBall(tr, l, b, b.time - l.riserSpan / 2, p));
-        assert.ok(trunkDistance(tr, p) < 0.06, 'dans sa colonne');
-        trunkBall(tr, l, b, b.time, p);
-        assert.ok(Math.hypot(...l.riser.pointAt(l.riser.length).map((v, c) => v - p[c])) < 1e-6, 'arrivée au bout de la rampe');
+        assert.equal(find(b.time - l.riserSpan - o.hidden / 2), undefined, 'sous le sol');
+        const up = find(b.time - l.riserSpan / 2);
+        assert.ok(up && !up.belt && trunkDistance(tr, up.p) < 0.06, 'dans sa colonne');
+        assert.ok(near(find(b.time - 1e-9).p, l.riser.pointAt(l.riser.length)) < 1e-3, 'arrivée au bout de la rampe');
       }
     } else {
-      assert.equal(trunkBall(tr, l, b, b.time - 0.05, p), false);
-      assert.ok(trunkBall(tr, l, b, b.time + l.riserSpan / 2, p));
-      assert.equal(trunkBall(tr, l, b, b.time + l.riserSpan + o.hidden / 2, p), false, 'sous le sol');
-      assert.ok(trunkBall(tr, l, b, b.time + l.riserSpan + o.hidden + l.mazeSpan / 2, p) && p[1] <= o.axisY + 1e-9);
+      assert.equal(find(b.time - 0.05), undefined);
+      assert.ok(find(b.time + l.riserSpan / 2));
+      assert.equal(find(b.time + l.riserSpan + o.hidden / 2), undefined, 'sous le sol');
+      const back = find(b.time + l.riserSpan + o.hidden + l.mazeSpan / 2);
+      assert.ok(back && back.belt && back.painted);
+    }
+  }
+});
+
+test('file d\'attente : sur un tapis, deux billes ne se chevauchent jamais', () => {
+  for (const l of tr.lines) {
+    const end = Math.min(l.balls[l.balls.length - 1].time, 15);
+    for (let t = 0; t < end; t += 0.037) {
+      const on = at(l, t).filter((x) => x.belt);
+      for (let i = 1; i < on.length; i++) {
+        const d = Math.hypot(...on[i].p.map((v, c) => v - on[i - 1].p[c]));
+        assert.ok(d >= 2 * l.ballRadius - 1e-6, `${l.kind} à t=${t.toFixed(2)} : ${d.toFixed(3)} m`);
+      }
     }
   }
 });

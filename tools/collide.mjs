@@ -103,6 +103,7 @@ function check(name, song, style) {
     const grid = new Map();
     const list = [];
     for (const v of views) collectTriangles(v.lift, v.inst.kind, grid, list);
+    if (mounted.trunkView) collectTriangles(mounted.trunkView.group, 'réseau', grid, list);
     const barrels = new Set();
     for (const part of balls.view.launcherParts) part.barrel.traverse((o) => barrels.add(o));
     const ch = balls.inst.model;
