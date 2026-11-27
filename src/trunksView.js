@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { lineBalls, gateOpening, lastPainted } from './trunks.js';
+import { lineBalls, gateOpening, lastPainted, engineLoad } from './trunks.js';
 import { BallPool } from './ballPool.js';
 import { mat } from './materials.js';
 import { lowerBound, upperBound } from './util.js';
@@ -262,12 +262,223 @@ export class TrunksView {
     merged(parts.chrome, mat.chrome(), 'garnitures');
     merged(parts.steel, mat.steel(), 'rouleaux');
     this.pools = this.lines.map((l) => l.pool);
+    if (trunks.engine) this.buildEngine(trunks.engine);
+  }
+
+  /**
+   * Salle des machines (voir placeEngine, trunks.js) : arbre de transmission sur deux
+   * chevalets, une poulie et une courroie par tapis, et au bout la machine à vapeur :
+   * volant, manivelle, bielle, crosse sur ses glissières, cylindre et régulateur à boules.
+   */
+  buildEngine(e) {
+    const g = new THREE.Group();
+    g.name = 'machine';
+    this.group.add(g);
+    const dark = mat.gunmetal();
+    const steel = mat.steel();
+    const chrome = mat.chrome();
+    const brass = mat.brass();
+    const fixed = { dark: [], steel: [], chrome: [], brass: [] };
+    const turning = { dark: [], steel: [], brass: [] };
+    const cyl = (r, len, segs = 18) => new THREE.CylinderGeometry(r, r, len, segs);
+    const alongX = (geo) => geo.rotateZ(Math.PI / 2);
+    const alongZ = (geo) => geo.rotateX(Math.PI / 2);
+    const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+    const bar = (a, b, r, bucket, list = fixed) => {
+      const A = new THREE.Vector3(...a);
+      const B = new THREE.Vector3(...b);
+      const geo = cyl(r, A.distanceTo(B), 10).applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize()));
+      list[bucket].push(geo.translate(...A.clone().add(B).multiplyScalar(0.5).toArray()));
+    };
+    const { y, z, side, dir } = e;
+    const u = (k) => e.xe + side * k; // abscisse à la distance k du bout de l'arbre, côté machine
+    const steam = e.kind === 'steam';
+    const x0 = Math.min(e.xa - 0.05, steam ? u(0.5) : Infinity);
+    const x1 = Math.max(e.xb + 0.05, steam ? u(0.5) : -Infinity);
+    // Arbre et chevalets.
+    fixed.chrome.push(alongX(cyl(0.018, x1 - x0, 14)).translate((x0 + x1) / 2, y, z));
+    for (const x of e.supports) {
+      for (const s of [-1, 1]) bar([x, 0.02, z + s * 0.16], [x, y - 0.03, z], 0.016, 'dark');
+      fixed.dark.push(box(0.07, 0.07, 0.09).translate(x, y, z), box(0.05, 0.02, 0.4).translate(x, 0.01, z));
+    }
+    // Rotor : tout ce qui tourne avec l'arbre, fusionné, tourné d'un bloc autour de l'axe x.
+    const rotor = new THREE.Group();
+    rotor.position.set(0, y, z);
+    // Poulies et courroies vers la tête de chaque tapis.
+    const leather = new THREE.MeshStandardMaterial({ map: this.beltTex, roughness: 0.7, side: THREE.DoubleSide, color: 0x9a6a48 });
+    const belts = [];
+    const r1 = 0.09;
+    const r2 = 0.03;
+    const top = this.trunks.options.beltY;
+    for (const { line, path } of this.lines) {
+      const hub = line.kind === 'feed' ? path.pointAt(0) : path.pointAt(path.length);
+      if (Math.abs(hub[2] - e.z0) > 0.05) continue;
+      const x = hub[0] + this.trunks.options.radius + 0.025;
+      turning.steel.push(alongX(cyl(r1, 0.024, 28)).translate(x, 0, 0));
+      turning.dark.push(box(0.028, 2 * r1 - 0.02, 0.022).translate(x, 0, 0), box(0.028, 0.022, 2 * r1 - 0.02).translate(x, 0, 0));
+      const c2 = [top - 0.022, hub[2]]; // axe du rouleau de tête (y, z)
+      fixed.steel.push(alongX(cyl(r2, 0.016, 18)).translate(x, c2[0], c2[1]));
+      // Brins de la courroie : tangentes extérieures aux deux poulies.
+      const dy = c2[0] - y;
+      const dz = c2[1] - z;
+      const D = Math.hypot(dy, dz);
+      const phi = Math.atan2(dz, dy);
+      const alpha = Math.acos((r1 - r2) / D);
+      for (const sgn of [1, -1]) {
+        const a = phi + sgn * alpha;
+        const P = [y + r1 * Math.cos(a), z + r1 * Math.sin(a)];
+        const Q = [c2[0] + r2 * Math.cos(a), c2[1] + r2 * Math.sin(a)];
+        const len = Math.hypot(Q[0] - P[0], Q[1] - P[1]);
+        const geo = new THREE.BufferGeometry();
+        const w = 0.009;
+        geo.setAttribute('position', new THREE.Float32BufferAttribute([x - w, P[0], P[1], x + w, P[0], P[1], x - w, Q[0], Q[1], x + w, Q[0], Q[1]], 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0, 1, len / BELT_PERIOD, 0, len / BELT_PERIOD, 1], 2));
+        geo.setIndex([0, 2, 1, 1, 2, 3]);
+        geo.computeVertexNormals();
+        belts.push(geo);
+      }
+    }
+    if (belts.length) {
+      const m = new THREE.Mesh(mergeGeometries(belts), leather);
+      m.name = 'courroies';
+      g.add(m);
+    }
+    const rc = 0.1; // rayon de manivelle
+    const zz = (k) => z + dir * k; // le long du cylindre
+    const govBase = y + 0.165;
+    const govTop = govBase + 0.32;
+    if (steam) {
+      // Volant : jante, moyeu, six bras.
+      const R = 0.3;
+      turning.dark.push(new THREE.TorusGeometry(R, 0.035, 10, 48).rotateY(Math.PI / 2).translate(u(0.16), 0, 0));
+      turning.steel.push(alongX(cyl(0.05, 0.08, 18)).translate(u(0.16), 0, 0));
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2;
+        turning.dark.push(box(0.025, R - 0.04, 0.03).translate(0, (R - 0.04) / 2 + 0.03, 0).rotateX(a).translate(u(0.16), 0, 0));
+      }
+      // Manivelle : plateau et maneton.
+      turning.brass.push(alongX(cyl(0.13, 0.03, 24)).translate(u(0.32), 0, 0));
+      turning.steel.push(alongX(cyl(0.016, 0.06, 10)).translate(u(0.36), rc, 0));
+      // Palier extérieur.
+      fixed.dark.push(box(0.06, y, 0.1).translate(u(0.46), y / 2, z), box(0.12, 0.02, 0.22).translate(u(0.46), 0.01, z));
+      // Glissières, cylindre, socle.
+      for (const s of [-1, 1]) bar([u(0.36), y + s * 0.05, zz(0.26)], [u(0.36), y + s * 0.05, zz(0.64)], 0.01, 'chrome');
+      for (const k of [0.27, 0.63]) fixed.dark.push(box(0.05, y - 0.04, 0.03).translate(u(0.36), (y - 0.04) / 2, zz(k)));
+      fixed.brass.push(alongZ(cyl(0.1, 0.36, 28)).translate(u(0.36), y, zz(0.84)));
+      for (const k of [0.66, 1.02]) fixed.chrome.push(alongZ(cyl(0.112, 0.02, 28)).translate(u(0.36), y, zz(k)));
+      fixed.dark.push(box(0.16, y - 0.1, 0.42).translate(u(0.36), (y - 0.1) / 2, zz(0.84)));
+      fixed.dark.push(box(0.08, 0.07, 0.2).translate(u(0.36), y + 0.13, zz(0.84))); // boîte à vapeur
+      // Régulateur à boules, sur la boîte à vapeur.
+      bar([u(0.36), govBase, zz(0.84)], [u(0.36), govTop, zz(0.84)], 0.008, 'chrome');
+    } else {
+      // Moteur électrique posé au sol devant l'arbre : carter à ailettes, poulie, courroie montante.
+      const [mx, mz] = e.motor;
+      const my = 0.13;
+      fixed.dark.push(alongX(cyl(0.075, 0.2, 24)).translate(mx, my, mz), box(0.16, 0.06, 0.14).translate(mx, 0.03, mz));
+      for (let k = 0; k < 10; k++) fixed.dark.push(box(0.18, 0.012, 0.02).translate(0, 0.08, 0).rotateX((k / 10) * Math.PI * 2).translate(mx, my, mz));
+      fixed.chrome.push(alongX(cyl(0.05, 0.21, 24)).translate(mx, my, mz));
+      const px = mx + 0.12;
+      fixed.steel.push(alongX(cyl(0.012, 0.05, 10)).translate(px - 0.015, my, mz));
+      const motorPulley = new THREE.Group();
+      motorPulley.position.set(px, my, mz);
+      const mp = new THREE.Mesh(alongX(cyl(0.04, 0.02, 20)), steel);
+      const mark = new THREE.Mesh(box(0.024, 0.07, 0.014), dark);
+      motorPulley.add(mp, mark);
+      g.add(motorPulley);
+      this._motorPulley = motorPulley;
+      turning.steel.push(alongX(cyl(0.08, 0.02, 24)).translate(px, 0, 0));
+      turning.dark.push(box(0.024, 0.15, 0.014).translate(px, 0, 0));
+      const w = 0.008;
+      for (const s of [-1, 1]) {
+        const P = [y, z + s * 0.08];
+        const Q = [my, mz + s * 0.04];
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute([px - w, P[0], P[1], px + w, P[0], P[1], px - w, Q[0], Q[1], px + w, Q[0], Q[1]], 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0, 1, 2, 0, 2, 1], 2));
+        geo.setIndex([0, 2, 1, 1, 2, 3]);
+        geo.computeVertexNormals();
+        const strap = new THREE.Mesh(geo, leather);
+        g.add(strap);
+      }
+    }
+    const merge = (list, material, parent, name) => {
+      if (!list.length) return;
+      const mesh = new THREE.Mesh(mergeGeometries(list.map((x) => (x.index ? x.toNonIndexed() : x)).map((x) => (x.deleteAttribute('uv'), x))), material);
+      mesh.name = name;
+      mesh.castShadow = mesh.receiveShadow = true;
+      parent.add(mesh);
+    };
+    merge(fixed.dark, dark, g, 'machine');
+    merge(fixed.steel, steel, g, 'poulies de tête');
+    merge(fixed.chrome, chrome, g, 'arbre');
+    merge(fixed.brass, brass, g, 'cylindre');
+    // Le rotor est centré sur l'axe : ses pièces ont été posées en (x, 0, 0) relatif.
+    merge(turning.dark, dark, rotor, 'volant');
+    merge(turning.steel, steel, rotor, 'poulies');
+    merge(turning.brass, brass, rotor, 'manivelle');
+    g.add(rotor);
+    if (!steam) {
+      this.engine = { e, rotor, motorPulley: this._motorPulley };
+      return;
+    }
+    // Bielle et crosse (avec sa tige de piston), posées à chaque image.
+    const rod = new THREE.Mesh(cyl(0.018, 1, 10), steel);
+    rod.castShadow = true;
+    const slider = new THREE.Group();
+    const head = new THREE.Mesh(box(0.06, 0.08, 0.07), chrome);
+    const stem = new THREE.Mesh(alongZ(cyl(0.012, 0.4, 10)).translate(0, 0, dir * 0.2), chrome);
+    slider.add(head, stem);
+    g.add(rod, slider);
+    // Régulateur : deux bras pesants qui tournent, plus ou moins écartés.
+    const spinner = new THREE.Group();
+    spinner.position.set(u(0.36), govTop, zz(0.84));
+    const arms = [1, -1].map((s) => {
+      const pivot = new THREE.Group();
+      const arm = new THREE.Mesh(cyl(0.006, 0.16, 8).translate(0, -0.08, 0), chrome);
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.032, 18, 12), brass);
+      ball.position.y = -0.16;
+      ball.castShadow = true;
+      pivot.add(arm, ball);
+      pivot.userData.side = s;
+      spinner.add(pivot);
+      return pivot;
+    });
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.02, 12, 8), brass);
+    spinner.add(cap);
+    g.add(spinner);
+    this.engine = { e, rotor, rod, slider, spinner, arms, rc, L: 0.42, x: u(0.36) };
+    this.updateEngine(0); // pose de repos
+  }
+
+  updateEngine(t) {
+    const en = this.engine;
+    const { e } = en;
+    const o = this.trunks.options;
+    const theta = (2 * Math.PI * o.shaftSpin * t) % (2 * Math.PI);
+    en.rotor.rotation.x = theta;
+    if (en.motorPulley) en.motorPulley.rotation.x = 2 * theta;
+    if (!en.rod) return;
+    // Maneton après rotation de θ autour de x : (0, rc cos θ, rc sin θ) autour de l'axe.
+    const py = e.y + en.rc * Math.cos(theta);
+    const pz = e.z + en.rc * Math.sin(theta);
+    const cz = pz + e.dir * Math.sqrt(en.L * en.L - (py - e.y) ** 2);
+    en.slider.position.set(en.x, e.y, cz);
+    const a = new THREE.Vector3(en.x, py, pz);
+    const b = new THREE.Vector3(en.x, e.y, cz);
+    en.rod.position.copy(a).add(b).multiplyScalar(0.5);
+    en.rod.scale.set(1, a.distanceTo(b), 1);
+    en.rod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.sub(a).normalize());
+    // Régulateur : il tourne, ses boules s'affaissent quand la machine peine.
+    en.spinner.rotation.y = (2 * Math.PI * 1.5 * t) % (2 * Math.PI);
+    const phi = 0.95 - 0.4 * Math.tanh(engineLoad(this.trunks, t) / 4);
+    for (const arm of en.arms) arm.rotation.z = arm.userData.side * phi;
   }
 
   update(t) {
     const tr = this.trunks;
     // La bande défile : la texture glisse à la vitesse des tapis.
     this.beltTex.offset.x = -(((tr.options.speed * t) / BELT_PERIOD) % 1);
+    if (this.engine) this.updateEngine(t);
     for (const view of this.lines) {
       const { line, pool } = view;
       pool.begin();

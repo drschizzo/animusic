@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lineBalls, gateOpening, trunkDistance } from '../src/trunks.js';
+import { lineBalls, gateOpening, trunkDistance, engineLoad } from '../src/trunks.js';
 import { frameOf } from '../src/passes.js';
 import { stationBall } from '../src/ballistics.js';
 import { buildEnsemble } from '../src/arranger.js';
@@ -147,4 +147,16 @@ test('passes au large des colonnes ; tous les instruments en place dès le débu
   const without = buildEnsemble({ balls: marimba, bass: late });
   assert.equal(without.trunks, undefined, 'pas de réseau hors du style « billes »');
   assert.equal(deployAt(analyzeSong(without), without.instruments.findIndex((i) => i.kind === 'bass'), without.start), 0);
+});
+
+test('salle des machines : un arbre devant la rangée des départs, que les tapis ne traversent pas', () => {
+  const en = tr.engine;
+  assert.ok(en && ['steam', 'motor'].includes(en.kind));
+  assert.ok(en.z > en.z0 && en.z - en.z0 < 0.3, 'entre la rangée des départs et la tourelle');
+  for (const l of tr.lines)
+    for (const p of l.maze.points) assert.ok(!(p[0] > en.xa - 0.1 && p[0] < en.xb + 0.1 && p[2] > en.z0 + 0.1 && p[2] < en.z + 0.2), `tapis sous l'arbre en ${p[0].toFixed(2)}, ${p[2].toFixed(2)}`);
+  // Le régulateur sent la charge : nulle avant la première bille lâchée, forte juste après une rafale.
+  const gates = tr.gates;
+  assert.equal(engineLoad(tr, gates[0] - 0.01), 0);
+  assert.ok(engineLoad(tr, gates[5] + 0.01) > 1);
 });

@@ -17,7 +17,7 @@ import { frameOf } from './passes.js';
 
 export const TRUNK_DEFAULTS = {
   speed: 2, // vitesse des tapis (m/s)
-  riserSpeed: 5, // vitesse des billes dans les colonnes de verre des estrades
+  riserSpeed: 1.2, // vitesse de montée dans les colonnes de verre des estrades (vis d'Archimède)
   radius: 0.058, // demi-largeur du bâti d'un tapis
   beltWidth: 0.1, // largeur de la bande
   beltY: 0.13, // hauteur du dessus de la bande
@@ -30,6 +30,9 @@ export const TRUNK_DEFAULTS = {
   margin: 0.11, // distance minimale de l'axe d'un tuyau à un obstacle
   manifold: 2.6, // les lignes partent alignées à cette distance derrière l'axe de la tourelle
   pitch: 2, // écart entre deux départs, en cases
+  shaftAhead: 0.2, // l'arbre de transmission court à cette distance devant la rangée des départs
+  shaftY: 0.4, // hauteur de l'arbre
+  shaftSpin: 2, // tours par seconde de l'arbre et du volant
   lead: 4, // longueur (en cases) du tronçon droit de départ (distributeur, cabine de peinture)
   turnCost: 14, // coût d'un coude, en cases : de longs tronçons droits, peu de coudes
   bundle: 0.3, // rabais d'une case le long d'un tuyau déjà posé : les lignes se rangent en faisceaux
@@ -288,6 +291,8 @@ function layout(ensemble, order, sequence, o) {
   };
   // Départs : alignés derrière la tourelle, dans l'ordre des arrivées (de gauche à droite).
   const j0 = -Math.round(o.manifold / o.cell);
+  const hubs = order.map((_, k) => Math.round((k - (order.length - 1) / 2) * o.pitch));
+  const engine = hubs.length ? placeEngine(grid, Math.min(...hubs), Math.max(...hubs), j0, o) : null;
   const stubs = new Map();
   order.forEach((l, k) => {
     const i = Math.round((k - (order.length - 1) / 2) * o.pitch);
@@ -312,7 +317,66 @@ function layout(ensemble, order, sequence, o) {
     length += rest.length;
     lines.push({ ...l, port: l, cells: [...stub.slice(0, -1), ...rest], arrived: ok });
   }
-  return { lines, grid, pipes, score: arrived * 1e6 - length };
+  return { lines, grid, pipes, engine, score: arrived * 1e6 - length };
+}
+
+/**
+ * Salle des machines : un arbre de transmission court le long de la rangée des départs,
+ * côté tourelle, et entraîne par courroie la tête de chaque tapis ; à l'un de ses bouts,
+ * une machine à vapeur (volant, bielle, cylindre, régulateur à boules) le fait tourner.
+ * Les cases occupées sont réservées avant le tracé des lignes.
+ * @returns null si la place manque (les tapis tournent alors sans arbre visible)
+ */
+function placeEngine(grid, iMin, iMax, j0, o) {
+  const cell = o.cell;
+  const cells = (x0, x1, z0, z1) => {
+    const out = [];
+    for (let i = Math.floor(x0 / cell); i <= Math.ceil(x1 / cell); i++)
+      for (let j = Math.floor(z0 / cell); j <= Math.ceil(z1 / cell); j++) if (Math.abs(i * cell - (x0 + x1) / 2) <= (x1 - x0) / 2 + cell / 2 && Math.abs(j * cell - (z0 + z1) / 2) <= (z1 - z0) / 2 + cell / 2) out.push([i, j]);
+    return out;
+  };
+  const free = (list) => list.every(([i, j]) => grid.inside(i, j) && !grid.blocked[grid.index(i, j)]);
+  const z0 = j0 * cell;
+  const z = z0 + o.shaftAhead;
+  // L'arbre couvre juste la rangée (les poulies sont du côté +x de chaque tapis) ; ses chevalets se
+  // logent entre deux départs, au bout de la rangée.
+  const xa = iMin * cell - 0.06;
+  const xb = iMax * cell + 0.12;
+  const wide = iMax - iMin >= 2 * o.pitch;
+  const supports = wide ? [(iMin + o.pitch / 2) * cell, (iMax - o.pitch / 2) * cell] : [xa - 0.05, xb + 0.05];
+  // Bande de l'arbre (entre la rangée des départs et la tourelle) et ses deux chevalets.
+  const strip = [];
+  for (let i = wide ? iMin : iMin - 1; i <= iMax + (wide ? 0 : 1); i++) for (let j = j0 + 1; j <= j0 + 2; j++) strip.push([i, j]);
+  if (!free(strip)) {
+    o.debug?.('arbre de transmission : pas de place');
+    return null;
+  }
+  // Machine à vapeur complète si la place le permet.
+  const options = [
+    ...[1, -1].flatMap((side) => [1, -1].map((dir) => ({ kind: 'steam', side, dir, u: [0.05, 0.55], z: [-0.4, 1.1] }))),
+  ];
+  for (const { kind, side, dir, u, z: zr } of options) {
+    const xe = side > 0 ? xb : xa;
+    const us = u.map((k) => xe + side * k);
+    const zs = zr.map((k) => z + dir * k);
+    const room = cells(Math.min(...us), Math.max(...us), Math.min(...zs), Math.max(...zs));
+    if (!free(room)) {
+      o.debug?.(`machine : pas de place (${kind}, côté ${side}, sens ${dir})`);
+      continue;
+    }
+    for (const [i, j] of [...strip, ...room]) grid.blocked[grid.index(i, j)] = 1;
+    return { kind, y: o.shaftY, z, z0, xa, xb, xe, side, dir, supports };
+  }
+  // Sinon un moteur électrique, posé devant l'arbre (côté tourelle) et relié à lui par une courroie.
+  for (const di of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+    const i = Math.round((iMin + iMax) / 2) + di;
+    const room = [[i, j0 + 3], [i + 1, j0 + 3]];
+    if (i + 1 > iMax || !free(room)) continue;
+    for (const [a, b] of [...strip, ...room]) grid.blocked[grid.index(a, b)] = 1;
+    return { kind: 'motor', y: o.shaftY, z, z0, xa, xb, xe: xb, side: 1, dir: 1, supports, motor: [(i + 0.5) * cell, (j0 + 3) * cell] };
+  }
+  o.debug?.('moteur : pas de place');
+  return null;
 }
 
 /**
@@ -344,7 +408,7 @@ export function planTrunks(ensemble, options = {}) {
     if (next.every((l, k) => l === sequence[k])) break; // même ordre : rien de nouveau à essayer
     sequence = next;
   }
-  const { lines, grid, pipes } = best;
+  const { lines, grid, pipes, engine } = best;
   for (const l of lines) {
     const m = trace(l.cells, grid, o);
     // Alimentation : de la tourelle vers l'instrument ; retour : dans l'autre sens. La bande
@@ -366,7 +430,7 @@ export function planTrunks(ensemble, options = {}) {
   /** Vrai si un tuyau du réseau passe au point (x, z), à `r` près. */
   const occupied = (x, z, r = 0) => lines.some((l) => l.maze.points.some((p) => Math.hypot(p[0] - x, p[2] - z) <= r + 0.12));
   void pipes;
-  return { options: o, lines, dropped: all.length - lines.length, arrived: lines.filter((l) => l.arrived).length, segments, occupied };
+  return { options: o, lines, engine, dropped: all.length - lines.length, arrived: lines.filter((l) => l.arrived).length, segments, occupied };
 }
 
 /**
@@ -405,7 +469,20 @@ export function scheduleTrunks(trunks) {
       line.after = line.riserSpan + line.hidden + line.mazeSpan;
     }
   }
+  trunks.gates = trunks.lines.flatMap((l) => (l.kind === 'feed' ? l.balls.map((b) => b.gate) : [])).sort((a, b) => a - b);
   return trunks;
+}
+
+/**
+ * Charge de la machine à l'instant t : somme des billes lâchées récemment par les portes,
+ * chacune comptant de moins en moins. Le régulateur à boules s'affaisse quand elle monte,
+ * puis se relève quand la machine reprend son souffle.
+ */
+export function engineLoad(trunks, t) {
+  const g = trunks.gates ?? [];
+  let load = 0;
+  for (let i = upperBound(g, t) - 1; i >= 0 && t - g[i] < 3; i--) load += Math.exp(-(t - g[i]) / 0.6);
+  return load;
 }
 
 /**

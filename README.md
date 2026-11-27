@@ -92,6 +92,16 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   position de chacune ne dépend que de l'instant et de celle de devant, donc tout reste calculable à n'importe
   quel instant. Sur le tapis, les billes arrivent dans l'ordre des notes : un passage dense se lit d'avance, en
   paquet serré. Au retour, la bille, peinte, tombe du collecteur sur un tapis qui la ramène à la tourelle.
+- **D'où vient l'énergie** : rien ne monte ni ne roule tout seul.
+  - Dans chaque colonne d'alimentation, une **vis d'Archimède sans âme** (une spirale d'acier qui tourne autour de la
+    bille) la monte de l'estrade jusqu'à la rampe, à 1,2 m/s ; son moteur est au pied de la colonne.
+  - Les tapis sont entraînés par un **arbre de transmission** couché entre la rangée des départs et la tourelle :
+    une poulie et une courroie de cuir par tapis, jusqu'à son rouleau de tête.
+  - Au bout de l'arbre, une **machine à vapeur** : volant à six bras, manivelle, bielle, crosse sur ses glissières,
+    cylindre de laiton et **régulateur à boules** (Watt). Ses boules tournent et s'affaissent quand la machine peine
+    (beaucoup de billes lâchées par les portes à la fois), puis se relèvent : la charge se calcule d'après les
+    instants de lâcher. Sans place pour la machine (marimba étroit, beaucoup de lignes), un moteur électrique à
+    ailettes, posé devant l'arbre, l'entraîne par courroie.
 - **Échanges de billes** (`src/passes.js`) : par moments (le début d'une section sur deux), un **canon de passe**
   dressé derrière un instrument tire la bille d'une note de l'instrument situé derrière lui, d'un long lob ; à
   défaut de voisin bien placé, c'est le canon central de la tourelle du marimba qui tire, à travers toute la scène.

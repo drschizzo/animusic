@@ -5,6 +5,9 @@ import { mat, fx } from './materials.js';
 import { lathe, rod, V } from './parts.js';
 import { upperBound } from './util.js';
 import { sweepGeometry } from './trunksView.js';
+import { TRUNK_DEFAULTS } from './trunks.js';
+
+const SCREW_PITCH = 0.1; // pas de la vis d'Archimède des colonnes d'alimentation
 
 const UP = new THREE.Vector3(0, 1, 0);
 const Z = new THREE.Vector3(0, 0, 1);
@@ -81,6 +84,29 @@ export class BallRowView {
         const plate = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.075, R + 0.085, 0.012, 24), dark);
         plate.position.set(foot[0], 0.006, foot[2]);
         group.add(column, flange, plate);
+      }
+      // Vis sans âme dans la colonne d'alimentation : une spirale d'acier tourne autour de la
+      // bille et la pousse vers le haut, à la vitesse de montée du réseau.
+      const feed = row.risers.feed;
+      const [fx0, , fz0] = feed[0];
+      const height = Math.max(...feed.filter((p) => Math.hypot(p[0] - fx0, p[2] - fz0) < 1e-6).map((p) => p[1])) - 0.02;
+      if (height > 0.1) {
+        const pitch = SCREW_PITCH;
+        const turns = height / pitch;
+        const helix = Array.from({ length: Math.ceil(turns * 20) + 1 }, (_, i) => {
+          const a = (i / 20) * Math.PI * 2;
+          return [Math.cos(a) * (R - 0.014), 0.02 + (a / (Math.PI * 2)) * pitch, Math.sin(a) * (R - 0.014)];
+        }).filter((p) => p[1] <= 0.02 + height);
+        const screw = new THREE.Mesh(sweepGeometry(helix, 0.0055, 6), chrome);
+        screw.name = 'vis';
+        screw.position.set(fx0, 0, fz0);
+        screw.castShadow = true;
+        group.add(screw);
+        // Moteur de la vis, au pied de la colonne.
+        const motor = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.06, 20), dark);
+        motor.position.set(fx0, 0.045, fz0);
+        group.add(motor);
+        this.screw = screw;
       }
     }
     for (const [x, y, z] of row.posts) {
@@ -233,6 +259,7 @@ export class BallRowView {
 
   update(t) {
     const row = this.row;
+    if (this.screw) this.screw.rotation.y = ((2 * Math.PI * TRUNK_DEFAULTS.riserSpeed * t) / SCREW_PITCH) % (2 * Math.PI);
     if (this.dishes) this.updateCups(t);
     this.pool.drawStations(t, row.shots, row, this.trackColors);
     row.stations.forEach((st, i) => {
