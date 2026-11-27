@@ -87,10 +87,10 @@ export class BallPool {
     this.k = 0;
   }
 
-  /** Bille au point p (tableau), de vitesse v (m/s), dans la couleur donnée. */
-  add(p, v, color) {
+  /** Bille au point p (tableau), de vitesse v (m/s), dans la couleur donnée (et à l'échelle donnée). */
+  add(p, v, color, scale = 1) {
     if (this.n >= this.balls.instanceMatrix.count) return;
-    this.balls.setMatrixAt(this.n, this._m.makeTranslation(p[0], p[1], p[2]));
+    this.balls.setMatrixAt(this.n, scale === 1 ? this._m.makeTranslation(p[0], p[1], p[2]) : this._m.makeScale(scale, scale, scale).setPosition(p[0], p[1], p[2]));
     this.balls.setColorAt(this.n, color);
     this.velocity.setXYZ(this.n, v[0], v[1], v[2]);
     this.n++;

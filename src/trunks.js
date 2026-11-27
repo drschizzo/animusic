@@ -26,6 +26,13 @@ export const TRUNK_DEFAULTS = {
   spacing: 2.2, // écart d'axe en axe de deux billes dans la file, en rayons
   paintAt: 0.36, // abscisse de la cabine de peinture le long d'un tapis d'alimentation
   paintLength: 0.26,
+  grindAt: 0.17, // abscisse de la calibreuse (avant la peinture)
+  rawScale: 1.15, // une bille brute est un peu trop grosse : la calibreuse la ramène à la bonne taille
+  tankAhead: 0.07, // le bac de décapage est devant le bout du tapis de retour, sous l'arbre
+  liftZ: 0.12, // colonne de la vis qui sort les billes du bac (en avant du bout du tapis)
+  liftTop: 0.78, // haut de cette colonne
+  stackBase: 0.26, // bas de la colonne de réserve, au-dessus du distributeur
+  stackTop: 0.66,
   cell: 0.16, // pas de la grille au sol : deux tapis voisins sont à 16 cm d'axe en axe
   margin: 0.11, // distance minimale de l'axe d'un tuyau à un obstacle
   manifold: 2.6, // les lignes partent alignées à cette distance derrière l'axe de la tourelle
@@ -457,6 +464,7 @@ export function scheduleTrunks(trunks) {
     line.mazeSpan = line.maze.length / o.speed;
     line.gateAt = Math.max(0.2, line.maze.length - o.gateSetback);
     line.paintAt = Math.min(o.paintAt, line.gateAt / 2);
+    line.grindAt = Math.min(o.grindAt, line.paintAt / 2);
     if (line.kind === 'feed') {
       for (const b of balls) {
         b.gate = b.time - line.riserSpan - line.hidden;
@@ -469,8 +477,95 @@ export function scheduleTrunks(trunks) {
       line.after = line.riserSpan + line.hidden + line.mazeSpan;
     }
   }
+  recycle(trunks);
   trunks.gates = trunks.lines.flatMap((l) => (l.kind === 'feed' ? l.balls.map((b) => b.gate) : [])).sort((a, b) => a - b);
   return trunks;
+}
+
+/** Pied d'une ligne à la rangée des départs (début d'une alimentation, bout d'un retour). */
+export const hubOf = (line) => (line.kind === 'feed' ? line.maze.pointAt(0) : line.maze.pointAt(line.maze.length));
+
+/**
+ * Recyclage : au bout d'un tapis de retour, la bille tombe dans un bac de décapage, y
+ * perd sa couleur en coulant, puis une vis la sort du bac et une goulotte de verre la
+ * porte jusqu'à la colonne de réserve du distributeur voisin (l'alimentation du même
+ * instrument). La réserve se lit dans la colonne : billes rentrées moins billes servies,
+ * plus un stock de départ juste suffisant pour ne jamais manquer.
+ */
+function recycle(trunks) {
+  const o = trunks.options;
+  for (const back of trunks.lines) {
+    if (back.kind !== 'back') continue;
+    const [xr, , z0] = hubOf(back);
+    const feed = trunks.lines.find((l) => l.kind === 'feed' && l.instrument === back.instrument && Math.abs(hubOf(l)[0] - xr) < 0.33 && Math.abs(hubOf(l)[2] - z0) < 0.01);
+    if (!feed) continue;
+    const r = back.ballRadius;
+    const xf = hubOf(feed)[0];
+    // Images clés du trajet : [position, durée depuis la précédente].
+    const keys = [
+      [[xr, o.beltY + r, z0], 0],
+      [[xr, 0.1, z0 + o.tankAhead - 0.01], 0.12], // plongeon
+      [[xr, 0.008 + r, z0 + o.tankAhead], 0.45], // elle coule en perdant sa couleur
+      [[xr, 0.008 + r, z0 + o.liftZ], 0.1],
+      [[xr, o.liftTop, z0 + o.liftZ], (o.liftTop - r) / o.riserSpeed], // vis
+      [[xf, o.liftTop - 0.06, z0], Math.hypot(xf - xr, o.liftZ) / 1.2 + 0.05], // goulotte
+      [[xf, o.stackTop, z0], 0.08],
+    ];
+    let acc = 0;
+    back.recycle = keys.map(([p, d]) => ({ p, t: (acc += d) }));
+    back.recycleSpan = acc;
+    back.decap = [keys[1][1], keys[1][1] + keys[2][1]];
+    back.pair = feed;
+    feed.pair = back;
+    back.after += acc;
+    const tail = back.riserSpan + back.hidden + back.mazeSpan;
+    // Réserve : arrivées et départs triés, stock de départ.
+    const arrivals = back.balls.map((b) => b.time + tail + acc).sort((a, b) => a - b);
+    const departures = feed.balls.map((b) => b.born);
+    let need = 0;
+    for (let i = 0, j = 0; i < departures.length; i++) {
+      while (j < arrivals.length && arrivals[j] <= departures[i]) j++;
+      need = Math.max(need, i + 1 - j);
+    }
+    feed.stock = { arrivals, departures, initial: need + 2, slots: Math.max(1, Math.floor((o.stackTop - o.stackBase) / (2 * o.rawScale * feed.ballRadius))) };
+  }
+}
+
+/** Nombre de billes dans la colonne de réserve d'une alimentation à l'instant t. */
+export function stockAt(line, t) {
+  const s = line.stock;
+  return s ? s.initial + upperBound(s.arrivals, t) - upperBound(s.departures, t) : 0;
+}
+
+/**
+ * Billes visibles de la colonne de réserve (brutes, empilées) : emit(position). Quand le
+ * distributeur en prend une par le bas, la pile descend d'un cran en un dixième de seconde.
+ */
+export function stackBalls(trunks, line, t, emit) {
+  const s = line.stock;
+  if (!s) return;
+  const o = trunks.options;
+  const [x, , z] = hubOf(line);
+  const d = 2 * o.rawScale * line.ballRadius;
+  const n = Math.min(s.slots, stockAt(line, t));
+  const k = upperBound(s.departures, t) - 1;
+  const drop = k >= 0 ? Math.max(0, 1 - (t - s.departures[k]) / 0.1) * d : 0;
+  const p = [x, 0, z];
+  for (let i = 0; i < n; i++) {
+    p[1] = o.stackBase + d / 2 + i * d + drop;
+    emit(p);
+  }
+}
+
+/**
+ * Pression du réservoir d'air (0..1) qui alimente les canons de la tourelle : chaque tir
+ * en prend un peu, le compresseur la refait.
+ */
+export function airPressure(trunks, t) {
+  const shots = trunks.shotTimes ?? [];
+  let drawn = 0;
+  for (let i = upperBound(shots, t) - 1; i >= 0 && t - shots[i] < 6; i--) drawn += 0.07 * Math.exp(-(t - shots[i]) / 1.5);
+  return Math.max(0.15, 1 - drawn);
 }
 
 /**
@@ -487,7 +582,8 @@ export function engineLoad(trunks, t) {
 
 /**
  * Billes d'une ligne à l'instant t. Pour chacune, appelle
- * `emit(ball, position, vitesse, peinte, surTapis)`
+ * `emit(ball, position, vitesse, peinture, surTapis, échelle)` (peinture : 1 aux couleurs de la
+ * piste, 0 brute ; échelle : taille relative, plus grosse avant la calibreuse)
  * (les tableaux sont réutilisés d'un appel à l'autre). Sur un tapis d'alimentation, une
  * bille avance avec la bande tant que rien ne l'arrête ; arrêtée par la porte ou par la
  * bille de devant, elle glisse sur la bande (tapis d'accumulation) : la file se resserre
@@ -536,14 +632,14 @@ export function lineBalls(trunks, line, t, emit) {
       prevMoving = moving;
       if (x <= line.maze.length) {
         onBelt(x, moving);
-        emit(b, p, vel, x >= line.paintAt, true);
+        emit(b, p, vel, x >= line.paintAt ? 1 : 0, true, x < line.grindAt ? o.rawScale : 1);
         continue;
       }
       // Passée la porte : sous le sol, puis dans la colonne de son instrument.
       const left = b.time - t;
       if (line.riser && left <= line.riserSpan) {
         inRiser(line.riser.length - o.riserSpeed * left, 1);
-        emit(b, p, vel, true, false);
+        emit(b, p, vel, 1, false, 1);
       }
     }
     return;
@@ -555,13 +651,31 @@ export function lineBalls(trunks, line, t, emit) {
     if (since < 0) break;
     if (line.riser && since <= line.riserSpan) {
       inRiser(o.riserSpeed * since, 1);
-      emit(b, p, vel, true, false);
+      emit(b, p, vel, 1, false, 1);
       continue;
     }
     const x = v * (since - line.riserSpan - line.hidden);
-    if (x < 0 || x > line.maze.length) continue;
-    onBelt(x, true);
-    emit(b, p, vel, true, true);
+    if (x < 0) continue;
+    if (x <= line.maze.length) {
+      onBelt(x, true);
+      emit(b, p, vel, 1, true, 1);
+      continue;
+    }
+    // Recyclage : bac de décapage, vis, goulotte (images clés, à vitesse constante entre deux).
+    if (!line.recycle) continue;
+    const u = since - line.riserSpan - line.hidden - line.mazeSpan;
+    const keys = line.recycle;
+    if (u >= keys[keys.length - 1].t) continue;
+    let k = 1;
+    while (keys[k].t < u) k++;
+    const [A, B] = [keys[k - 1], keys[k]];
+    const f = (u - A.t) / (B.t - A.t);
+    for (let c = 0; c < 3; c++) {
+      p[c] = A.p[c] + (B.p[c] - A.p[c]) * f;
+      vel[c] = (B.p[c] - A.p[c]) / (B.t - A.t);
+    }
+    const [d0, d1] = line.decap;
+    emit(b, p, vel, Math.min(1, Math.max(0, (d1 - u) / (d1 - d0))), false, 1);
   }
 }
 

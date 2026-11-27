@@ -92,6 +92,13 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   position de chacune ne dépend que de l'instant et de celle de devant, donc tout reste calculable à n'importe
   quel instant. Sur le tapis, les billes arrivent dans l'ordre des notes : un passage dense se lit d'avance, en
   paquet serré. Au retour, la bille, peinte, tombe du collecteur sur un tapis qui la ramène à la tourelle.
+- **Calibrage et recyclage** : une bille brute sort du distributeur un peu trop grosse ; juste après, une
+  **calibreuse** (meule qui tourne au-dessus de la bande, étincelles à chaque passage) la ramène à la taille de son
+  instrument, puis la cabine la peint. Au bout d'un tapis de retour, la bille plonge dans un **bac de décapage**
+  (bain vert, bulles) où elle perd sa couleur en coulant ; une vis la sort du bac et une **goulotte** de verre la
+  porte en haut de la **colonne de réserve** du distributeur voisin (l'alimentation du même instrument). Dans cette
+  colonne de verre, la pile de billes brutes se lit comme un niveau : billes rentrées moins billes servies, plus un
+  stock de départ juste suffisant pour ne jamais manquer.
 - **D'où vient l'énergie** : rien ne monte ni ne roule tout seul.
   - Dans chaque colonne d'alimentation, une **vis d'Archimède sans âme** (une spirale d'acier qui tourne autour de la
     bille) la monte de l'estrade jusqu'à la rampe, à 1,2 m/s ; son moteur est au pied de la colonne.
@@ -102,6 +109,8 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
     (beaucoup de billes lâchées par les portes à la fois), puis se relèvent : la charge se calcule d'après les
     instants de lâcher. Sans place pour la machine (marimba étroit, beaucoup de lignes), un moteur électrique à
     ailettes, posé devant l'arbre, l'entraîne par courroie.
+  - À côté de la machine, le **réservoir d'air** des canons de la tourelle : son manomètre, tourné vers le public,
+    baisse à chaque tir et remonte quand le compresseur a rattrapé.
 - **Échanges de billes** (`src/passes.js`) : par moments (le début d'une section sur deux), un **canon de passe**
   dressé derrière un instrument tire la bille d'une note de l'instrument situé derrière lui, d'un long lob ; à
   défaut de voisin bien placé, c'est le canon central de la tourelle du marimba qui tire, à travers toute la scène.

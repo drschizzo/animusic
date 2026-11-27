@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { lineBalls, gateOpening, lastPainted, engineLoad } from './trunks.js';
+import { lineBalls, gateOpening, lastPainted, engineLoad, stackBalls, airPressure } from './trunks.js';
 import { BallPool } from './ballPool.js';
 import { mat } from './materials.js';
 import { lowerBound, upperBound } from './util.js';
@@ -38,6 +38,18 @@ export function sweepGeometry(points, radius, sides = 12) {
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
+}
+
+/** Polyligne à coude adouci (un point intermédiaire de part et d'autre du coude). */
+function fillet3([a, b, c]) {
+  const lerp = (p, q, f) => p.map((v, i) => v + (q[i] - v) * f);
+  const ab = Math.hypot(...b.map((v, i) => v - a[i]));
+  const bc = Math.hypot(...c.map((v, i) => v - b[i]));
+  const k = Math.min(0.05, ab / 3, bc / 3);
+  const p0 = lerp(b, a, k / ab);
+  const p2 = lerp(b, c, k / bc);
+  const mid = lerp(lerp(p0, b, 0.5), lerp(b, p2, 0.5), 0.5);
+  return [a, p0, mid, p2, c];
 }
 
 /** Normale horizontale (à gauche du sens de marche) en chaque point d'une polyligne au sol. */
@@ -115,8 +127,18 @@ function beltTexture() {
   return t;
 }
 
+const SPARKS = 14; // étincelles par passage sous une meule
+const SPARK_COLOR = new THREE.Color(4, 1.6, 0.35);
+
+/** Pseudo-aléatoire déterministe (0..1). */
+const hash = (a, b) => {
+  const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+};
+
 const BELT_PERIOD = 0.12; // longueur de bande couverte par la texture (deux chevrons)
 const RAW = new THREE.Color(0.3, 0.31, 0.34); // bille brute, pas encore peinte
+const ZERO = [0, 0, 0];
 
 /** Pièce posée à l'abscisse s d'une ligne : repère (x = travers, y = haut, z = sens de marche). */
 function frameAt(path, s, y = 0) {
@@ -155,7 +177,7 @@ export class TrunksView {
     const hoodLen = 0.14;
     const hoodH = 0.12;
     /** Capot en tunnel au-dessus de la bande, ouvert dans le sens de marche. */
-    const hood = (path, s, { feeder = false } = {}) => {
+    const hood = (path, s, { feeder = false, stack = 0 } = {}) => {
       const m = frameAt(path, s);
       const wall = 0.012;
       put('dark', box(wall, hoodH, hoodLen, W + 0.002, top + hoodH / 2 - 0.02, 0), m);
@@ -163,12 +185,23 @@ export class TrunksView {
       put('dark', box(2 * W + 0.016, 0.014, hoodLen + 0.01, 0, top + hoodH - 0.02, 0), m);
       put('chrome', box(2 * W + 0.02, 0.006, 0.01, 0, top + hoodH - 0.012, hoodLen / 2 + 0.005), m);
       put('chrome', box(2 * W + 0.02, 0.006, 0.01, 0, top + hoodH - 0.012, -hoodLen / 2 - 0.005), m);
-      if (feeder) {
+      if (stack) {
+        // Colonne de réserve en verre : on y voit la pile de billes brutes qui attendent.
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(stack, stack, o.stackTop + 0.03 - (top + hoodH - 0.02), 18, 1, true), glassMat);
+        col.applyMatrix4(m.clone().multiply(new THREE.Matrix4().makeTranslation(0, (o.stackTop + 0.03 + top + hoodH - 0.02) / 2, 0)));
+        col.renderOrder = 2;
+        col.name = 'colonne de réserve';
+        g.add(col);
+        put('chrome', new THREE.TorusGeometry(stack + 0.004, 0.006, 6, 20).rotateX(Math.PI / 2).translate(0, o.stackTop + 0.03, 0), m);
+      } else if (feeder) {
         // Colonne d'arrivée des billes brutes, coiffée d'un entonnoir.
         put('steel', new THREE.CylinderGeometry(0.028, 0.028, 0.34, 14).translate(0, top + hoodH + 0.16, 0), m);
         put('chrome', new THREE.CylinderGeometry(0.07, 0.03, 0.08, 18, 1, true).translate(0, top + hoodH + 0.37, 0), m);
       }
     };
+    const glassMat = mat.glass();
+    this.screws = [];
+    this.grinders = [];
     this.lines = trunks.lines.map((line) => {
       const path = line.maze;
       const pts = path.points;
@@ -184,8 +217,27 @@ export class TrunksView {
       for (const s of [0, path.length]) put('steel', new THREE.CylinderGeometry(0.022, 0.022, 2 * W - 0.004, 16).rotateZ(Math.PI / 2).translate(0, top - 0.022, 0), frameAt(path, s));
       const view = { line, path };
       if (line.kind === 'feed') {
-        hood(path, 0, { feeder: true });
+        hood(path, 0, { feeder: true, stack: line.stock ? line.ballRadius * o.rawScale + 0.012 : 0 });
         hood(path, path.length + 0.02);
+        // Calibreuse : une meule au-dessus de la bande ramène chaque bille brute à la bonne taille.
+        {
+          const m = frameAt(path, line.grindAt);
+          const r = line.ballRadius;
+          // Flasques basses de part et d'autre, carter en demi-cylindre au-dessus de la meule : on la voit tourner.
+          const axis = top + 2 * r + 0.052;
+          for (const side of [1, -1]) put('dark', box(0.012, axis - top + 0.02, 0.16, side * (W + 0.006), (axis + top) / 2 - 0.02, 0), m);
+          put('dark', new THREE.CylinderGeometry(0.068, 0.068, 2 * W + 0.02, 24, 1, true, Math.PI / 2, Math.PI).rotateZ(Math.PI / 2).translate(0, axis, 0), m);
+          put('chrome', new THREE.CylinderGeometry(0.008, 0.008, 2 * W + 0.03, 8).rotateZ(Math.PI / 2).translate(0, axis, 0), m);
+          put('steel', new THREE.CylinderGeometry(0.03, 0.03, 0.05, 14).rotateZ(Math.PI / 2).translate(W + 0.04, top + 2 * r + 0.055, 0), m); // moteur de la meule
+          const wheel = new THREE.Group();
+          wheel.applyMatrix4(m.clone().multiply(new THREE.Matrix4().makeTranslation(0, top + 2 * r + 0.052, 0)));
+          const stone = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 24).rotateZ(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x8a8478, roughness: 0.95 }));
+          const notch = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.012, 0.03).translate(0, 0.045, 0), mat.gunmetal());
+          stone.castShadow = true;
+          wheel.add(stone, notch);
+          g.add(wheel);
+          this.grinders.push({ line, wheel, frame: m, contact: [0, top + 2 * r, 0] });
+        }
         // Cabine de peinture : parois à hublot lumineux, toit portant les pots des couleurs de la ligne.
         const m = frameAt(path, line.paintAt);
         const L = o.paintLength;
@@ -229,7 +281,8 @@ export class TrunksView {
         view.hinge = hinge;
       } else {
         hood(path, 0);
-        hood(path, path.length + 0.02);
+        if (line.recycle) this.buildRecycler(line, put, glassMat);
+        else hood(path, path.length + 0.02);
       }
       // Réservoir : le plus grand nombre de billes en vie à la fois sur la ligne.
       const life = line.before + line.after;
@@ -238,7 +291,7 @@ export class TrunksView {
         while (line.balls[i].time - line.balls[j].time > life) j++;
         most = Math.max(most, i - j + 1);
       }
-      view.pool = new BallPool(g, line.ballRadius, most + 2);
+      view.pool = new BallPool(g, line.ballRadius, most + 2 + (line.stock?.slots ?? 0));
       view.pool.trails.visible = false; // pas de traînée sur un tapis
       return view;
     });
@@ -262,7 +315,69 @@ export class TrunksView {
     merged(parts.chrome, mat.chrome(), 'garnitures');
     merged(parts.steel, mat.steel(), 'rouleaux');
     this.pools = this.lines.map((l) => l.pool);
+    this._m = new THREE.Matrix4();
+    this._c = new THREE.Color();
+    // Étincelles des calibreuses : de petits traits lumineux lancés en arrière, à chaque bille.
+    if (this.grinders.length) {
+      const sparks = (this.sparks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.006, 0.006, 1), mat.light(0xffffff), this.grinders.length * SPARKS));
+      sparks.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.grinders.length * SPARKS * 3), 3);
+      sparks.frustumCulled = false;
+      sparks.userData.fx = true;
+      sparks.count = 0;
+      g.add(sparks);
+    }
     if (trunks.engine) this.buildEngine(trunks.engine);
+  }
+
+  /**
+   * Bout d'un tapis de retour (voir recycle, trunks.js) : bac de décapage en verre, colonne
+   * de la vis qui en sort les billes, goulotte vers la colonne de réserve du distributeur.
+   */
+  buildRecycler(line, put, glassMat) {
+    const o = this.trunks.options;
+    const g = this.group;
+    const keys = line.recycle.map((k) => k.p);
+    const [xr, , z0] = keys[0];
+    const zt = z0 + o.tankAhead + 0.02;
+    const r = line.ballRadius;
+    // Bac : verre, bain de décapage verdâtre, socle sombre.
+    const tank = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.12, 0.18), glassMat);
+    tank.position.set(xr, 0.065, zt);
+    tank.renderOrder = 2;
+    tank.name = 'bac de décapage';
+    g.add(tank);
+    const bath = new THREE.Mesh(new THREE.BoxGeometry(0.124, 0.085, 0.174), new THREE.MeshStandardMaterial({ color: 0x3fae7c, transparent: true, opacity: 0.38, roughness: 0.15, depthWrite: false }));
+    bath.position.set(xr, 0.0475, zt);
+    bath.renderOrder = 1;
+    g.add(bath);
+    put('dark', new THREE.BoxGeometry(0.15, 0.01, 0.2).translate(xr, 0.005, zt));
+    put('chrome', new THREE.BoxGeometry(0.136, 0.006, 0.186).translate(xr, 0.126, zt));
+    // Bulles du bain (posées à chaque image).
+    const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(0.005, 6, 4), mat.light(0x9fffd0), 6);
+    bubbles.userData.fx = true;
+    bubbles.frustumCulled = false;
+    g.add(bubbles);
+    // Colonne de la vis, du fond du bac à la goulotte.
+    const [lx, , lz] = keys[3];
+    const R = r + 0.012;
+    const lift = new THREE.Mesh(sweepGeometry([[lx, 0.01, lz], [lx, o.liftTop + 0.02, lz]], R, 14), glassMat);
+    lift.renderOrder = 2;
+    lift.name = 'colonne de la vis';
+    g.add(lift);
+    const pitch = 0.1;
+    const helix = [];
+    for (let a = 0; a / (Math.PI * 2) * pitch < o.liftTop - 0.03; a += Math.PI / 10) helix.push([Math.cos(a) * (R - 0.008), 0.02 + (a / (Math.PI * 2)) * pitch, Math.sin(a) * (R - 0.008)]);
+    const screw = new THREE.Mesh(sweepGeometry(helix, 0.004, 6), mat.chrome());
+    screw.position.set(lx, 0, lz);
+    g.add(screw);
+    this.screws.push({ screw, pitch });
+    put('dark', new THREE.CylinderGeometry(R + 0.012, R + 0.012, 0.04, 16).translate(lx, o.liftTop + 0.04, lz));
+    // Goulotte de verre jusqu'au haut de la colonne de réserve.
+    const tube = new THREE.Mesh(sweepGeometry(fillet3([[lx, o.liftTop + 0.02, lz], keys[5], [keys[6][0], keys[6][1] + 0.02, keys[6][2]]]), R, 12), glassMat);
+    tube.renderOrder = 2;
+    tube.name = 'goulotte';
+    g.add(tube);
+    (this.recyclers ??= []).push({ line, bubbles, x: xr, z: zt });
   }
 
   /**
@@ -401,6 +516,36 @@ export class TrunksView {
         g.add(strap);
       }
     }
+    // Réservoir d'air des canons de la tourelle, avec son manomètre (côté extérieur).
+    let needle = null;
+    if (steam) {
+      const tx = u(0.15);
+      const tz = zz(0.8);
+      fixed.dark.push(cyl(0.09, 0.46, 24).translate(tx, 0.3, tz), new THREE.SphereGeometry(0.09, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2).translate(tx, 0.53, tz));
+      fixed.dark.push(cyl(0.11, 0.04, 24).translate(tx, 0.02, tz));
+      fixed.chrome.push(new THREE.TorusGeometry(0.092, 0.006, 6, 28).rotateX(Math.PI / 2).translate(tx, 0.2, tz), new THREE.TorusGeometry(0.092, 0.006, 6, 28).rotateX(Math.PI / 2).translate(tx, 0.44, tz));
+      // Canalisation vers la tourelle : elle plonge dans le sol au pied du réservoir.
+      bar([tx, 0.12, tz], [tx - side * 0.0, 0.12, tz - dir * 0.14], 0.012, 'chrome');
+      bar([tx, 0.12, tz - dir * 0.14], [tx, 0, tz - dir * 0.14], 0.012, 'chrome');
+      // Manomètre : cadran clair et aiguille, tourné vers le public.
+      const gz = tz + 0.1;
+      fixed.brass.push(alongZ(cyl(0.048, 0.02, 24)).translate(tx, 0.4, gz - 0.005));
+      const face = new THREE.Mesh(new THREE.CircleGeometry(0.042, 24), new THREE.MeshStandardMaterial({ color: 0xf1ead8, roughness: 0.5, emissive: 0x2a2620 }));
+      face.position.set(tx, 0.4, gz + 0.006);
+      g.add(face);
+      for (let k = 0; k <= 8; k++) {
+        const a = -2.2 + (4.4 * k) / 8;
+        const tick = new THREE.Mesh(new THREE.BoxGeometry(0.002, 0.008, 0.002), k < 2 ? new THREE.MeshBasicMaterial({ color: 0xc0201a }) : mat.gunmetal());
+        tick.position.set(tx + Math.sin(a) * 0.034, 0.4 + Math.cos(a) * 0.034, gz + 0.007);
+        tick.rotation.z = -a;
+        g.add(tick);
+      }
+      needle = new THREE.Group();
+      needle.position.set(tx, 0.4, gz + 0.009);
+      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.036, 0.002).translate(0, 0.016, 0), new THREE.MeshBasicMaterial({ color: 0xc0201a }));
+      needle.add(hand);
+      g.add(needle);
+    }
     const merge = (list, material, parent, name) => {
       if (!list.length) return;
       const mesh = new THREE.Mesh(mergeGeometries(list.map((x) => (x.index ? x.toNonIndexed() : x)).map((x) => (x.deleteAttribute('uv'), x))), material);
@@ -446,8 +591,48 @@ export class TrunksView {
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.02, 12, 8), brass);
     spinner.add(cap);
     g.add(spinner);
-    this.engine = { e, rotor, rod, slider, spinner, arms, rc, L: 0.42, x: u(0.36) };
+    this.engine = { e, rotor, rod, slider, spinner, arms, rc, L: 0.42, x: u(0.36), needle };
     this.updateEngine(0); // pose de repos
+  }
+
+  /** Meules qui tournent, étincelles quand une bille passe dessous. */
+  updateGrinders(t) {
+    const o = this.trunks.options;
+    const sparks = this.sparks;
+    if (!sparks) return;
+    let n = 0;
+    const p = new THREE.Vector3();
+    const v = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const Z = new THREE.Vector3(0, 0, 1);
+    for (const gr of this.grinders) {
+      gr.wheel.rotation.x = -(t * 60) % (2 * Math.PI);
+      const line = gr.line;
+      const at = (b) => b.born + line.grindAt / o.speed;
+      const k = upperBound(line.balls, t, at) - 1;
+      if (k < 0) continue;
+      const age = t - at(line.balls[k]);
+      if (age > 0.3) continue;
+      for (let j = 0; j < SPARKS; j++) {
+        const h = (c) => hash(k * 31 + j, c + line.grindAt * 100);
+        const life = 0.12 + 0.18 * h(4);
+        if (age > life) continue;
+        // Lancée vers l'amont et vers le haut, puis retombe.
+        v.set((h(1) - 0.5) * 0.8, 0.6 + 1.2 * h(2), -(1.2 + 1.6 * h(3)));
+        p.set(gr.contact[0] + v.x * age, gr.contact[1] + v.y * age - 4.9 * age * age, gr.contact[2] - 0.03 + v.z * age).applyMatrix4(gr.frame);
+        v.y -= 9.8 * age;
+        v.transformDirection(gr.frame);
+        q.setFromUnitVectors(Z, v);
+        const fade = 1 - age / life;
+        this._m.compose(p, q, new THREE.Vector3(1, 1, 0.012 + 0.03 * fade));
+        sparks.setMatrixAt(n, this._m);
+        sparks.setColorAt(n, this._c.copy(SPARK_COLOR).multiplyScalar(fade));
+        n++;
+      }
+    }
+    sparks.count = n;
+    sparks.instanceMatrix.needsUpdate = true;
+    if (sparks.instanceColor) sparks.instanceColor.needsUpdate = true;
   }
 
   updateEngine(t) {
@@ -471,6 +656,8 @@ export class TrunksView {
     // Régulateur : il tourne, ses boules s'affaissent quand la machine peine.
     en.spinner.rotation.y = (2 * Math.PI * 1.5 * t) % (2 * Math.PI);
     const phi = 0.95 - 0.4 * Math.tanh(engineLoad(this.trunks, t) / 4);
+    // Manomètre : de −2,2 rad (vide) à +2,2 rad (pleine pression).
+    if (en.needle) en.needle.rotation.z = -(-2.2 + 4.4 * airPressure(this.trunks, t));
     for (const arm of en.arms) arm.rotation.z = arm.userData.side * phi;
   }
 
@@ -479,14 +666,28 @@ export class TrunksView {
     // La bande défile : la texture glisse à la vitesse des tapis.
     this.beltTex.offset.x = -(((tr.options.speed * t) / BELT_PERIOD) % 1);
     if (this.engine) this.updateEngine(t);
+    for (const { screw, pitch } of this.screws) screw.rotation.y = ((2 * Math.PI * tr.options.riserSpeed * t) / pitch) % (2 * Math.PI);
+    this.updateGrinders(t);
+    for (const rc of this.recyclers ?? []) {
+      // Bulles : chacune monte du fond à la surface, en boucle, décalée des autres.
+      for (let k = 0; k < rc.bubbles.count; k++) {
+        const f = (t * 0.7 + hash(k, rc.x)) % 1;
+        this._m.makeTranslation(rc.x + (hash(k, 1) - 0.5) * 0.09, 0.012 + f * 0.075, rc.z + (hash(k, 2) - 0.5) * 0.13);
+        rc.bubbles.setMatrixAt(k, this._m);
+      }
+      rc.bubbles.instanceMatrix.needsUpdate = true;
+    }
     for (const view of this.lines) {
       const { line, pool } = view;
       pool.begin();
       if (line.balls.length) {
         const first = lowerBound(line.balls, t - line.after, (b) => b.time);
         if (first < line.balls.length && upperBound(line.balls, t + line.before, (b) => b.time) > first)
-          lineBalls(tr, line, t, (ball, p, v, painted) => pool.add(p, v, painted ? this.trackColors[ball.track] : RAW));
+          lineBalls(tr, line, t, (ball, p, v, paint, belt, scale) =>
+            pool.add(p, v, paint >= 1 ? this.trackColors[ball.track] : paint <= 0 ? RAW : this._c.copy(RAW).lerp(this.trackColors[ball.track], paint), scale),
+          );
       }
+      if (line.stock) stackBalls(tr, line, t, (p) => pool.add(p, ZERO, RAW, tr.options.rawScale));
       pool.end();
       if (view.hinge) view.hinge.rotation.x = -1.25 * gateOpening(line, t);
       if (view.lamp) {

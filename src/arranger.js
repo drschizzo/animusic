@@ -663,6 +663,9 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
   if (style === 'balls') {
     ensemble.trunks = planTrunks(ensemble, passOptions.trunkOptions);
     ensemble.passes = planPasses(ensemble, { ...passOptions, trunks: ensemble.trunks });
+    // Tirs de la tourelle : ils puisent dans le réservoir d'air de la salle des machines.
+    const tower = instruments.find((i) => i.kind === 'balls');
+    ensemble.trunks.shotTimes = (tower?.model.balls ?? []).map((b) => b.launch).sort((a, b) => a - b);
     scheduleTrunks(ensemble.trunks);
   }
   return ensemble;

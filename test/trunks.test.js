@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lineBalls, gateOpening, trunkDistance, engineLoad } from '../src/trunks.js';
+import { lineBalls, gateOpening, trunkDistance, engineLoad, stockAt, stackBalls, airPressure } from '../src/trunks.js';
 import { frameOf } from '../src/passes.js';
 import { stationBall } from '../src/ballistics.js';
 import { buildEnsemble } from '../src/arranger.js';
@@ -159,4 +159,48 @@ test('salle des machines : un arbre devant la rangée des départs, que les tapi
   const gates = tr.gates;
   assert.equal(engineLoad(tr, gates[0] - 0.01), 0);
   assert.ok(engineLoad(tr, gates[5] + 0.01) > 1);
+});
+
+test('calibreuse : une bille brute est trop grosse, elle sort de la meule à sa taille', () => {
+  for (const l of tr.lines.filter((x) => x.kind === 'feed')) {
+    const b = l.balls[0];
+    const seen = [];
+    for (const dt of [0.01, (l.grindAt + 0.03) / o.speed]) lineBalls(tr, l, b.born + dt, (ball, p, v, paint, belt, scale) => ball === b && seen.push(scale));
+    assert.deepEqual(seen, [o.rawScale, 1]);
+  }
+});
+
+test('recyclage : décapée dans le bac, la bille remonte jusqu\'à la réserve du distributeur voisin, qui ne manque jamais', () => {
+  const backs = tr.lines.filter((l) => l.recycle);
+  assert.ok(backs.length >= 3, `${backs.length} bacs`);
+  for (const back of backs) {
+    const feed = back.pair;
+    assert.equal(feed.pair, back);
+    assert.equal(feed.instrument, back.instrument);
+    const b = back.balls[0];
+    const t0 = b.time + back.riserSpan + back.hidden + back.mazeSpan;
+    const at = (u) => {
+      let out = null;
+      lineBalls(tr, back, t0 + u, (ball, p, v, paint) => ball === b && (out = { p: [...p], paint }));
+      return out;
+    };
+    assert.equal(at(0.05).paint, 1, 'encore peinte en tombant dans le bac');
+    assert.equal(at(back.decap[1] + 0.01).paint, 0, 'décapée au fond du bac');
+    const top = at(back.recycleSpan - 0.01);
+    assert.ok(Math.abs(top.p[0] - feed.maze.pointAt(0)[0]) < 0.01 && top.p[1] > o.stackTop - 0.05, 'au-dessus de la colonne de réserve');
+    assert.equal(at(back.recycleSpan + 0.01), null, 'entrée dans la réserve');
+    // Réserve : jamais vide quand le distributeur sert une bille, pile bornée par la colonne.
+    for (const t of feed.stock.departures) assert.ok(stockAt(feed, t - 1e-6) >= 1);
+    let n = 0;
+    stackBalls(tr, feed, feed.balls[0].born + 0.5, () => n++);
+    assert.ok(n >= 1 && n <= feed.stock.slots);
+  }
+});
+
+test('réservoir d\'air : chaque tir de la tourelle fait baisser la pression, qui remonte ensuite', () => {
+  const s = tr.shotTimes;
+  assert.ok(s.length > 10);
+  assert.equal(airPressure(tr, s[0] - 0.01), 1);
+  const after = airPressure(tr, s[s.length - 1] + 0.01);
+  assert.ok(after < 1 && airPressure(tr, s[s.length - 1] + 10) === 1);
 });
