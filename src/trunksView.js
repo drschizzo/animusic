@@ -345,6 +345,7 @@ export class TrunksView {
     if (trunks.engine) this.buildEngine(trunks.engine);
     yield;
     kit.build(g, 'réseau');
+    this.batchSpinners();
     yield;
     this.pools = this.lines.map((l) => l.pool);
     // Étincelles des calibreuses : de petits traits lumineux lancés en arrière, à chaque bille.
@@ -357,6 +358,45 @@ export class TrunksView {
       g.add(sparks);
     }
     this.update(0); // pose de repos
+  }
+
+  /**
+   * Poulies, rouleaux et meules identiques : un maillage instancié par forme et par
+   * matière au lieu d'un maillage par pièce (un appel de rendu pour toutes). Chaque groupe
+   * tournant ne garde que sa pose, recopiée dans son instance à chaque image.
+   */
+  batchSpinners() {
+    const shape = (mesh) => {
+      const p = mesh.geometry.attributes.position.array;
+      let h = p.length;
+      for (let i = 0; i < p.length; i += 13) h = (Math.imul(h, 31) + Math.round(p[i] * 1e4)) | 0;
+      return `${mesh.material.uuid}|${p.length}|${h}`;
+    };
+    const kinds = new Map();
+    for (const { group } of this.spinners)
+      for (const mesh of group.children) {
+        if (!mesh.isMesh) continue;
+        const key = shape(mesh);
+        if (!kinds.has(key)) kinds.set(key, []);
+        kinds.get(key).push({ group, mesh });
+      }
+    this.spinBatches = [];
+    for (const list of kinds.values()) {
+      if (list.length < 2) continue;
+      const { mesh } = list[0];
+      const batch = new THREE.InstancedMesh(mesh.geometry, mesh.material, list.length);
+      batch.name = mesh.name;
+      batch.castShadow = mesh.castShadow;
+      batch.receiveShadow = mesh.receiveShadow;
+      batch.frustumCulled = false; // instances réparties sur tout le réseau
+      batch.userData.unfold = true; // pièces solides : export glTF et collisions les déplient
+      this.group.add(batch);
+      for (const item of list) {
+        item.mesh.removeFromParent();
+        if (item.mesh !== mesh) item.mesh.geometry.dispose();
+      }
+      this.spinBatches.push({ batch, groups: list.map((item) => item.group) });
+    }
   }
 
   /** Groupe tournant autour de son axe x local, posé par `matrix`, construit par `fill(kit)`. */
@@ -982,6 +1022,13 @@ export class TrunksView {
     this.beltTex.offset.x = -(((tr.options.speed * t) / BELT_PERIOD) % 1);
     this.leatherTex.offset.x = -(((2 * Math.PI * tr.options.shaftSpin * 0.09 * t) / 0.5) % 1);
     for (const { group, speed } of this.spinners) group.quaternion.copy(group.userData.base).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (speed * t) % (2 * Math.PI)));
+    for (const { batch, groups } of this.spinBatches ?? []) {
+      groups.forEach((group, i) => {
+        group.updateMatrix();
+        batch.setMatrixAt(i, group.matrix);
+      });
+      batch.instanceMatrix.needsUpdate = true;
+    }
     if (this.engine) this.updateEngine(t);
     for (const { screw, pitch } of this.screws) screw.rotation.y = ((2 * Math.PI * tr.options.riserSpeed * t) / pitch) % (2 * Math.PI);
     this.updateGrinders(t);
