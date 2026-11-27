@@ -27,6 +27,8 @@ import {
   instancedBufferAttribute,
   mrt,
   texture,
+  textureLoad,
+  ivec2,
   varying,
   select,
   float,
@@ -241,6 +243,13 @@ export function ballGlow(material) {
 /** Lueur par instance (materials.js, `instanceGlow`) : attribut `instanceGlow` ajouté à l'émissif. */
 export function instanceGlow(material) {
   material.emissiveNode = materialEmissive.add(attribute('instanceGlow', 'vec3'));
+  return material;
+}
+
+/** Lueur par pièce d'un maillage fusionné (materials.js, `slotGlow`) : case `glowSlot` de la texture. */
+export function slotGlow(material, glow) {
+  const slot = attribute('glowSlot', 'float').add(0.5).toInt();
+  material.emissiveNode = materialEmissive.add(textureLoad(glow, ivec2(slot, 0)).rgb);
   return material;
 }
 

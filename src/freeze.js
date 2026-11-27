@@ -12,18 +12,23 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { slotGlow } from './materials.js';
 
 /**
  * Apparence d'un matériau : sa recette (materials.js) et les réglages qu'une vue a pu
  * changer après coup. Deux matériaux de même apparence se dessinent à l'identique ; sans
  * recette, le matériau ne se confond qu'avec lui-même.
  */
-function look(m) {
+function look(m, glow = true) {
   const recipe = m.userData.recipe;
   if (!recipe) return m.uuid;
   const hex = (c) => (c ? c.getHex() : '-');
-  return [recipe, m.type, hex(m.color), hex(m.emissive), m.emissiveIntensity, m.roughness, m.metalness, m.opacity, m.transparent, m.side, m.map?.uuid, m.roughnessMap?.uuid, m.visible].join('|');
+  const base = [recipe, m.type, hex(m.color), m.roughness, m.metalness, m.opacity, m.transparent, m.side, m.map?.uuid, m.roughnessMap?.uuid, m.visible];
+  return (glow ? [...base, hex(m.emissive), m.emissiveIntensity] : base).join('|');
 }
+
+/** Ce qu'une vue peut changer d'un matériau, lueur (émissif) mise à part. */
+const state = (o) => [o.material.color?.getHex(), o.material.roughness, o.material.metalness, o.material.opacity, o.material.visible, o.visible].join('|');
 
 /** Objets Three (maillages, groupes, matériaux) référencés par les propriétés d'une vue. */
 function referenced(view) {
@@ -73,12 +78,16 @@ export function freezeStatic(lift, view, root, probe, times = []) {
     for (let p = o; p && p !== lift; p = p.parent) if (refs.has(p) || !p.visible) return;
     candidates.push({ o, m: local(o) });
   });
-  // Immobiles pendant les poses d'essai.
+  // Immobiles pendant les poses d'essai. Un matériau que garde la vue et dont seule la
+  // lueur change (une corde qui s'allume) peut fusionner avec ses semblables : chaque
+  // pièce garde sa lueur (voir slotGlow).
   const moved = new Set();
+  const glowOnly = new Map(candidates.filter((c) => refs.has(c.o.material) && c.o.material.userData.recipe).map((c) => [c, state(c.o)]));
   for (const t of times) {
     probe(t);
     lift.updateMatrixWorld(true);
     for (const c of candidates) if (!moved.has(c) && !local(c.o).equals(c.m)) moved.add(c);
+    for (const [c, before] of glowOnly) if (state(c.o) !== before) glowOnly.delete(c);
   }
   probe(-1e6);
   lift.updateMatrixWorld(true);
@@ -90,29 +99,36 @@ export function freezeStatic(lift, view, root, probe, times = []) {
     const g = c.o.geometry;
     const attrs = Object.keys(g.attributes).sort().join(',');
     const m = c.o.material;
-    const key = `${refs.has(m) ? m.uuid : look(m)}|${c.o.castShadow}|${c.o.receiveShadow}|${c.o.layers.mask}|${attrs}`;
+    const kind = glowOnly.has(c) && !m.emissiveNode ? `lueur|${look(m, false)}` : refs.has(m) ? m.uuid : look(m);
+    const key = `${kind}|${c.o.castShadow}|${c.o.receiveShadow}|${c.o.layers.mask}|${attrs}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(c);
   }
   let merged = 0;
-  for (const list of groups.values()) {
+  for (const [key, list] of groups) {
     if (list.length < 2) continue;
+    // Pièces à lueur propre : chaque matériau d'origine a sa case, que le maillage fusionné
+    // lit par un attribut de sommet.
+    const glows = key.startsWith('lueur|') ? [...new Set(list.map(({ o }) => o.material))] : null;
     const geos = list.map(({ o, m }) => {
       let g = o.geometry.clone();
       if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);
       for (const name of Object.keys(g.morphAttributes)) delete g.morphAttributes[name];
       g.applyMatrix4(m);
+      if (glows) g.setAttribute('glowSlot', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(glows.indexOf(o.material)), 1));
       return g;
     });
     const geometry = mergeGeometries(geos, false);
     geos.forEach((g) => g.dispose());
     if (!geometry) continue;
     const first = list[0].o;
-    const mesh = new THREE.Mesh(geometry, first.material);
+    const mesh = new THREE.Mesh(geometry, glows ? slotGlow(first.material, glows) : first.material);
     mesh.castShadow = first.castShadow;
     mesh.receiveShadow = first.receiveShadow;
     mesh.layers.mask = first.layers.mask;
     mesh.name = 'pièces fixes';
+    // Lueurs recopiées de leurs matériaux d'origine après chaque pose de la vue (scene.js).
+    if (glows) (lift.glowSyncs ??= []).push(mesh.material.syncGlow);
     lift.add(mesh);
     for (const { o } of list) o.removeFromParent();
     merged += list.length;

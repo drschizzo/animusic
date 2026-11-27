@@ -941,9 +941,9 @@ export class Environment {
 
   renderProbe() {
     if (!this.probeFaces) return;
-    // Une face toutes les deux images : la sonde se refait en douze images, assez vite
-    // pour suivre l'éclairage, et coûte deux fois moins d'appels de rendu.
-    if ((this.probeTick = (this.probeTick ?? 0) + 1) % 2) return;
+    // Une face toutes les trois images : la sonde se refait en dix-huit images (0,3 s à 60
+    // images/s), assez vite pour suivre l'éclairage, pour trois fois moins d'appels de rendu.
+    if ((this.probeTick = (this.probeTick ?? 0) + 1) % 3) return;
     const hidden = [this.dust, ...this.heads.map((h) => h.beam), ...this.probeClutter()];
     const visible = hidden.map((o) => o.visible);
     hidden.forEach((o) => (o.visible = false));
@@ -968,7 +968,7 @@ export class Environment {
 
   setQuality(level) {
     // Sonde de reflets : deux faces par image en qualité haute, une (plus petite) en moyenne.
-    this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube toutes les deux images (renderProbe)
+    this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube toutes les trois images (renderProbe)
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
     // En WebGPU, les reflets en espace écran (postfxNodes.js) tiennent lieu de reflet planaire.

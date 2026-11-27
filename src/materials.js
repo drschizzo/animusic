@@ -434,6 +434,52 @@ export function instanceGlow(material) {
   return material;
 }
 
+/**
+ * Lueur par pièce d'un maillage fusionné (freeze.js) : chaque sommet porte le numéro de sa
+ * pièce (attribut `glowSlot`), et une petite texture donne la lueur de chaque pièce,
+ * recopiée de son matériau d'origine (que la vue continue d'animer) par `syncGlow()`.
+ * @param source matériau dont le fusionné reprend l'apparence (sans sa lueur)
+ * @param sources matériaux d'origine, dans l'ordre des numéros
+ */
+export function slotGlow(source, sources) {
+  const material = source.clone();
+  if (Object.hasOwn(source, 'onBeforeCompile')) material.onBeforeCompile = source.onBeforeCompile;
+  if (Object.hasOwn(source, 'customProgramCacheKey')) material.customProgramCacheKey = source.customProgramCacheKey;
+  material.emissive.setRGB(0, 0, 0);
+  material.emissiveIntensity = 1;
+  const data = new Float32Array(sources.length * 4);
+  const glow = new THREE.DataTexture(data, sources.length, 1, THREE.RGBAFormat, THREE.FloatType);
+  glow.needsUpdate = true;
+  material.syncGlow = () => {
+    let changed = false;
+    sources.forEach((m, i) => {
+      const k = m.emissiveIntensity;
+      const rgb = [m.emissive.r * k, m.emissive.g * k, m.emissive.b * k];
+      for (let c = 0; c < 3; c++)
+        if (data[i * 4 + c] !== rgb[c]) {
+          data[i * 4 + c] = rgb[c];
+          changed = true;
+        }
+    });
+    if (changed) glow.needsUpdate = true;
+  };
+  if (nodes) return nodes.slotGlow(material, glow);
+  const previous = material.onBeforeCompile;
+  const previousKey = previous.toString();
+  material.onBeforeCompile = (shader, renderer) => {
+    previous.call(material, shader, renderer);
+    shader.uniforms.tSlotGlow = { value: glow };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float glowSlot;\nuniform sampler2D tSlotGlow;\nvarying vec3 vSlotGlow;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSlotGlow = texelFetch(tSlotGlow, ivec2(int(glowSlot + 0.5), 0), 0).rgb;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSlotGlow;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vSlotGlow;');
+  };
+  material.customProgramCacheKey = () => `slot-glow|${previousKey}`;
+  return material;
+}
+
 /** Chrome des billes, teinté par la couleur de l'instance et légèrement lumineux dans cette couleur. */
 export function ballMaterial() {
   const material = S({ color: 0xffffff, metalness: 1, roughness: 0.14, envMapIntensity: 1.6 });

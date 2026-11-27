@@ -430,7 +430,11 @@ export class Stage {
       const { height, halo } = this.hatches[k];
       lift.visible = d > 0;
       lift.position.y = d < 1 ? -height * (1 - d) : Math.min(0.08, (d - 1) * 0.6);
-      if (d > 0) v.update(t);
+      if (d > 0) {
+        v.update(t);
+        // Lueurs des pièces fusionnées (freeze.js) : recopiées de leurs matériaux animés.
+        for (const sync of lift.glowSyncs ?? []) sync();
+      }
       // Activité récente (pour les projecteurs qui suivent l'action, et le liseré au sol).
       const on = instruments[k].onsets;
       const i = lowerBound(on, t + 1e-6) - 1;
@@ -444,6 +448,7 @@ export class Stage {
     });
     this.passView?.update(t);
     this.trunkView?.update(t);
+    for (const sync of this.trunkView?.group.glowSyncs ?? []) sync();
     this.assignLamps();
     if (this.song) this.mood = sectionAt(this.song, t);
     // Battue du morceau (grosse caisse) : le décor respire avec elle.
