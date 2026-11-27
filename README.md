@@ -40,7 +40,7 @@ change à chaque section et un réalisateur filme le tout comme un concert.
 npm install
 npm run dev        # http://localhost:5173
 npm test           # tests unitaires (chorégraphie, instruments, arrangeur, réalisateur)
-npm run build && npm run smoke   # build + test de fumée dans Chromium (comme en CI)
+npm run build && npm run smoke   # build + test de fumée dans Chromium (à lancer à la main avant de pousser : la CI ne le fait plus)
 npm run bench -- morceau.mid     # banc d'essai : arrangement, NaN, coût par image
 npm run collide -- morceau.mid   # interpénétrations (dans les deux styles) : billes, instruments, encombrements
 ```
