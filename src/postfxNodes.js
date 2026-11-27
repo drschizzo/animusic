@@ -16,7 +16,7 @@
 // L'ordre et l'occlusion viennent de github.com/marcofugaro/three-advanced-techniques
 // (copie dans src/vendor/).
 
-import { RenderPipeline, HalfFloatType, RGFormat, BlendMode, MaterialBlending, Matrix4, Vector2, Vector3, DepthTexture, LessEqualCompare, AgXToneMapping, SRGBColorSpace, NearestFilter } from 'three/webgpu';
+import { RenderPipeline, HalfFloatType, UnsignedByteType, RedFormat, BlendMode, MaterialBlending, Matrix4, Vector2, Vector3, DepthTexture, LessEqualCompare, AgXToneMapping, SRGBColorSpace, NearestFilter } from 'three/webgpu';
 import {
   Fn,
   If,
@@ -63,7 +63,6 @@ import {
   perspectiveDepthToViewZ,
   interleavedGradientNoise,
   builtinAOContext,
-  context,
   workingToColorSpace,
   toneMappingExposure,
 } from 'three/tsl';
@@ -130,40 +129,48 @@ export class PostFX {
     });
     this._viewProjection = new Matrix4();
 
-    // --- Occlusion ambiante : passe préalable (normales, profondeur) des seuls objets opaques.
-    const prePass = (this.prePass = pass(scene, camera, { samples: 0 }));
-    prePass.transparent = false;
-    // Elle écrit aussi la vitesse, pour que l'occlusion suive ce qui bouge (les billes : vitesse
-    // écrite à la main, nodes.ballGlow) au lieu de repartir de zéro derrière chaque bille.
-    // Avec les reflets en espace écran, elle porte aussi leur G-buffer (normales, profondeur
-    // linéaire, poids spéculaire et rugosité) : des seuls objets opaques, à la même image
-    // décalée que la scène.
-    prePass.setMRT(mrt({ output: normalView, albedo: giAlbedo, velocity, ...(SSR ? ssrGBuffer() : {}) }));
-    Object.assign(prePass.getTexture('velocity'), { type: HalfFloatType, format: RGFormat });
-    prePass.contextNode = context({ getAO: null }); // elle ne lit pas l'occlusion qu'elle nourrit
-    // Géométrie des seules surfaces opaques, lue par la lumière indirecte et les faisceaux.
-    const solidDepth = prePass.getTextureNode('depth');
-    const solidNormal = prePass.getTextureNode();
-    const depthAt = (at) => solidDepth.sample(at).level(0).r;
+    // --- Scène : couleur et vitesse, sans MSAA (TAAU anticrénelle), et en une seule passe
+    // tout ce que lisent les effets : normales et couleur de base (lumière indirecte,
+    // occlusion), G-buffer des reflets en espace écran. Une passe préalable les écrivait :
+    // elle redessinait toute la scène, soit un tiers du temps processeur d'une image.
+    // Ces sorties suivent le mélange du matériau : les opaques les écrivent ; les objets
+    // transparents (verre, effets) y ajoutent un zéro de couverture nulle et laissent celles
+    // de ce qu'ils couvrent, comme pour la vitesse (nodes.seeThrough).
+    const opaqueOnly = (node) => Fn(({ material }) => (material.transparent ? vec4(0) : node))();
+    const gBuffer = SSR ? ssrGBuffer() : {};
+    const outputs = {
+      output,
+      velocity,
+      normal: opaqueOnly(vec4(normalView, 1)),
+      albedo: opaqueOnly(giAlbedo),
+      ...(SSR ? { ssrNormals: opaqueOnly(gBuffer.ssrNormals), ssrSpecular: opaqueOnly(gBuffer.ssrSpecular) } : {}),
+    };
+    const sceneMRT = mrt(outputs);
+    for (const name of Object.keys(outputs)) if (name !== 'output') sceneMRT.setBlendMode(name, new BlendMode(MaterialBlending));
+    const scenePass = (this.scenePass = pass(scene, camera, { samples: 0 }));
+    scenePass.setMRT(sceneMRT);
+    scenePass.getTexture('albedo').type = UnsignedByteType; // couleur de base, entre 0 et 1
+    const depth = scenePass.getTextureNode('depth');
+    const speed = scenePass.getTextureNode('velocity');
+    const solidNormal = scenePass.getTextureNode('normal');
+    const viewDist = (at) => perspectiveDepthToViewZ(depth.sample(at).level(0).r, u.near, u.far).negate();
+    // Géométrie des surfaces opaques (le verre et les effets n'écrivent pas la profondeur),
+    // lue par la lumière indirecte et les faisceaux.
+    const depthAt = (at) => depth.sample(at).level(0).r;
     const viewAt = (at, d) => getViewPosition(at, d, u.projectionInverse);
     const normalAt = (at) => {
       const n = solidNormal.sample(at).level(0).xyz;
       return n.div(max(length(n), 1e-5));
     };
-    // Demi-résolution, débruitée et accumulée d'une image à l'autre ; remontée à pleine
-    // résolution dans le shader des matériaux, contre leur profondeur (pas de halo aux
-    // silhouettes). Le décalage de caméra de TAAU est pris en compte par le module.
-    const occlusion = (this.occlusion = xeGTAO(solidDepth, camera, { normalNode: solidNormal, velocityNode: prePass.getTextureNode('velocity'), radius: 0.5 }));
 
-    // --- Scène : couleur et vitesse, sans MSAA (TAAU anticrénelle).
-    const scenePass = (this.scenePass = pass(scene, camera, { samples: 0 }));
-    // La vitesse suit le mélange du matériau : les opaques l'écrivent, les effets
-    // additifs y ajoutent un zéro (nodes.seeThrough) et laissent celle de ce qu'ils couvrent.
-    scenePass.setMRT(mrt({ output, velocity }).setBlendMode('velocity', new BlendMode(MaterialBlending)));
+    // --- Occlusion ambiante : demi-résolution, débruitée et accumulée d'une image à
+    // l'autre ; remontée à pleine résolution dans le shader des matériaux, contre leur
+    // profondeur (pas de halo aux silhouettes). Elle lit la profondeur, les normales et la
+    // vitesse de la passe de scène de l'image précédente (ses matériaux la lisent pendant
+    // qu'elle se dessine) : un retard d'une image, sous l'accumulation du module (~10
+    // images). Le décalage de caméra de TAAU est pris en compte par le module.
+    const occlusion = (this.occlusion = xeGTAO(depth, camera, { normalNode: solidNormal, velocityNode: speed, radius: 0.5 }));
     scenePass.contextNode = builtinAOContext(mix(1, occlusion.getMaterialAONode(), u.ao));
-    const depth = scenePass.getTextureNode('depth');
-    const speed = scenePass.getTextureNode('velocity');
-    const viewDist = (at) => perspectiveDepthToViewZ(depth.sample(at).level(0).r, u.near, u.far).negate();
 
     // --- Anticrénelage temporel, avec montée en résolution (TAAU de three-advanced-techniques :
     // détails fins verrouillés, reconstruction en 4 lectures). L'image nettoyée de ses
@@ -174,7 +181,9 @@ export class PostFX {
       // trouvent la scène, le sol satiné compris (seuil de rugosité relevé pour lui).
       // Tracés sur un pixel sur quatre, la composition restant à pleine résolution : à
       // pleine résolution ils coûtaient au processeur graphique ~8 ms par image.
-      const reflections = (this.reflections = ssr(color, prePass, { roughnessFadeStart: 0.45, roughnessCutoff: 0.75, thickness: 0.2, resolutionScale: 0.5 }));
+      // Profondeur linéaire du G-buffer : tirée de celle de la scène (0 sur le fond).
+      const linearDepth = rtt(select(depthAt(uv()).lessThan(1), viewDist(uv()), 0), null, null, { type: HalfFloatType, format: RedFormat, depthBuffer: false });
+      const reflections = (this.reflections = ssr(color, scenePass, { linearDepthNode: linearDepth, roughnessFadeStart: 0.45, roughnessCutoff: 0.75, thickness: 0.2, resolutionScale: 0.5 }));
       // L'environnement est figé à la construction : refait quand la sonde le remplace (render()).
       this.shaded = () => sanitized(ssrComposite(color, reflections, scene.environment, { environmentIntensity: () => scene.environmentIntensity }));
       this.reflectedEnvironment = scene.environment;
@@ -276,7 +285,7 @@ export class PostFX {
         // Hors des surfaces opaques (fond, vitres seules) : ni ombre ni lumière.
         const solid = step(depthAt(uv()), 0.9999999);
         const gi = indirect.sample(uv());
-        return vec4(base.rgb.add(gi.rgb.mul(prePass.getTextureNode('albedo').sample(uv()).rgb).mul(solid).mul(u.giIntensity)), base.a);
+        return vec4(base.rgb.add(gi.rgb.mul(scenePass.getTextureNode('albedo').sample(uv()).rgb).mul(solid).mul(u.giIntensity)), base.a);
       })(),
     );
 
@@ -584,11 +593,10 @@ export class PostFX {
     const high = level === 'high';
     this.uniforms.ao.value = high ? 1 : 0;
     // L'occlusion est câblée dans les matériaux de la scène : pour la couper sans tout
-    // recompiler, ses deux passes cessent simplement d'être rendues.
-    for (const node of [this.prePass, this.occlusion]) {
-      node._updateBefore ??= node.updateBefore;
-      node.updateBefore = high ? node._updateBefore : () => {};
-    }
+    // recompiler, elle cesse simplement d'être calculée.
+    const occlusion = this.occlusion;
+    occlusion._updateBefore ??= occlusion.updateBefore;
+    occlusion.updateBefore = high ? occlusion._updateBefore : () => {};
     const wanted = this.outputs[high ? 'high' : 'medium'];
     if (this.pipeline.outputNode !== wanted) {
       this.pipeline.outputNode = wanted;

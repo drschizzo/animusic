@@ -20,10 +20,10 @@ const params = typeof location === 'undefined' ? new URLSearchParams() : new URL
 export const WEBGPU = params.has('webgpu');
 export const RAW = WEBGPU || params.has('raw');
 
-// Reflets en espace écran (postfxNodes.js) : la passe préalable écrit alors six cibles,
-// 38 octets par pixel, au-delà des 32 garantis par WebGPU. Il faut un adaptateur qui en
+// Reflets en espace écran (postfxNodes.js) : la passe de scène écrit alors six cibles,
+// 40 octets par pixel, au-delà des 32 garantis par WebGPU. Il faut un adaptateur qui en
 // permet davantage ; sinon (repli WebGL 2, ?planar, matériel limité), reflet planaire.
-const SSR_BYTES = 38;
+const SSR_BYTES = 40;
 const adapter = WEBGPU && !params.has('webgl2') && !params.has('planar') ? await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' }) : null;
 const attachmentBytes = adapter?.limits.maxColorAttachmentBytesPerSample ?? 0;
 /** Reflets en espace écran au lieu du reflet planaire du sol (voir postfxNodes.js). */
