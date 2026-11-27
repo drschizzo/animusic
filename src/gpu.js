@@ -5,7 +5,8 @@
 //   ?raw            WebGLRenderer actuel, mais avec la même scène « brute » que le
 //                   prototype : comparaison à l'identique
 //
-// Scène brute : matériaux, lumières et ombres seulement. Pas de post-traitement, pas de
+// Scène brute : matériaux, lumières et ombres seulement. Pas de post-traitement en WebGL
+// (?raw) ; en WebGPU, la chaîne d'effets en nœuds de postfxNodes.js. Pas de
 // reflet du sol ni de sonde de reflets, et les objets à shader GLSL écrit à la main
 // (ShaderMaterial : faisceaux, poussières…) sont masqués, car WebGPURenderer ne sait pas
 // les dessiner : il faudra les réécrire en TSL. Les retouches de matériaux par
@@ -20,11 +21,15 @@ export const RAW = WEBGPU || params.has('raw');
 /** Retouches de matériaux en TSL (null hors prototype : les vues gardent alors leur GLSL). */
 export const nodes = WEBGPU ? await import('./nodes.js') : null;
 
+/** Chaîne d'effets en nœuds (null hors prototype). */
+export const NodePostFX = WEBGPU ? (await import('./postfxNodes.js')).PostFX : null;
+
 /** Uniformes pilotés par les vues ({ nom: { value } }), dans la forme attendue par le moteur. */
 export const shared = (spec) => (nodes ? nodes.uniforms(spec) : spec);
 
 /** Moteur de rendu du prototype, déjà initialisé (null hors prototype). */
 export const gpuRenderer = WEBGPU ? await createRenderer() : null;
+nodes?.useRenderer(gpuRenderer);
 
 async function createRenderer() {
   const { WebGPURenderer } = await import('three/webgpu');

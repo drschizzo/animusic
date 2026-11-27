@@ -343,6 +343,8 @@ function lathed(material, pitch = 0.006) {
   return material;
 }
 
+const lightMaterial = (o) => (nodes ? nodes.steadyVelocity(nodes.basic(o)) : new THREE.MeshBasicMaterial(o));
+
 /** Fabriques de matériaux : chaque appel rend un matériau neuf (textures partagées). */
 export const mat = {
   chrome: () => detail(S({ color: 0xdfe3ec, roughness: 0.12, metalness: 1 }), { scale: 3, bump: 0, rough: 0.07 }),
@@ -393,7 +395,7 @@ export const mat = {
   glow: (color = 0xffffff, intensity = 0) => S({ color: 0x050506, roughness: 0.4, emissive: color, emissiveIntensity: intensity }),
   /** Lumière pure additive (rayons, halos), ignorée par les ombres et l'occlusion. */
   light: (color = 0xffffff) =>
-    base.basic({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+    lightMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
 };
 
 /** Chrome des billes, teinté par la couleur de l'instance et légèrement lumineux dans cette couleur. */

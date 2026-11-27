@@ -18,7 +18,7 @@ import { analyzeSong, deployAt, sectionAt } from './sections.js';
 import { floorHalo, riserBlock } from './parts.js';
 import { lowerBound, drain, sliced, breathe } from './util.js';
 import { freezeStatic } from './freeze.js';
-import { WEBGPU, RAW, gpuRenderer, hideUnsupported } from './gpu.js';
+import { WEBGPU, RAW, gpuRenderer, hideUnsupported, NodePostFX } from './gpu.js';
 
 /** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
 const PIXEL_BUDGET = {
@@ -133,7 +133,7 @@ export function* mountSteps(ensemble, trackColors, content, { freeze = true } = 
 
 const GPUClippingGroup = WEBGPU ? (await import('three/webgpu')).ClippingGroup : null;
 
-/** Prototype WebGPU : même interface que PostFX, mais rendu direct de la scène. */
+/** Scène brute (?raw) : même interface que PostFX, mais rendu direct de la scène. */
 class RawRender {
   constructor(renderer, scene, camera) {
     Object.assign(this, { renderer, scene, camera });
@@ -174,8 +174,8 @@ export class Stage {
 
     // Décor (sol réfléchissant, lumières, projecteurs) et post-traitement.
     this.environment = new Environment(renderer, scene);
-    // Prototype WebGPU (gpu.js) : scène brute, sans la chaîne de post-traitement GLSL.
-    this.post = RAW ? new RawRender(renderer, scene, this.camera) : new PostFX(renderer, scene, this.camera, this.environment);
+    // Prototype (gpu.js) : en WebGPU, la chaîne d'effets en nœuds ; en ?raw, la scène brute.
+    this.post = NodePostFX ? new NodePostFX(renderer, scene, this.camera) : RAW ? new RawRender(renderer, scene, this.camera) : new PostFX(renderer, scene, this.camera, this.environment);
     this.pulse = 0;
     this.time = 0;
     this._last = { wall: 0, time: 0, eye: new THREE.Vector3() };

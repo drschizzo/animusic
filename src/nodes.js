@@ -3,11 +3,13 @@
 // par le prototype (voir gpu.js) ; les explications de fond restent à côté des versions
 // GLSL, dans materials.js et dans les vues.
 
-import { MeshStandardNodeMaterial, MeshPhysicalNodeMaterial, MeshBasicNodeMaterial } from 'three/webgpu';
+import { MeshStandardNodeMaterial, MeshPhysicalNodeMaterial, MeshBasicNodeMaterial, Matrix4 } from 'three/webgpu';
 import {
   Fn,
   If,
   uniform,
+  attribute,
+  mrt,
   texture,
   varying,
   select,
@@ -163,10 +165,53 @@ export function lathed(material, u) {
   return material;
 }
 
-/** Billes : chrome teinté légèrement lumineux, dans la couleur de l'instance (matériau blanc). */
+/**
+ * Mouvement d'une image à l'autre, pour les vecteurs de vitesse écrits à la main (la chaîne
+ * d'effets, postfxNodes.js, les tient à jour) : caméra de l'image courante et de la
+ * précédente (sans le décalage de TAAU), temps musical écoulé.
+ */
+export const motion = { uViewProjection: uniform(new Matrix4()), uPrevViewProjection: uniform(new Matrix4()), uDt: uniform(0) };
+
+/** Vitesse à l'écran (écart en coordonnées normalisées, comme le nœud `velocity` de three) d'un point passé de `before` à `now`. */
+function screenVelocity(now, before) {
+  const clipNow = varying(motion.uViewProjection.mul(vec4(now, 1)));
+  const clipBefore = varying(motion.uPrevViewProjection.mul(vec4(before, 1)));
+  return clipNow.xy.div(clipNow.w).sub(clipBefore.xy.div(clipBefore.w));
+}
+
+let renderer = null;
+/** Moteur de rendu du prototype : les vitesses écrites à la main lui demandent quelle passe est en cours. */
+export function useRenderer(r) {
+  renderer = r;
+}
+
+/**
+ * Remplace la vitesse calculée par three pour ce matériau, dans les seules passes qui
+ * écrivent une vitesse : ailleurs (ombres, passe de normales, rendu direct), un MRT de
+ * matériau sans cible correspondante donne un shader invalide.
+ */
+function overrideVelocity(material, node) {
+  const override = mrt({ velocity: node });
+  Object.defineProperty(material, 'mrtNode', { get: () => (renderer?.getMRT()?.has('velocity') ? override : null), set() {}, configurable: true });
+  return material;
+}
+
+/**
+ * Effets lumineux (halos, traînées, étincelles) : seule la caméra compte. Leurs instances
+ * changent de rang d'une image à l'autre, la vitesse que three en déduirait serait fausse.
+ */
+export function steadyVelocity(material) {
+  return overrideVelocity(material, screenVelocity(positionWorld, positionWorld));
+}
+
+/**
+ * Billes : chrome teinté légèrement lumineux, dans la couleur de l'instance (matériau
+ * blanc). Leur vitesse à l'écran vient de l'attribut `instanceVelocity` (m/s), pas de la
+ * comparaison de deux images : elles changent de rang dans leur réservoir.
+ */
 export function ballGlow(material) {
   material.emissiveNode = diffuseColor.rgb.mul(0.4);
-  return material;
+  return overrideVelocity(material, screenVelocity(positionWorld, positionWorld.sub(attribute('instanceVelocity', 'vec3').mul(motion.uDt))));
 }
 
 /** Peau qui vibre (drumsView.js, `membrane`). u : { uAmp, uSince, uRadius, uAngle }. */
