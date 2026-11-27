@@ -6,6 +6,10 @@ import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { tex, mat, fx } from './materials.js';
 import { FINITE } from './glsl.js';
+import { WEBGPU, RAW } from './gpu.js';
+
+// Le préfiltrage d'environnement de WebGPURenderer est le sien (prototype, voir gpu.js).
+const PMREM = WEBGPU ? (await import('three/webgpu')).PMREMGenerator : THREE.PMREMGenerator;
 
 const HAZE = 0x070a14;
 const BLUR_LEVELS = 4;
@@ -57,7 +61,7 @@ function studioEnvironment(renderer) {
   const scene = new THREE.Scene();
   scene.add(new THREE.Mesh(new THREE.BoxGeometry(40, 24, 40), new THREE.MeshBasicMaterial({ color: 0x05060a, side: THREE.BackSide })));
   scene.add(studioPanels());
-  const pmrem = new THREE.PMREMGenerator(renderer);
+  const pmrem = new PMREM(renderer);
   const map = pmrem.fromScene(scene, 0.03).texture;
   pmrem.dispose();
   scene.traverse((o) => {
@@ -918,10 +922,10 @@ export class Environment {
 
   setQuality(level) {
     // Sonde de reflets : deux faces par image en qualité haute, une (plus petite) en moyenne.
-    this.probeFaces = level === 'low' ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
+    this.probeFaces = level === 'low' || RAW ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
-    this.reflections = level !== 'low';
+    this.reflections = level !== 'low' && !RAW;
     this.reflectionScale = level === 'high' ? 0.5 : 0.4;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;
     // Trois cartes d'ombres (ensemble + deux poursuites) : 2K en qualité haute, 1K en moyenne.

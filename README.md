@@ -45,6 +45,13 @@ npm run bench -- morceau.mid     # banc d'essai : arrangement, NaN, coût par im
 npm run collide -- morceau.mid   # interpénétrations (dans les deux styles) : billes, instruments, encombrements
 ```
 
+**Prototype WebGPU** (évaluation de la migration, `src/gpu.js`) : ajouter à l'adresse
+`?webgpu` (WebGPURenderer, WebGPU ou repli WebGL 2), `?webgpu&webgl2` (repli WebGL 2 forcé) ou
+`?raw` (moteur WebGL actuel, même scène). Ces trois modes dessinent la même scène « brute »
+(matériaux, lumières, ombres ; ni post-traitement, ni reflets, ni shaders GLSL écrits à la main)
+et affichent en bas le moteur utilisé et le temps processeur de rendu par image. Comparer
+`?raw` et `?webgpu` en qualité fixée (*Haute* ou *Moyenne*, pas *Auto*).
+
 ## Principe : l'animation à l'envers
 
 Comme dans MIDImotion (l'outil d'Animusic), rien n'est simulé : tout est **calculé à l'avance à partir des notes**,

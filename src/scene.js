@@ -18,6 +18,7 @@ import { analyzeSong, deployAt, sectionAt } from './sections.js';
 import { floorHalo, riserBlock } from './parts.js';
 import { lowerBound, drain, sliced, breathe } from './util.js';
 import { freezeStatic } from './freeze.js';
+import { WEBGPU, RAW, gpuRenderer, hideUnsupported } from './gpu.js';
 
 /** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
 const PIXEL_BUDGET = {
@@ -130,11 +131,27 @@ export function* mountSteps(ensemble, trackColors, content, { freeze = true } = 
   return { lifts, views, hatches, frozen, passView, trunkView };
 }
 
+const GPUClippingGroup = WEBGPU ? (await import('three/webgpu')).ClippingGroup : null;
+
+/** Prototype WebGPU : même interface que PostFX, mais rendu direct de la scène. */
+class RawRender {
+  constructor(renderer, scene, camera) {
+    Object.assign(this, { renderer, scene, camera });
+  }
+  setSize() {}
+  setMotion() {}
+  setFocus() {}
+  setQuality() {}
+  render() {
+    this.renderer.render(this.scene, this.camera);
+  }
+}
+
 /** Scène Three.js : construit les objets à partir d'une chorégraphie et les pose à l'instant t. */
 export class Stage {
   constructor(container) {
     this.container = container;
-    const renderer = (this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }));
+    const renderer = (this.renderer = gpuRenderer ?? new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoftShadowMap a disparu de three (r182) : PCF est désormais filtré en douceur
     // AgX : les hautes lumières saturées (lames, rayons, tubes) pâlissent vers le blanc au
@@ -142,7 +159,8 @@ export class Stage {
     renderer.toneMapping = THREE.AgXToneMapping;
     renderer.toneMappingExposure = 1.5;
     // Tout ce qui passe sous le sol est découpé : les instruments en sortent à leur entrée.
-    renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.001)];
+    const ground = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.001)];
+    if (!WEBGPU) renderer.clippingPlanes = ground;
     container.appendChild(renderer.domElement);
 
     const scene = (this.scene = new THREE.Scene());
@@ -156,13 +174,20 @@ export class Stage {
 
     // Décor (sol réfléchissant, lumières, projecteurs) et post-traitement.
     this.environment = new Environment(renderer, scene);
-    this.post = new PostFX(renderer, scene, this.camera, this.environment);
+    // Prototype WebGPU (gpu.js) : scène brute, sans la chaîne de post-traitement GLSL.
+    this.post = RAW ? new RawRender(renderer, scene, this.camera) : new PostFX(renderer, scene, this.camera, this.environment);
     this.pulse = 0;
     this.time = 0;
     this._last = { wall: 0, time: 0, eye: new THREE.Vector3() };
 
     this.content = new THREE.Group();
-    scene.add(this.content);
+    if (WEBGPU) {
+      // WebGPURenderer n'a pas de plans de coupe globaux : un groupe de coupe les porte.
+      this.clipGroup = new GPUClippingGroup();
+      this.clipGroup.clippingPlanes = ground;
+      this.clipGroup.add(this.content);
+      scene.add(this.clipGroup);
+    } else scene.add(this.content);
     // Lumières réservées aux instruments : toujours présentes (nombre constant, donc pas
     // de recompilation des shaders), confiées chaque image aux lampes les plus vives.
     this.lampPool = Array.from({ length: LAMP_POOL }, () => {
@@ -261,7 +286,11 @@ export class Stage {
     });
     try {
       onProgress(0.4, 'shaders');
-      if (renderer.extensions.get('KHR_parallel_shader_compile')) {
+      if (renderer.isWebGPURenderer) {
+        // WebGPURenderer compile sans bloquer, par une API prévue pour : pas d'images à blanc.
+        hideUnsupported(this.scene);
+        await renderer.compileAsync(this.scene, this.camera);
+      } else if (renderer.extensions.get('KHR_parallel_shader_compile')) {
         const before = renderer.info.programs.length;
         // Six images : les faces de la sonde et les cartes d'ombre se relaient d'une image à l'autre.
         for (let i = 0; i < 6; i++) {
@@ -489,8 +518,13 @@ export class Stage {
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
     this.environment.scheduleShadows();
-    this.environment.renderProbe();
-    this.environment.renderReflection(this.renderer, this.camera);
+    if (RAW) {
+      // Les vues créent des objets en cours de route (billes…) : contrôle régulier.
+      if ((this._hideTick = (this._hideTick ?? 0) + 1) % 30 === 1) hideUnsupported(this.scene);
+    } else {
+      this.environment.renderProbe();
+      this.environment.renderReflection(this.renderer, this.camera);
+    }
     this.post.render(wall);
   }
 }

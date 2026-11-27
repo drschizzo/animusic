@@ -8,6 +8,7 @@ import { Player } from './audio.js';
 import { Stage } from './scene.js';
 import { sustainedEnd, sliced, breathe } from './util.js';
 import { Loader } from './loader.js';
+import { RAW, backendName } from './gpu.js';
 
 // Import d'enregistrements (mp3, wav…) : désactivé pour l'instant (trop lent, résultat
 // pas encore satisfaisant). Le code reste en place : passer à true pour le réactiver.
@@ -553,16 +554,20 @@ try {
 } catch {
   setIndirectLight(true);
 }
-const fpsMeter = { frames: 0, since: performance.now(), slow: 0 };
+const fpsMeter = { frames: 0, since: performance.now(), slow: 0, cpu: 0 };
 function measureFps() {
   fpsMeter.frames++;
   const now = performance.now();
   if (now - fpsMeter.since < 1000) return;
   const fps = (fpsMeter.frames * 1000) / (now - fpsMeter.since);
+  const cpu = fpsMeter.cpu / fpsMeter.frames; // temps processeur moyen de stage.render() (ms)
   fpsMeter.frames = 0;
   fpsMeter.since = now;
-  $('fps').textContent = `${Math.round(fps)} img/s`;
-  if (qualityMode !== 'auto' || !player.playing) {
+  // Prototype WebGPU (gpu.js) : moteur et temps processeur de rendu, pour comparer.
+  $('fps').textContent = RAW ? `${Math.round(fps)} img/s · ${cpu.toFixed(1)} ms · ${backendName(stage.renderer)}` : `${Math.round(fps)} img/s`;
+  fpsMeter.cpu = 0;
+  // Prototype : pas de baisse automatique de qualité, elle fausserait la comparaison.
+  if (qualityMode !== 'auto' || !player.playing || RAW) {
     fpsMeter.playingSince = null;
     return;
   }
@@ -617,7 +622,9 @@ function frame(now = performance.now()) {
       updatePlayButton();
     }
   }
+  const before = performance.now();
   stage.render();
+  fpsMeter.cpu += performance.now() - before;
   measureFps();
 }
 
