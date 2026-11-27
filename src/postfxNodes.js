@@ -172,7 +172,9 @@ export class PostFX {
     if (SSR) {
       // Reflets en espace écran : ils remplacent le reflet de l'environnement là où ils
       // trouvent la scène, le sol satiné compris (seuil de rugosité relevé pour lui).
-      const reflections = (this.reflections = ssr(color, prePass, { roughnessFadeStart: 0.45, roughnessCutoff: 0.75, thickness: 0.2 }));
+      // Tracés sur un pixel sur quatre, la composition restant à pleine résolution : à
+      // pleine résolution ils coûtaient au processeur graphique ~8 ms par image.
+      const reflections = (this.reflections = ssr(color, prePass, { roughnessFadeStart: 0.45, roughnessCutoff: 0.75, thickness: 0.2, resolutionScale: 0.5 }));
       // L'environnement est figé à la construction : refait quand la sonde le remplace (render()).
       this.shaded = () => sanitized(ssrComposite(color, reflections, scene.environment, { environmentIntensity: () => scene.environmentIntensity }));
       this.reflectedEnvironment = scene.environment;
