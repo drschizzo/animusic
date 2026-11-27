@@ -222,7 +222,7 @@ export class BallsView {
     ballMat.onBeforeCompile = (shader) => {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <emissivemap_fragment>',
-        '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance += vColor * 0.4;\n#endif',
+        '#include <emissivemap_fragment>\n#ifdef USE_COLOR\ntotalEmissiveRadiance += vColor.rgb * 0.4;\n#endif',
       );
     };
     const balls = new THREE.InstancedMesh(new THREE.SphereGeometry(o.ballRadius, 32, 20), ballMat, pool);

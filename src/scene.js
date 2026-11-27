@@ -136,7 +136,7 @@ export class Stage {
     this.container = container;
     const renderer = (this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoftShadowMap a disparu de three (r182) : PCF est désormais filtré en douceur
     // AgX : les hautes lumières saturées (lames, rayons, tubes) pâlissent vers le blanc au
     // lieu de virer au fluo comme avec ACES.
     renderer.toneMapping = THREE.AgXToneMapping;
