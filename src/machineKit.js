@@ -54,8 +54,7 @@ export class Kit {
  * profil a sa propre normale (arêtes franches, chanfreins nets) ; deux segments presque
  * alignés (moins de `smooth` degrés) sont lissés ensemble (congés, calottes).
  */
-export function turn(profile, { segments, smooth = 32, start = 0, length = Math.PI * 2 } = {}) {
-  segments ??= facets(Math.max(...profile.map(([r]) => r)));
+export function turn(profile, { segments = 32, smooth = 32, start = 0, length = Math.PI * 2 } = {}) {
   const pos = [];
   const nor = [];
   const segN = [];
@@ -97,33 +96,23 @@ export function turn(profile, { segments, smooth = 32, start = 0, length = Math.
   return g;
 }
 
-/**
- * Nombre de facettes d'une pièce tournée de rayon r : une facette tous les 2,5 cm de
- * pourtour environ, entre 6 et 32 (un pied de 1 cm n'a pas besoin d'être aussi rond
- * qu'un volant ; le réseau compte des milliers de petites pièces).
- */
-export const facets = (r) => Math.max(6, Math.min(32, Math.round((2 * Math.PI * r) / 0.025)));
-
 /** Cylindre plein chanfreiné, d'axe y, centré. */
-export const cylinder = (r, h, c = Math.min(r, h) * 0.12, segments = facets(r)) =>
+export const cylinder = (r, h, c = Math.min(r, h) * 0.12, segments = 32) =>
   turn([[0, -h / 2], [r - c, -h / 2], [r, -h / 2 + c], [r, h / 2 - c], [r - c, h / 2], [0, h / 2]], { segments });
 
 /** Bague (rondelle, collier, bride) d'axe y, centrée, percée de rIn. */
-export const ring = (rOut, rIn, h, c = Math.min(rOut - rIn, h) * 0.2, segments = facets(rOut)) =>
+export const ring = (rOut, rIn, h, c = Math.min(rOut - rIn, h) * 0.2, segments = 32) =>
   turn([[rIn, -h / 2], [rOut - c, -h / 2], [rOut, -h / 2 + c], [rOut, h / 2 - c], [rOut - c, h / 2], [rIn, h / 2], [rIn, -h / 2]], { segments });
 
 /** Boîte aux arêtes arrondies. */
-export const rbox = (w, h, d, r = 0.006) => {
-  const radius = Math.min(r, w / 2.01, h / 2.01, d / 2.01);
-  // Un seul segment d'arrondi suffit sous 5 mm : c'est un chanfrein, qui prend la lumière pareil.
-  return new RoundedBoxGeometry(w, h, d, radius < 0.005 ? 1 : 2, radius);
-};
+export const rbox = (w, h, d, r = 0.006) => new RoundedBoxGeometry(w, h, d, 2, Math.min(r, w / 2.01, h / 2.01, d / 2.01));
 
 /** Écrou hexagonal d'axe y, posé sur y = 0 (pans plats). */
 export function nut(s = 0.006, h = s * 0.8) {
   const g = new THREE.CylinderGeometry(s, s, h, 6).translate(0, h / 2, 0).toNonIndexed();
   g.computeVertexNormals();
-  return plain(g);
+  const cap = turn([[s * 0.5, h], [s * 0.35, h + s * 0.3], [0, h + s * 0.35]], { segments: 8 });
+  return mergeGeometries([plain(g), cap]);
 }
 
 /** Couronne de n écrous sur un cercle de rayon R (plan xz, têtes vers +y), à la hauteur y. */
