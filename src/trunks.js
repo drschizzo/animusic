@@ -12,7 +12,7 @@
 // d'avance dans son tuyau.
 
 import { polyline, fillet } from './ballistics.js';
-import { lowerBound, upperBound } from './util.js';
+import { lowerBound, upperBound, drain } from './util.js';
 import { frameOf } from './passes.js';
 
 export const TRUNK_DEFAULTS = {
@@ -290,7 +290,7 @@ function smoothJoints(points, radius) {
  * @returns les lignes tracées (avec leurs cases), et une note : le nombre de lignes
  *   arrivées au pied de leur estrade, puis la brièveté de l'ensemble
  */
-function layout(ensemble, order, sequence, o) {
+function* layoutSteps(ensemble, order, sequence, o) {
   const grid = floorGrid(ensemble, o);
   const pipes = new Uint8Array(grid.blocked.length); // cases occupées par un tuyau
   const mark = (cells) => {
@@ -323,6 +323,7 @@ function layout(ensemble, order, sequence, o) {
     if (ok) arrived++;
     length += rest.length;
     lines.push({ ...l, port: l, cells: [...stub.slice(0, -1), ...rest], arrived: ok });
+    yield;
   }
   return { lines, grid, pipes, engine, score: arrived * 1e6 - length };
 }
@@ -393,6 +394,11 @@ function placeEngine(grid, iMin, iMax, j0, o) {
  * Les lignes les plus longues sont tracées d'abord ; une ligne sans chemin libre est abandonnée.
  */
 export function planTrunks(ensemble, options = {}) {
+  return drain(planTrunkSteps(ensemble, options));
+}
+
+/** Le même tracé, par étapes (voir `sliced` dans util.js) : une ligne à la fois. */
+export function* planTrunkSteps(ensemble, options = {}) {
   const o = { ...TRUNK_DEFAULTS, ...options };
   const all = ports(ensemble, o).filter((l) => !o.only || o.only(ensemble.instruments[l.instrument], l));
   // Départs : alignés derrière la tourelle, dans l'ordre des arrivées (de gauche à droite).
@@ -406,7 +412,7 @@ export function planTrunks(ensemble, options = {}) {
   let sequence = [...all].sort((a, b) => edge(a) - edge(b) || far(b) - far(a));
   let best = null;
   for (let round = 0; round < o.rounds; round++) {
-    const attempt = layout(ensemble, order, sequence, o);
+    const attempt = yield* layoutSteps(ensemble, order, sequence, o);
     if (!best || attempt.score > best.score) best = attempt;
     const done = new Set(attempt.lines.filter((l) => l.arrived).map((l) => l.port));
     if (done.size === all.length) break;
@@ -423,6 +429,7 @@ export function planTrunks(ensemble, options = {}) {
     l.maze = polyline(l.kind === 'feed' ? m.points : m.points.reverse());
     l.turns = m.turns;
     l.balls = [];
+    yield;
   }
   const segments = [];
   for (const l of lines) {

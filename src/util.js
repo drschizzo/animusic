@@ -132,3 +132,40 @@ export function sustainedEnd(note, sustain = []) {
   for (; i < sustain.length; i++) if (!sustain[i].on) return Math.max(end, sustain[i].time);
   return end + 4;
 }
+
+/**
+ * Étapes d'initialisation : les constructions longues (modèle, machines, tracé du réseau)
+ * sont écrites en générateurs qui rendent la main (`yield`) entre deux morceaux de travail.
+ * `drain` les exécute d'une traite (tests, outils) ; `sliced` les exécute par tranches de
+ * quelques millisecondes en laissant le navigateur respirer entre deux (écran de chargement).
+ */
+export function drain(steps) {
+  let r;
+  while (!(r = steps.next()).done);
+  return r.value;
+}
+
+/** Rend la main au navigateur : il peut afficher une image et traiter les événements. */
+export function breathe() {
+  return new Promise((resolve) => {
+    // Un message plutôt qu'un setTimeout : pas de délai plancher de 4 ms, ni de bridage en arrière-plan.
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(0);
+  });
+}
+
+/** Exécute un générateur d'étapes par tranches d'au plus `budget` ms ; renvoie sa valeur finale. */
+export async function sliced(steps, budget = 8) {
+  let since = performance.now();
+  let r;
+  while (!(r = steps.next()).done) {
+    if (performance.now() - since < budget) continue;
+    await breathe();
+    since = performance.now();
+  }
+  return r.value;
+}

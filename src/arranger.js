@@ -9,7 +9,7 @@
 import { buildChoreography } from './choreography.js';
 import { buildDrumKit } from './drums.js';
 import { planPasses } from './passes.js';
-import { planTrunks, scheduleTrunks } from './trunks.js';
+import { planTrunkSteps, scheduleTrunks } from './trunks.js';
 import { buildBassStrings } from './strings.js';
 import { buildPipes } from './pipes.js';
 import { buildBells } from './bells.js';
@@ -17,7 +17,7 @@ import { buildLaserHarp } from './laser.js';
 import { buildKeyboard } from './keys.js';
 import { buildBowed } from './bowed.js';
 import { buildWinds, windStyle } from './winds.js';
-import { mergeEvents, clamp } from './util.js';
+import { mergeEvents, clamp, drain } from './util.js';
 import { mergeSpans } from './sections.js';
 import { GM_ATTACK } from './gmAttack.js';
 
@@ -486,7 +486,12 @@ function fillTier(items, r, maxA, place) {
  * @param options style : 'arms' (bras et mécanismes) ou 'balls' (tout ce qui peut l'être est joué par des billes)
  * @returns { instruments: [{kind, model, tracks, onsets, busy, focus:{center,radius}, front, start, end}], start, end, radius }
  */
-export function buildEnsemble(parts, controls = [], programs = [], { style = 'arms', passes: passOptions = {} } = {}) {
+export function buildEnsemble(parts, controls, programs, options) {
+  return drain(ensembleSteps(parts, controls, programs, options));
+}
+
+/** La même construction, par étapes (voir `sliced` dans util.js) : un instrument, une ligne du réseau à la fois. */
+export function* ensembleSteps(parts, controls = [], programs = [], { style = 'arms', passes: passOptions = {} } = {}) {
   ({ aisle: AISLE, gap: SEAT_GAP } = SPACING[style === 'balls' ? 'balls' : 'arms']);
   const list = Array.isArray(parts)
     ? parts
@@ -516,10 +521,10 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
 
   // Les autres parties : une instance chacune. La batterie est construite à sa place.
   const drumNotes = all('drums');
-  const others = list
-    .filter((p) => FACTORIES[p.kind] && p.notes.length)
-    .sort((a, b) => b.notes.length - a.notes.length)
-    .map((p) => {
+  yield;
+  const others = [];
+  for (const p of list.filter((p) => FACTORIES[p.kind] && p.notes.length).sort((a, b) => b.notes.length - a.notes.length)) {
+    {
       const tracks = p.tracks ?? tracksOf(p.notes);
       const main = mainTrack(p.notes);
       const ctx = {
@@ -530,8 +535,10 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
         controlsFor: (keys) => Object.fromEntries(tracks.map((tr) => [tr, Object.fromEntries(keys.map((k) => [k, controls[tr]?.[k]]))])),
       };
       const made = FACTORIES[p.kind](p.notes, ctx);
-      return { kind: p.kind, tracks, mainTrack: main, ...made, width: made.model.width, onsets: made.model.onsets, n: p.notes.length, line: lineOf(p.notes) };
-    });
+      others.push({ kind: p.kind, tracks, mainTrack: main, ...made, width: made.model.width, onsets: made.model.onsets, n: p.notes.length, line: lineOf(p.notes) });
+    }
+    yield;
+  }
   if (drumNotes.length) {
     const drums = { kind: 'drums', notes: drumNotes, width: SEATS.drums.width, n: drumNotes.length };
     if (style === 'balls') {
@@ -661,8 +668,11 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
   // Échanges de billes entre instruments voisins (voir passes.js).
   // Réseau de tuyaux qui relie les instruments à la tour (voir trunks.js) ; les passes l'évitent.
   if (style === 'balls') {
-    ensemble.trunks = planTrunks(ensemble, passOptions.trunkOptions);
+    yield;
+    ensemble.trunks = yield* planTrunkSteps(ensemble, passOptions.trunkOptions);
+    yield;
     ensemble.passes = planPasses(ensemble, { ...passOptions, trunks: ensemble.trunks });
+    yield;
     // Tirs de la tourelle : ils puisent dans le réservoir d'air de la salle des machines.
     const tower = instruments.find((i) => i.kind === 'balls');
     ensemble.trunks.shotTimes = (tower?.model.balls ?? []).map((b) => b.launch).sort((a, b) => a - b);

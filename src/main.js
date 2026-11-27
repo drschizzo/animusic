@@ -1,22 +1,32 @@
 import * as THREE from 'three';
 import './style.css';
-import { buildEnsemble, assignRoles, groupParts, ROLES } from './arranger.js';
+import { ensembleSteps, assignRoles, groupParts, ROLES } from './arranger.js';
 import { planShots, cameraAt } from './director.js';
 import { parseMidi, demoSong } from './midi.js';
 import { isAudioFile, importAudio } from './audioImport.js';
 import { Player } from './audio.js';
 import { Stage } from './scene.js';
-import { sustainedEnd } from './util.js';
+import { sustainedEnd, sliced, breathe } from './util.js';
+import { Loader } from './loader.js';
 
 const PALETTE = ['#ff8a3d', '#3dc6ff', '#b56bff', '#5cff8f', '#ff5c8a', '#ffe14d', '#4dffe1', '#ff4d4d'];
 
 const $ = (id) => document.getElementById(id);
+const loader = new Loader();
+// L'écran de chargement d'abord : on laisse le navigateur l'afficher avant de créer le
+// moteur de rendu (délai de secours : un onglet en arrière-plan ne dessine pas).
+await new Promise((resolve) => {
+  requestAnimationFrame(() => requestAnimationFrame(resolve));
+  setTimeout(resolve, 250);
+});
 const stage = new Stage($('stage'));
 const player = new Player();
 let song = null;
 let ensemble = null;
 let shotPlan = null;
 let duration = 0;
+// Scène en construction : ni rendu ni lecture tant qu'elle n'est pas complète.
+let building = false;
 
 function colorFor(i) {
   return new THREE.Color(PALETTE[i % PALETTE.length]);
@@ -27,8 +37,28 @@ function showError(msg) {
   $('error').hidden = !msg;
 }
 
-/** (Re)construit la scène à partir du rôle de chaque piste. */
+/**
+ * (Re)construit la scène à partir du rôle de chaque piste. La construction est longue :
+ * elle se fait par tranches, derrière l'écran de chargement. Les demandes se suivent une
+ * à une ; une demande dépassée par une plus récente est abandonnée.
+ */
+let buildQueue = Promise.resolve();
+let buildCount = 0;
 function rebuild() {
+  const n = ++buildCount;
+  building = true; // dès maintenant : plus aucune image de la scène avant la fin
+  buildQueue = buildQueue.then(async () => {
+    if (n !== buildCount) return;
+    await construct();
+    // Une demande arrivée entre-temps prend la suite : l'écran reste en place.
+    if (n !== buildCount) return;
+    building = false;
+    loader.hide();
+  });
+  return buildQueue;
+}
+
+async function construct() {
   // Une partie musicale = un instrument (voir groupParts).
   const parts = groupParts(song.tracks);
   player.stop();
@@ -38,12 +68,29 @@ function rebuild() {
     return;
   }
   showError('');
-  // Expression (pédale de sustain, pitch bend, modulation) de chaque piste.
-  const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
-  ensemble = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1), { style: $('style').value });
-  stage.build(ensemble, song.tracks.map((_, i) => colorFor(i)));
-  shotPlan = planShots(ensemble);
+  // Premier chargement : écran plein. Ensuite : un voile sur la scène en place.
+  loader.show(ensemble !== null);
+  loader.progress(0, 'model');
+  try {
+    await breathe();
+    // Expression (pédale de sustain, pitch bend, modulation) de chaque piste.
+    const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
+    const built = await sliced(ensembleSteps(parts, controls, song.tracks.map((t) => t.program ?? -1), { style: $('style').value }));
+    loader.progress(0.15, 'machines');
+    await stage.build(built, song.tracks.map((_, i) => colorFor(i)), (f, step) => loader.progress(0.15 + 0.85 * f, step));
+    ensemble = built;
+    shotPlan = planShots(ensemble);
+    prepareSound(parts);
+    $('trackSummary').textContent = `${song.tracks.length} pistes → ${ensemble.instruments.length} instruments`;
+  } catch (err) {
+    console.error(err);
+    ensemble = null;
+    showError(`La scène n'a pas pu être construite : ${err.message}`);
+  }
+}
 
+/** Notes et coups de batterie confiés au lecteur audio. */
+function prepareSound(parts) {
   const voiceOf = { balls: 'mallet', bass: 'bass', pads: 'pad', bells: 'mallet', laser: 'pad', bowed: 'pad', winds: 'pad', plucked: 'mallet', keys: 'mallet' };
   // Pistes « son seul » (doublures couvertes, pistes quasi muettes) : jouées, sans instrument.
   const soundOnly = song.tracks.flatMap((t, i) =>
@@ -70,8 +117,6 @@ function rebuild() {
   $('seek').max = duration.toFixed(2);
   $('seek').value = 0;
   loadSounds();
-
-  $('trackSummary').textContent = `${song.tracks.length} pistes → ${ensemble.instruments.length} instruments`;
 }
 
 /** Charge (en arrière-plan, une seule fois) le lecteur SoundFont. */
@@ -105,7 +150,7 @@ function loadSong(s) {
     });
     list.appendChild(li);
   });
-  rebuild();
+  return rebuild();
 }
 
 let importing = false;
@@ -121,14 +166,14 @@ async function loadFile(file) {
       showError('');
       const song = await importAudio(file, (msg) => status(msg));
       const a = song.analysis;
-      loadSong(song);
+      await loadSong(song);
       status(
         `Transcription : ${a.notes} notes${a.drumsAbsent ? ', pas de batterie détectée' : `, ${a.drums} coups de batterie`}. ` +
           'Rôles modifiables ci-dessus.',
       );
     } else {
       const buf = await file.arrayBuffer();
-      loadSong(parseMidi(buf, file.name.replace(/\.midi?$/i, '')));
+      await loadSong(parseMidi(buf, file.name.replace(/\.midi?$/i, '')));
     }
   } catch (err) {
     console.error(err);
@@ -242,12 +287,13 @@ $('clearPlaylist').addEventListener('click', () => {
 });
 $('loop')?.addEventListener('change', renderPlaylist);
 $('play').addEventListener('click', async () => {
-  if (!ensemble) return;
+  if (!ensemble || building) return;
   if (player.playing) player.pause();
   else await player.play();
   updatePlayButton();
 });
 $('restart').addEventListener('click', async () => {
+  if (!ensemble || building) return;
   player.stop();
   await player.play();
   updatePlayButton();
@@ -282,6 +328,7 @@ const safeName = () =>
     .trim() || 'animusic';
 
 async function startRecording() {
+  if (building) return;
   if (!ensemble || !window.MediaRecorder) return status('Enregistrement vidéo non pris en charge par ce navigateur.');
   const mime = [
     'video/mp4;codecs=avc1.640028,mp4a.40.2',
@@ -319,7 +366,7 @@ $('record').addEventListener('click', () => (recorder ? stopRecording() : startR
 
 // ---- Export glTF pour Blender (animation cuite, chargé à la demande) ----
 $('exportGltf').addEventListener('click', async () => {
-  if (!ensemble || recorder) return;
+  if (!ensemble || recorder || building) return;
   player.pause();
   updatePlayButton();
   $('exportGltf').disabled = true;
@@ -514,6 +561,9 @@ function displayLead(now) {
 }
 
 function frame(now = performance.now()) {
+  requestAnimationFrame(frame);
+  // Scène en construction : c'est elle qui tient le moteur de rendu.
+  if (building) return;
   if (ensemble) {
     const t = player.currentTime() + displayLead(now);
     stage.update(t);
@@ -533,7 +583,6 @@ function frame(now = performance.now()) {
   }
   stage.render();
   measureFps();
-  requestAnimationFrame(frame);
 }
 
 loadSong(demoSong());

@@ -4,6 +4,154 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Animusic — prototype</title>
+    <style>
+      /* Écran de chargement : en ligne, pour s'afficher avant le script et sa feuille de style.
+         Animations en transformations et opacité seulement : jouées hors du fil principal. */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #07080d;
+      }
+      #loader {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(ellipse at 50% 42%, #141826 0%, #07080d 62%);
+        color: #e6e8f0;
+        font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        transition: opacity 0.5s ease, visibility 0s linear 0s;
+      }
+      #loader.veil {
+        background: rgba(7, 8, 13, 0.78);
+        /* Une reconstruction brève ne fait pas clignoter le voile. */
+        transition: opacity 0.25s ease 0.15s, visibility 0s linear 0s;
+      }
+      #loader.done {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition: opacity 0.5s ease, visibility 0s linear 0.5s;
+      }
+      #loader.done * {
+        animation-play-state: paused !important;
+      }
+      .loader-box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: min(320px, calc(100vw - 48px));
+        text-align: center;
+      }
+      .loader-keys {
+        display: flex;
+        align-items: flex-end;
+        gap: 10px;
+        height: 96px;
+        margin-bottom: 26px;
+      }
+      .loader-keys span {
+        position: relative;
+        width: 22px;
+        height: 96px;
+      }
+      /* Lame : elle s'enfonce et s'allume à l'impact. */
+      .loader-keys span::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 8px;
+        border-radius: 4px;
+        background: var(--c);
+        box-shadow: 0 0 14px var(--c);
+        opacity: 0.35;
+        animation: loader-key 1.2s linear infinite;
+        animation-delay: calc(var(--i) * -0.17s);
+      }
+      /* Bille : montée qui ralentit, chute qui accélère, léger écrasement au rebond. */
+      .loader-keys i {
+        position: absolute;
+        left: 4px;
+        bottom: 9px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #fff 0%, var(--c) 45%, var(--c) 100%);
+        transform-origin: 50% 100%;
+        will-change: transform;
+        animation: loader-ball 1.2s infinite;
+        animation-delay: calc(var(--i) * -0.17s);
+      }
+      @keyframes loader-ball {
+        0% {
+          transform: translateY(0) scale(1.18, 0.82);
+          animation-timing-function: cubic-bezier(0.2, 0.65, 0.45, 1);
+        }
+        50% {
+          transform: translateY(calc(var(--h) * -1)) scale(1, 1);
+          animation-timing-function: cubic-bezier(0.55, 0, 0.8, 0.35);
+        }
+        100% {
+          transform: translateY(0) scale(1.18, 0.82);
+        }
+      }
+      @keyframes loader-key {
+        0% {
+          opacity: 1;
+          transform: translateY(2px);
+        }
+        12% {
+          transform: translateY(0);
+        }
+        45%,
+        96% {
+          opacity: 0.35;
+          transform: translateY(0);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(2px);
+        }
+      }
+      .loader-title {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+      }
+      .loader-text {
+        min-height: 1.4em;
+        margin: 6px 0 16px;
+        color: #8b93b0;
+      }
+      .loader-bar {
+        width: 100%;
+        height: 3px;
+        border-radius: 2px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.09);
+      }
+      .loader-bar > div {
+        height: 100%;
+        border-radius: 2px;
+        background: linear-gradient(90deg, #ff8a3d, #ffe14d, #5cff8f, #3dc6ff, #b56bff);
+        transform: scaleX(0);
+        transform-origin: 0 50%;
+        transition: transform 0.35s ease-out;
+        will-change: transform;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .loader-keys i {
+          animation: none;
+        }
+        .loader-keys span::after {
+          animation-duration: 2.4s;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="stage"></div>
@@ -120,6 +268,23 @@
     </aside>
 
     <div id="drop" hidden>Dépose ton fichier MIDI ou audio</div>
+    <div id="loader" role="status" aria-live="polite" aria-busy="true">
+      <div class="loader-box">
+        <div class="loader-keys" aria-hidden="true">
+          <span style="--i: 0; --c: #ff8a3d; --h: 70px"><i></i></span>
+          <span style="--i: 1; --c: #ffe14d; --h: 62px"><i></i></span>
+          <span style="--i: 2; --c: #5cff8f; --h: 54px"><i></i></span>
+          <span style="--i: 3; --c: #4dffe1; --h: 46px"><i></i></span>
+          <span style="--i: 4; --c: #3dc6ff; --h: 54px"><i></i></span>
+          <span style="--i: 5; --c: #b56bff; --h: 62px"><i></i></span>
+          <span style="--i: 6; --c: #ff5c8a; --h: 70px"><i></i></span>
+        </div>
+        <div class="loader-title">Animusic</div>
+        <div class="loader-text">Chargement…</div>
+        <div class="loader-bar"><div></div></div>
+      </div>
+    </div>
+    <noscript>Cette page a besoin de JavaScript.</noscript>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

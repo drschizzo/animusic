@@ -16,7 +16,7 @@ import { PostFX } from './postfx.js';
 import { hitPulse } from './drums.js';
 import { analyzeSong, deployAt, sectionAt } from './sections.js';
 import { floorHalo, riserBlock } from './parts.js';
-import { lowerBound } from './util.js';
+import { lowerBound, drain, sliced, breathe } from './util.js';
 import { freezeStatic } from './freeze.js';
 
 /** Résolution interne par niveau : rapport maximal et nombre de pixels maximal. */
@@ -57,13 +57,22 @@ function solidBox(root) {
  * utilisé aussi par le détecteur d'interpénétrations (tools/collide.mjs).
  * @returns { lifts, views, hatches: [{ height, halo }] }
  */
-export function mountInstruments(ensemble, trackColors, content, { freeze = true } = {}) {
+export function mountInstruments(ensemble, trackColors, content, options) {
+  return drain(mountSteps(ensemble, trackColors, content, options));
+}
+
+/** Le même montage, par étapes (voir `sliced` dans util.js) : un instrument à la fois. */
+export function* mountSteps(ensemble, trackColors, content, { freeze = true } = {}) {
   const lifts = ensemble.instruments.map(() => {
     const lift = new THREE.Group();
     content.add(lift);
     return lift;
   });
-  const views = ensemble.instruments.map((inst, k) => new VIEWS[inst.kind](inst.model, trackColors, lifts[k]));
+  const views = [];
+  for (const [k, inst] of ensemble.instruments.entries()) {
+    views.push(new VIEWS[inst.kind](inst.model, trackColors, lifts[k]));
+    yield;
+  }
   const hatches = views.map((view, k) => {
     const inst = ensemble.instruments[k];
     if (inst.kind === 'balls') {
@@ -105,15 +114,19 @@ export function mountInstruments(ensemble, trackColors, content, { freeze = true
   });
   // Pièces fixes fusionnées par matériau (voir freeze.js) : beaucoup moins d'appels de rendu.
   let frozen = 0;
-  if (freeze) views.forEach((view, k) => {
-    const inst = ensemble.instruments[k];
-    const times = Array.from({ length: 8 }, (_, i) => inst.start + ((i + 0.5) / 8) * (inst.end - inst.start));
-    frozen += freezeStatic(lifts[k], view, view.group ?? view.content, (t) => view.update(t), times);
-  });
+  yield;
+  if (freeze)
+    for (const [k, view] of views.entries()) {
+      const inst = ensemble.instruments[k];
+      const times = Array.from({ length: 8 }, (_, i) => inst.start + ((i + 0.5) / 8) * (inst.end - inst.start));
+      frozen += freezeStatic(lifts[k], view, view.group ?? view.content, (t) => view.update(t), times);
+      yield;
+    }
   // Canons de passe : montés après la fusion (leurs fûts bougent), sur l'élévateur de l'instrument qui tire.
   const passView = ensemble.passes?.cannons.length ? new PassesView(ensemble.passes, trackColors, lifts, content) : null;
+  yield;
   // Réseau de tuyaux de verre qui relie les instruments à la tour : fixe, dans le repère de la scène.
-  const trunkView = ensemble.trunks?.lines.length ? new TrunksView(ensemble.trunks, trackColors, content) : null;
+  const trunkView = ensemble.trunks?.lines.length ? yield* TrunksView.steps(ensemble.trunks, trackColors, content) : null;
   return { lifts, views, hatches, frozen, passView, trunkView };
 }
 
@@ -192,17 +205,20 @@ export class Stage {
   }
 
   /**
-   * Construit la vue de chaque instrument de l'ensemble (voir arranger.js).
+   * Construit la vue de chaque instrument de l'ensemble (voir arranger.js), par tranches :
+   * le fil principal n'est jamais retenu longtemps (l'écran de chargement reste fluide).
    * @param ensemble { instruments: [{kind, model, ...}], radius }
    * @param trackColors tableau de THREE.Color indexé par piste
+   * @param onProgress(fraction, étape) avancement, de 0 à 1
    */
-  build(ensemble, trackColors) {
+  async build(ensemble, trackColors, onProgress = () => {}) {
     this.clear();
     this.ensemble = ensemble;
     this.environment.setRadius(ensemble.radius, ensemble.stageRadius);
     this.kick = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
     this.song = analyzeSong(ensemble);
-    Object.assign(this, mountInstruments(ensemble, trackColors, this.content));
+    onProgress(0, 'machines');
+    Object.assign(this, await sliced(mountSteps(ensemble, trackColors, this.content)));
     this.lamps = [];
     this.lifts.forEach((lift, k) => lift.traverse((o) => o.userData.lamp && this.lamps.push({ o, k })));
     this.mood = sectionAt(this.song, 0);
@@ -218,23 +234,125 @@ export class Stage {
 
     this.resetView();
     this.controls.update();
-    // Compile d'avance tous les shaders (y compris des objets encore vides, comme le
-    // réservoir de billes) : sinon la première apparition fige l'image en pleine lecture.
-    this.renderer.compileAsync(this.scene, this.camera).catch(() => {});
-    // Une image de rodage, tous les instruments en place : géométries envoyées au GPU,
-    // variantes d'ombre, de reflet et de profondeur compilées. Sans elle, un instrument
-    // qui entre en scène pour la première fois fait hoqueter l'image.
-    // Les pièces cachées au repos (rayons, éclairs, flou des cordes) sont montrées le temps de cette image.
-    if (this.container.clientWidth && this.container.clientHeight) {
-      const hidden = [];
-      this.content.traverse((o) => {
-        if (!o.visible) {
-          hidden.push(o);
-          o.visible = true;
+    await this.warmUp(onProgress);
+  }
+
+  /**
+   * Rodage : tous les instruments en place, shaders compilés, géométries envoyées au GPU,
+   * variantes d'ombre, de reflet et de profondeur prêtes. Sans lui, un instrument qui entre
+   * en scène pour la première fois fait hoqueter l'image en pleine lecture.
+   *
+   * Compiler un shader à son premier dessin bloque le fil principal jusqu'à la fin de la
+   * compilation. On procède donc en deux temps : des images « à blanc », où chaque passe
+   * déroule son vrai parcours mais où chaque dessin se borne à créer son programme (le
+   * pilote les compile alors en parallèle, sans bloquer personne) ; puis, une fois tous les
+   * programmes prêts, les vraies images, instrument par instrument.
+   */
+  async warmUp(onProgress = () => {}) {
+    if (!this.container.clientWidth || !this.container.clientHeight) return;
+    const renderer = this.renderer;
+    // Les pièces cachées au repos (rayons, éclairs, flou des cordes) sont montrées le temps du rodage.
+    const hidden = [];
+    this.content.traverse((o) => {
+      if (!o.visible) {
+        hidden.push(o);
+        o.visible = true;
+      }
+    });
+    try {
+      onProgress(0.4, 'shaders');
+      if (renderer.extensions.get('KHR_parallel_shader_compile')) {
+        const before = renderer.info.programs.length;
+        // Six images : les faces de la sonde et les cartes d'ombre se relaient d'une image à l'autre.
+        for (let i = 0; i < 6; i++) {
+          this.dryRender();
+          await breathe();
         }
-      });
+        const programs = renderer.info.programs.slice(before);
+        const deadline = performance.now() + 60000;
+        for (;;) {
+          const ready = programs.filter((p) => p.isReady()).length;
+          onProgress(0.4 + 0.45 * (programs.length ? ready / programs.length : 1), 'shaders');
+          if (ready === programs.length || performance.now() > deadline) break;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
+      }
+      // Vraies images : le décor seul, puis chaque instrument seul, puis tout ensemble.
+      onProgress(0.85, 'scène');
+      const lifts = this.lifts ?? [];
+      for (let k = -1; k < lifts.length; k++) {
+        lifts.forEach((lift, i) => (lift.visible = i === k));
+        this.render();
+        onProgress(0.85 + (0.15 * (k + 2)) / (lifts.length + 2), 'scène');
+        await breathe();
+      }
+      lifts.forEach((lift) => (lift.visible = true));
       this.render();
+    } finally {
       for (const o of hidden) o.visible = false;
+      for (const small of this._dryTiny?.values() ?? []) small.dispose();
+      this._dryTiny = this._drySeen = null;
+    }
+  }
+
+  /**
+   * Une image « à blanc » : toutes les passes se déroulent (ombres, sonde, reflet, image,
+   * effets), mais chaque dessin est remplacé par la création de son programme, dans l'état
+   * exact où la passe le demande (cible de rendu, lumières, matériau de substitution).
+   */
+  dryRender() {
+    const renderer = this.renderer;
+    const draw = renderer.renderBufferDirect;
+    const seen = (this._drySeen ??= new WeakMap());
+    const ids = (this._dryIds ??= new WeakMap());
+    let next = (this._dryNext ??= 1);
+    const id = (o) => {
+      if (!o) return 0;
+      if (!ids.has(o)) ids.set(o, next++);
+      return ids.get(o);
+    };
+    const tiny = (this._dryTiny ??= new Map());
+    renderer.renderBufferDirect = (camera, scene, geometry, material, object) => {
+      const attributes = Object.keys(geometry.attributes).join();
+      if (!scene) {
+        // Passe d'ombres : son programme dépend de l'état des lumières laissé par le rendu
+        // précédent, que `compile` ne reproduit pas. On la dessine donc pour de bon (shaders
+        // de profondeur, vite compilés), mais avec un triangle à la place de la géométrie.
+        let small = tiny.get(attributes);
+        if (!small) {
+          small = new THREE.BufferGeometry();
+          for (const [name, a] of Object.entries(geometry.attributes)) small.setAttribute(name, new THREE.BufferAttribute(new a.array.constructor(3 * a.itemSize), a.itemSize, a.normalized));
+          tiny.set(attributes, small);
+        }
+        draw.call(renderer, camera, null, small, material, object, null);
+        return;
+      }
+      // Une seule fois par variante : même matériau, même cible, même genre d'objet.
+      const key = [
+        material.version,
+        material.side,
+        id(renderer.getRenderTarget()),
+        id(scene),
+        attributes,
+        object.isInstancedMesh ? 1 : 0,
+        object.isSkinnedMesh ? 1 : 0,
+        object.receiveShadow ? 1 : 0,
+        object.instanceColor ? 1 : 0,
+        object.isPoints ? 2 : object.isLine ? 1 : 0,
+      ].join('|');
+      let keys = seen.get(material);
+      if (!keys) seen.set(material, (keys = new Set()));
+      if (keys.has(key)) return;
+      keys.add(key);
+      // `compile` prend le matériau de l'objet : on lui présente l'objet sous celui de la passe.
+      const stand = Object.create(object, { material: { value: material }, children: { value: [] } });
+      renderer.compile(stand, camera, scene);
+    };
+    try {
+      this.render();
+    } finally {
+      renderer.renderBufferDirect = draw;
+      this._dryNext = next;
     }
   }
 

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { lineBalls, gateOpening, lastPainted, engineLoad, stackBalls, airPressure } from './trunks.js';
 import { BallPool } from './ballPool.js';
 import { mat } from './materials.js';
-import { lowerBound, upperBound } from './util.js';
+import { lowerBound, upperBound, drain } from './util.js';
 import { Kit, turn, cylinder, ring, rbox, nut, boltCircle, toX, toZ, between, rod, pillowBlock, spokedPulley, extrude, mirror, beltLoop } from './machineKit.js';
 
 /** Tuyau balayé le long d'une polyligne (repères transportés de proche en proche, sans vrille). */
@@ -181,6 +181,17 @@ function archPlate(w, yb, yc) {
  */
 export class TrunksView {
   constructor(trunks, trackColors, content) {
+    drain(this.assemble(trunks, trackColors, content));
+  }
+
+  /** La même vue, construite par étapes (voir `sliced` dans util.js) : une ligne à la fois. */
+  static *steps(trunks, trackColors, content) {
+    const view = Object.create(TrunksView.prototype);
+    yield* view.assemble(trunks, trackColors, content);
+    return view;
+  }
+
+  *assemble(trunks, trackColors, content) {
     this.trunks = trunks;
     this.trackColors = trackColors;
     const o = trunks.options;
@@ -229,7 +240,9 @@ export class TrunksView {
       return hoodSpring + W; // dessus de la voûte
     };
 
-    this.lines = trunks.lines.map((line) => {
+    const self = this;
+    // Une ligne, par étapes : chaque machine du tapis est un morceau de travail.
+    const buildLine = function* (line) {
       const path = line.maze;
       const pts = path.points;
       const view = { line, path };
@@ -247,6 +260,7 @@ export class TrunksView {
         });
         kit.add(M.chrome, sweepGeometry(rail, 0.0045, 8));
       }
+      yield;
       // Pieds : traverse, deux montants, patins réglables, sur les parties droites.
       for (let s = 0.45; s < L - 0.3; s += 1.1) {
         const a = path.tangentAt(s - 0.08);
@@ -259,6 +273,7 @@ export class TrunksView {
           kit.add(M.steel, cylinder(0.013, 0.006).translate(side * (W - 0.006), 0.003, 0), m);
         }
       }
+      yield;
       // Bouts : flasques, rouleau, paliers de part et d'autre.
       for (const [s, dz] of [[0, -0.005], [L, 0.005]]) {
         const m = frameAt(path, s);
@@ -269,7 +284,7 @@ export class TrunksView {
         kit.add(M.steel, toX(cylinder(0.022, 2 * W - 0.026, 0.004, 24)).translate(0, top - 0.022, 0), m);
         kit.add(M.steel, toX(cylinder(0.006, 2 * W + 0.03)).translate(0, top - 0.022, 0), m);
       }
-
+      yield;
       if (line.kind === 'feed') {
         // Distributeur : capot fermé à l'amont, collier, puis colonne de réserve (verre) ou trémie.
         const m0 = frameAt(path, 0);
@@ -299,14 +314,18 @@ export class TrunksView {
         }
         // Chute en bout de ligne.
         hood(frameAt(path, L + 0.02), 0.14, 1);
-        this.buildGrinder(line, path);
-        view.lamp = this.buildPaintBooth(line, path);
-        Object.assign(view, this.buildGate(line, path));
+        yield;
+        self.buildGrinder(line, path);
+        yield;
+        view.lamp = self.buildPaintBooth(line, path);
+        yield;
+        Object.assign(view, self.buildGate(line, path));
       } else {
         hood(frameAt(path, 0), 0.14, -1);
-        if (line.recycle) this.buildRecycler(line);
+        if (line.recycle) self.buildRecycler(line);
         else hood(frameAt(path, L + 0.02), 0.14, 1);
       }
+      yield;
       // Réservoir : le plus grand nombre de billes en vie à la fois sur la ligne.
       const life = line.before + line.after;
       let most = 0;
@@ -317,9 +336,16 @@ export class TrunksView {
       view.pool = new BallPool(g, line.ballRadius, most + 2 + (line.stock?.slots ?? 0));
       view.pool.trails.visible = false; // pas de traînée sur un tapis
       return view;
-    });
+    };
+    this.lines = [];
+    for (const line of trunks.lines) {
+      this.lines.push(yield* buildLine(line));
+      yield;
+    }
     if (trunks.engine) this.buildEngine(trunks.engine);
+    yield;
     kit.build(g, 'réseau');
+    yield;
     this.pools = this.lines.map((l) => l.pool);
     // Étincelles des calibreuses : de petits traits lumineux lancés en arrière, à chaque bille.
     if (this.grinders.length) {
