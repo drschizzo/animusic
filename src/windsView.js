@@ -90,7 +90,7 @@ export class WindsView {
         const glow = fx(new THREE.Mesh(new THREE.CylinderGeometry(r * 0.7, r * 0.7, L * 0.96, 16, 1, true), glowMat));
         glow.position.set(p.x, deck + L / 2, 0);
         g.add(plume, glow);
-        Object.assign(v, { nozzle, plumeMat, glowMat, glow, rest: -0.35 });
+        Object.assign(v, { nozzle, plume, plumeMat, glowMat, glow, rest: -0.35 });
         return v;
       }
       // Cor ou anche : tube puis pavillon évasé, pointé vers le public et légèrement vers le haut.
@@ -142,7 +142,7 @@ export class WindsView {
       // Alimentation : de la nourrice à l'embouchure.
       const mouthWorld = new THREE.Vector3(0, -0.05, 0).applyQuaternion(horn.quaternion).add(horn.position);
       g.add(rod(V(p.x, manifoldY, -0.38), mouthWorld, 0.012, dark, 8));
-      Object.assign(v, { bell, piston, pistonMat, coreMat, plumeMat, rest: piston.position.z });
+      Object.assign(v, { bell, piston, pistonMat, core, coreMat, plume, plumeMat, rest: piston.position.z });
       return v;
     });
 
@@ -174,6 +174,9 @@ export class WindsView {
       } else (v.coreMat ?? v.glowMat).color.setRGB(0, 0, 0);
       v.plumeMat.uniforms.uLevel.value = breath;
       v.plumeMat.uniforms.uTime.value = t;
+      // Effets additifs éteints : rien à ajouter à l'image, pas d'appel de rendu.
+      v.plume.visible = breath > 0.003;
+      if (v.core) v.core.visible = breath > 0.003;
       if (v.nozzle) {
         // La buse s'abaisse sur le bord du tuyau avant la note.
         v.nozzle.rotation.x = v.rest * (1 - valve) + 0.35 * valve;

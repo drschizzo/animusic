@@ -923,6 +923,9 @@ export class Environment {
 
   renderProbe() {
     if (!this.probeFaces) return;
+    // Une face toutes les deux images : la sonde se refait en douze images, assez vite
+    // pour suivre l'éclairage, et coûte deux fois moins d'appels de rendu.
+    if ((this.probeTick = (this.probeTick ?? 0) + 1) % 2) return;
     const hidden = [this.dust, ...this.heads.map((h) => h.beam), ...this.probeClutter()];
     const visible = hidden.map((o) => o.visible);
     hidden.forEach((o) => (o.visible = false));
@@ -947,7 +950,7 @@ export class Environment {
 
   setQuality(level) {
     // Sonde de reflets : deux faces par image en qualité haute, une (plus petite) en moyenne.
-    this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
+    this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube toutes les deux images (renderProbe)
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
     // Avec les reflets en espace écran (gpu.js, postfxNodes.js), pas de reflet planaire.
