@@ -115,12 +115,13 @@ export class Player {
     this.sf = { channels: [], frames: [] };
     // Retard supplémentaire (s) réglable par l'utilisateur si le son arrive encore après l'image.
     this.manualOffset = 0;
-    this.transport.on('stop', () => {
+    // Tone transmet l'instant de l'arrêt / de la pause : barrière pour les ticks en retard.
+    this.transport.on('stop', (time) => {
       this.lastDrum.clear();
-      this.soundfont.silence();
+      this.soundfont.silence(false, time);
       this.soundfont.setup(this.sf.channels);
     });
-    this.transport.on('pause', () => this.soundfont.silence());
+    this.transport.on('pause', (time) => this.soundfont.silence(false, time));
   }
 
   /** Le lecteur SoundFont joue-t-il (sinon : synthèse de secours) ? */
@@ -228,9 +229,11 @@ export class Player {
 
   /** Saute à l'instant musical t (secondes), en lecture comme en pause. */
   seek(t) {
+    // Les ticks de l'ancienne position encore à émettre sont tous antérieurs à cet instant.
+    const gate = Tone.now();
     this.transport.seconds = Math.max(0, t + this.lead);
     this.lastDrum.clear();
-    this.soundfont.silence();
+    this.soundfont.silence(false, gate);
     this.restoreControllers();
   }
 

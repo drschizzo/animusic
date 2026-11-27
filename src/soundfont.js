@@ -21,6 +21,11 @@ export class SoundFontEngine {
     // Attaques envoyées en avance (le transport programme ~0,1 s à l'avance) :
     // la file du synthé les jouerait même après une pause ou un saut.
     this.pending = [];
+    // Instant (horloge AudioContext) de la dernière coupure : Tone émet encore, après
+    // l'événement pause / stop ou un saut, les ticks antérieurs à cet instant. Leurs
+    // attaques arriveraient après silence() et ne recevraient jamais de relâché
+    // (note bloquée) : on les ignore.
+    this.gate = -Infinity;
   }
 
   /** Charge le processeur et la banque (une seule fois). Rejette en cas d'échec. */
@@ -61,6 +66,7 @@ export class SoundFontEngine {
   send(msgs, time) {
     const s = this.synth;
     if (!s) return;
+    if (time !== undefined && time < this.gate) return;
     const opt = time === undefined ? undefined : { time };
     if (time !== undefined) this.queuedUntil = Math.max(this.queuedUntil ?? 0, time);
     if (this.pending.length > 64) this.pending = this.pending.filter((p) => p.time > s.currentTime - 0.5);
@@ -83,8 +89,13 @@ export class SoundFontEngine {
     }
   }
 
-  /** Coupe tout ce qui sonne (pause, saut, arrêt), avec le relâché naturel des notes. */
-  silence(force = false) {
+  /**
+   * Coupe tout ce qui sonne (pause, saut, arrêt), avec le relâché naturel des notes.
+   * @param gate instant de la coupure : les messages programmés avant lui et reçus
+   *   ensuite (ticks en retard du transport) sont ignorés
+   */
+  silence(force = false, gate = Tone.now()) {
+    this.gate = Math.max(this.gate, gate);
     const s = this.synth;
     if (!s) return;
     // La pédale de sustain retiendrait les notes relâchées : on la relève (restoreControllers
