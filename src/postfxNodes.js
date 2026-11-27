@@ -70,7 +70,15 @@ import {
 import { taau } from './vendor/three-advanced-techniques/rendering/taau/TAAUNode.js';
 import { xeGTAO } from './vendor/three-advanced-techniques/rendering/ambient-occlusion/XeGTAONode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { ssr, ssrComposite, ssrGBuffer } from './vendor/three-advanced-techniques/rendering/screen-space-reflections/SSRNode.js';
 import { motion } from './nodes.js';
+
+/**
+ * Essai (?webgpu&ssr) : reflets en espace écran (three-advanced-techniques) à la place du
+ * reflet planaire du sol, qui redessine toute la scène à chaque image. Lu ici et non dans
+ * gpu.js, qui charge ce module : l'importer ferait un cycle.
+ */
+const SSR = typeof location !== 'undefined' && new URLSearchParams(location.search).has('ssr'); // = gpu.js SSR
 
 const TILE = 16; // côté (pixels) des pavés du flou de mouvement
 const BLUR_SAMPLES = 16;
@@ -131,7 +139,10 @@ export class PostFX {
     prePass.transparent = false;
     // Elle écrit aussi la vitesse, pour que l'occlusion suive ce qui bouge (les billes : vitesse
     // écrite à la main, nodes.ballGlow) au lieu de repartir de zéro derrière chaque bille.
-    prePass.setMRT(mrt({ output: normalView, albedo: giAlbedo, velocity }));
+    // Avec les reflets en espace écran, elle porte aussi leur G-buffer (normales, profondeur
+    // linéaire, poids spéculaire et rugosité) : des seuls objets opaques, à la même image
+    // décalée que la scène.
+    prePass.setMRT(mrt({ output: normalView, albedo: giAlbedo, velocity, ...(SSR ? ssrGBuffer() : {}) }));
     Object.assign(prePass.getTexture('velocity'), { type: HalfFloatType, format: RGFormat });
     prePass.contextNode = context({ getAO: null }); // elle ne lit pas l'occlusion qu'elle nourrit
     // Géométrie des seules surfaces opaques, lue par la lumière indirecte et les faisceaux.
@@ -161,7 +172,16 @@ export class PostFX {
     // --- Anticrénelage temporel, avec montée en résolution (TAAU de three-advanced-techniques :
     // détails fins verrouillés, reconstruction en 4 lectures). L'image nettoyée de ses
     // pixels non finis est rendue à l'échelle de la passe : TAAU en déduit sa taille d'entrée.
-    const beauty = (this.beauty = rtt(sanitized(scenePass.getTextureNode('output')), null, null, { type: HalfFloatType, depthBuffer: false }));
+    const color = scenePass.getTextureNode('output');
+    if (SSR) {
+      // Reflets en espace écran : ils remplacent le reflet de l'environnement là où ils
+      // trouvent la scène, le sol satiné compris (seuil de rugosité relevé pour lui).
+      const reflections = (this.reflections = ssr(color, prePass, { roughnessFadeStart: 0.45, roughnessCutoff: 0.75, thickness: 0.2 }));
+      // L'environnement est figé à la construction : refait quand la sonde le remplace (render()).
+      this.shaded = () => sanitized(ssrComposite(color, reflections, scene.environment, { environmentIntensity: () => scene.environmentIntensity }));
+      this.reflectedEnvironment = scene.environment;
+    }
+    const beauty = (this.beauty = rtt(SSR ? this.shaded() : sanitized(color), null, null, { type: HalfFloatType, depthBuffer: false }));
     const resolve = (this.taa = taau(beauty, depth, speed, camera));
     const steady = resolve.getTextureNode();
 
@@ -618,6 +638,11 @@ export class PostFX {
     u.cameraWorld.value.copy(camera.matrixWorld);
     u.eye.value.setFromMatrixPosition(camera.matrixWorld);
     this.updateBeams();
+    if (SSR && this.scene.environment !== this.reflectedEnvironment) {
+      this.reflectedEnvironment = this.scene.environment;
+      this.beauty.node = this.shaded();
+      this.pipeline.needsUpdate = true;
+    }
     this.pipeline.render();
   }
 }

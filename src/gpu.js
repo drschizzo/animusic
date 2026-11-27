@@ -2,6 +2,7 @@
 //
 //   ?webgpu         WebGPURenderer (WebGPU, ou WebGL 2 si le navigateur ne l'a pas)
 //   ?webgpu&webgl2  WebGPURenderer forcé sur son moteur WebGL 2
+//   ?webgpu&ssr     essai : reflets en espace écran au lieu du reflet planaire du sol
 //   ?raw            WebGLRenderer actuel, mais avec la même scène « brute » que le
 //                   prototype : comparaison à l'identique
 //
@@ -18,6 +19,8 @@ const params = typeof location === 'undefined' ? new URLSearchParams() : new URL
 
 export const WEBGPU = params.has('webgpu');
 export const RAW = WEBGPU || params.has('raw');
+/** Essai : reflets en espace écran au lieu du reflet planaire du sol (?webgpu&ssr, voir postfxNodes.js). */
+export const SSR = WEBGPU && params.has('ssr');
 
 /** Retouches de matériaux en TSL (null hors prototype : les vues gardent alors leur GLSL). */
 export const nodes = WEBGPU ? await import('./nodes.js') : null;
@@ -34,7 +37,12 @@ nodes?.useRenderer(gpuRenderer);
 
 async function createRenderer() {
   const { WebGPURenderer } = await import('three/webgpu');
-  const renderer = new WebGPURenderer({ antialias: true, powerPreference: 'high-performance', forceWebGL: params.has('webgl2') });
+  // Avec les reflets en espace écran, la passe préalable écrit six cibles (38 octets par
+  // pixel) : au-delà des 32 garantis par WebGPU. On demande ce que l'adaptateur permet.
+  const adapter = SSR && !params.has('webgl2') ? await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' }) : null;
+  const limit = adapter?.limits.maxColorAttachmentBytesPerSample;
+  const requiredLimits = limit > 32 ? { maxColorAttachmentBytesPerSample: limit } : undefined;
+  const renderer = new WebGPURenderer({ antialias: true, powerPreference: 'high-performance', forceWebGL: params.has('webgl2'), requiredLimits });
   await renderer.init();
   return renderer;
 }

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { tex, mat, fx, base } from './materials.js';
 import { FINITE } from './glsl.js';
-import { WEBGPU, RAW, nodes, shared } from './gpu.js';
+import { WEBGPU, RAW, SSR, nodes, shared } from './gpu.js';
 
 // Le préfiltrage d'environnement de WebGPURenderer est le sien (prototype, voir gpu.js).
 // En WebGPU, préfiltrage en une passe pour tous les niveaux (three en fait une par face
@@ -929,7 +929,8 @@ export class Environment {
     this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
-    this.reflections = level !== 'low' && !BARE;
+    // Avec ?ssr (postfxNodes.js), les reflets en espace écran remplacent le reflet planaire.
+    this.reflections = level !== 'low' && !BARE && !SSR;
     this.reflectionScale = level === 'high' ? 0.5 : 0.4;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;
     // Trois cartes d'ombres (ensemble + deux poursuites) : 2K en qualité haute, 1K en moyenne.
