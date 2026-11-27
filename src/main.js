@@ -8,7 +8,8 @@ import { Player } from './audio.js';
 import { Stage } from './scene.js';
 import { sustainedEnd, sliced, breathe } from './util.js';
 import { Loader } from './loader.js';
-import { RAW, backendName } from './gpu.js';
+import { RAW, backendName, gpuRenderer } from './gpu.js';
+import { GPUTierDetector } from './vendor/three-advanced-techniques/utils/GPUTierDetector.js';
 
 // Import d'enregistrements (mp3, wav…) : désactivé pour l'instant (trop lent, résultat
 // pas encore satisfaisant). Le code reste en place : passer à true pour le réactiver.
@@ -518,14 +519,27 @@ $('style').addEventListener('change', (e) => {
   if (ensemble) rebuild();
 });
 
-// Qualité graphique. En mode auto, on part de « haute » et on descend d'un cran
-// si l'animation tombe durablement sous ~40 images/s pendant la lecture.
+// Qualité graphique. En mode auto, on part du niveau que permet le processeur graphique
+// (lu sur l'adaptateur WebGPU, quelques ms, sans mesure) et on descend d'un cran si
+// l'animation tombe durablement sous ~40 images/s pendant la lecture.
 const LEVELS = ['high', 'medium', 'low'];
 let qualityMode = 'auto';
+const autoStart = await startingQuality();
+async function startingQuality() {
+  try {
+    const found = await new GPUTierDetector(['low', 'medium', 'high']).detect(gpuRenderer);
+    // Sans WebGPU, rien à lire : le moteur WebGL part de « haute » comme avant.
+    if (!found.signals.webgpu) return 'high';
+    if (found.tier !== 'high') console.info(`Qualité de départ : ${found.tier} (${found.deviceClass})`, found.reasons);
+    return found.tier;
+  } catch {
+    return 'high';
+  }
+}
 function setQuality(mode) {
   qualityMode = mode;
   $('quality').value = mode;
-  stage.setQuality(mode === 'auto' ? 'high' : mode);
+  stage.setQuality(mode === 'auto' ? autoStart : mode);
   try {
     localStorage.setItem('animusic.quality', mode);
   } catch {
