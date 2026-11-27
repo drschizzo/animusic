@@ -308,14 +308,6 @@ function fullScreen(uniforms, fragment) {
   return new QuadMesh(material);
 }
 
-/** Flou gaussien à 9 points d'une direction (pyramide de flous du reflet du sol, environment.js). */
-export function blurQuad() {
-  const u = { tSource: texture(), uStep: uniform(new Vector2()), uClamp: uniform(1e4) };
-  const tap = (k) => min(finite(u.tSource.sample(uv().add(u.uStep.mul(k))).rgb), u.uClamp);
-  const pair = (k) => tap(k).add(tap(-k));
-  return fullScreen(u, vec4(tap(0).mul(0.2042).add(pair(1).mul(0.1802)).add(pair(2).mul(0.1238)).add(pair(3).mul(0.0663)).add(pair(4).mul(0.0276)), 1));
-}
-
 /** Copie qui remplace les valeurs non finies et écrête les pics (sonde de reflets, environment.js). */
 export function sanitizeQuad(ceiling) {
   const u = { tSource: texture(), uClamp: uniform(ceiling) };
@@ -327,11 +319,11 @@ const nonFinite = (x) => floatBitsToUint(x).bitAnd(uint(0x7f800000)).equal(uint(
 const finite = (c) => select(nonFinite(c.r).or(nonFinite(c.g)).or(nonFinite(c.b)), vec3(0), c);
 
 /**
- * Plancher de scène et son reflet planaire (environment.js, ReflectiveFloor).
- * u : { uReflectMatrix, uReflect, uStageRadius } ; sharp : texture du reflet net ;
- * blurred : textures de la pyramide de flous, du moins flou au plus flou.
+ * Plancher de scène (environment.js, ReflectiveFloor) : lames, joints et usure. Pas de
+ * reflet planaire en WebGPU : les reflets en espace écran (postfxNodes.js) le remplacent.
+ * u : { uStageRadius }.
  */
-export function stageFloor(material, u, sharp, blurred) {
+export function stageFloor(material, u) {
   const p = positionWorld;
   const onStage = smoothstep(u.uStageRadius.sub(0.05), u.uStageRadius.add(0.05), length(p.xz)).oneMinus();
   const hash = (x) => fract(sin(x).mul(43758.5453));
@@ -347,37 +339,11 @@ export function stageFloor(material, u, sharp, blurred) {
   const seam = max(laneSeam, runSeam);
   const wear = materialRoughness.mul(2).clamp(0, 1);
   const boards = mix(0.46, 0.7, wear).add(tone.sub(0.5).mul(0.1));
-  // Poli vu par le reflet ; l'éclairage direct voit une surface plus mate.
+  // Poli des lames ; l'éclairage direct voit une surface plus mate (sinon chaque
+  // projecteur dessine une tache spéculaire aveuglante).
   const gloss = mix(0.88, mix(boards, 0.92, seam), onStage);
   material.colorNode = materialColor.mul(mix(0.3, tone.mul(0.36).add(0.82).mul(seam.mul(0.55).oneMinus()), onStage));
   material.roughnessNode = max(gloss, 0.5);
-
-  const levels = blurred.length;
-  material.emissiveNode = Fn(() => {
-    const light = vec3(0).toVar();
-    // Sauté quand le reflet est coupé : une texture périmée ne doit pas contaminer le sol.
-    If(u.uReflect.greaterThan(0), () => {
-      const clip = u.uReflectMatrix.mul(vec4(p, 1));
-      // La cible du reflet se lit de haut en bas avec WebGPURenderer : v est retourné
-      // par rapport à la version GLSL (vérifié à l'image et à la mesure, face au WebGL).
-      const ndc = clip.xy.div(clip.w);
-      const uv = vec2(ndc.x, ndc.y.oneMinus());
-      const level = gloss.mul(5.5).add(0.15).clamp(0, levels);
-      // Lectures au niveau 0 (ces textures n'ont pas de mipmaps) : permises dans une branche.
-      const lo = texture(sharp, uv).level(0).rgb.toVar();
-      const hi = texture(blurred[0], uv).level(0).rgb.toVar();
-      for (let i = 1; i < levels; i++) {
-        If(level.greaterThan(i), () => {
-          lo.assign(hi);
-          hi.assign(texture(blurred[i], uv).level(0).rgb);
-        });
-      }
-      const refl = finite(mix(lo, hi, select(level.greaterThanEqual(levels), float(1), fract(level))));
-      const fresnel = positionViewDirection.dot(normalView).saturate().oneMinus().pow(4);
-      light.assign(refl.mul(u.uReflect).mul(gloss.oneMinus()).mul(mix(0.3, 1, fresnel)));
-    });
-    return light;
-  })();
   return material;
 }
 

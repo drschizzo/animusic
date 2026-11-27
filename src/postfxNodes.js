@@ -99,9 +99,6 @@ export class PostFX {
   /** @param environment décor : `beams()` rend les faisceaux à tracer (voir environment.js) */
   constructor(renderer, scene, camera, environment) {
     Object.assign(this, { renderer, scene, camera, environment });
-    // Reflets en espace écran (décidés dans gpu.js, selon l'adaptateur) à la place du reflet
-    // planaire du sol, qui redessinait toute la scène à chaque image.
-    const SSR = (this.ssr = environment?.ssr === true);
     const u = (this.uniforms = {
       near: uniform(camera.near),
       far: uniform(camera.far),
@@ -137,13 +134,14 @@ export class PostFX {
     // transparents (verre, effets) y ajoutent un zéro de couverture nulle et laissent celles
     // de ce qu'ils couvrent, comme pour la vitesse (nodes.seeThrough).
     const opaqueOnly = (node) => Fn(({ material }) => (material.transparent ? vec4(0) : node))();
-    const gBuffer = SSR ? ssrGBuffer() : {};
+    const gBuffer = ssrGBuffer();
     const outputs = {
       output,
       velocity,
       normal: opaqueOnly(vec4(normalView, 1)),
       albedo: opaqueOnly(giAlbedo),
-      ...(SSR ? { ssrNormals: opaqueOnly(gBuffer.ssrNormals), ssrSpecular: opaqueOnly(gBuffer.ssrSpecular) } : {}),
+      ssrNormals: opaqueOnly(gBuffer.ssrNormals),
+      ssrSpecular: opaqueOnly(gBuffer.ssrSpecular),
     };
     const sceneMRT = mrt(outputs);
     for (const name of Object.keys(outputs)) if (name !== 'output') sceneMRT.setBlendMode(name, new BlendMode(MaterialBlending));
@@ -176,19 +174,17 @@ export class PostFX {
     // détails fins verrouillés, reconstruction en 4 lectures). L'image nettoyée de ses
     // pixels non finis est rendue à l'échelle de la passe : TAAU en déduit sa taille d'entrée.
     const color = scenePass.getTextureNode('output');
-    if (SSR) {
-      // Reflets en espace écran : ils remplacent le reflet de l'environnement là où ils
-      // trouvent la scène, le sol satiné compris (seuil de rugosité relevé pour lui).
-      // Tracés sur un pixel sur quatre, la composition restant à pleine résolution : à
-      // pleine résolution ils coûtaient au processeur graphique ~8 ms par image.
-      // Profondeur linéaire du G-buffer : tirée de celle de la scène (0 sur le fond).
-      const linearDepth = rtt(select(depthAt(uv()).lessThan(1), viewDist(uv()), 0), null, null, { type: HalfFloatType, format: RedFormat, depthBuffer: false });
-      const reflections = (this.reflections = ssr(color, scenePass, { linearDepthNode: linearDepth, roughnessFadeStart: 0.45, roughnessCutoff: 0.75, thickness: 0.2, resolutionScale: 0.5 }));
-      // L'environnement est figé à la construction : refait quand la sonde le remplace (render()).
-      this.shaded = () => sanitized(ssrComposite(color, reflections, scene.environment, { environmentIntensity: () => scene.environmentIntensity }));
-      this.reflectedEnvironment = scene.environment;
-    }
-    const beauty = (this.beauty = rtt(SSR ? this.shaded() : sanitized(color), null, null, { type: HalfFloatType, depthBuffer: false }));
+    // Reflets en espace écran : ils remplacent le reflet de l'environnement là où ils
+    // trouvent la scène, le sol satiné compris (seuil de rugosité relevé pour lui).
+    // Tracés sur un pixel sur quatre, la composition restant à pleine résolution : à
+    // pleine résolution ils coûtaient au processeur graphique ~8 ms par image.
+    // Profondeur linéaire du G-buffer : tirée de celle de la scène (0 sur le fond).
+    const linearDepth = rtt(select(depthAt(uv()).lessThan(1), viewDist(uv()), 0), null, null, { type: HalfFloatType, format: RedFormat, depthBuffer: false });
+    const reflections = (this.reflections = ssr(color, scenePass, { linearDepthNode: linearDepth, roughnessFadeStart: 0.45, roughnessCutoff: 0.75, thickness: 0.2, resolutionScale: 0.5 }));
+    // L'environnement est figé à la construction : refait quand la sonde le remplace (render()).
+    this.shaded = () => sanitized(ssrComposite(color, reflections, scene.environment, { environmentIntensity: () => scene.environmentIntensity }));
+    this.reflectedEnvironment = scene.environment;
+    const beauty = (this.beauty = rtt(this.shaded(), null, null, { type: HalfFloatType, depthBuffer: false }));
     const resolve = (this.taa = taau(beauty, depth, speed, camera));
     const steady = resolve.getTextureNode();
 
@@ -644,7 +640,7 @@ export class PostFX {
     u.cameraWorld.value.copy(camera.matrixWorld);
     u.eye.value.setFromMatrixPosition(camera.matrixWorld);
     this.updateBeams();
-    if (this.ssr && this.scene.environment !== this.reflectedEnvironment) {
+    if (this.scene.environment !== this.reflectedEnvironment) {
       this.reflectedEnvironment = this.scene.environment;
       this.beauty.node = this.shaded();
       this.pipeline.needsUpdate = true;

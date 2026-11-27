@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { tex, mat, fx, base } from './materials.js';
 import { FINITE } from './glsl.js';
-import { WEBGPU, RAW, SSR, nodes, shared } from './gpu.js';
+import { WEBGPU, RAW, nodes, shared } from './gpu.js';
 
 // Le préfiltrage d'environnement de WebGPURenderer est le sien (prototype, voir gpu.js).
 // En WebGPU, préfiltrage en une passe pour tous les niveaux (three en fait une par face
@@ -155,9 +155,19 @@ class ReflectionProbe {
   }
 }
 
-/** Plancher de scène satiné : MeshStandardMaterial enrichi d'un reflet planaire flouté. */
+/**
+ * Plancher de scène satiné : MeshStandardMaterial enrichi d'un reflet planaire flouté. En
+ * WebGPU, pas de reflet planaire (les reflets en espace écran le remplacent) : le
+ * plancher n'a que ses lames.
+ */
 class ReflectiveFloor {
   constructor() {
+    this.uniforms = shared({ uReflectMatrix: { value: new THREE.Matrix4() }, uReflect: { value: 0 }, uStageRadius: { value: 12 } });
+    if (WEBGPU) {
+      this.material = nodes.stageFloor(this.makeMaterial(), this.uniforms);
+      this.makeMesh();
+      return;
+    }
     const options = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
     // Sans multi-échantillonnage : le sol est satiné, il ne lit que les niveaux flous.
     this.target = renderTarget(512, 512, options);
@@ -167,7 +177,7 @@ class ReflectiveFloor {
       temp: renderTarget(1, 1, options),
       blurred: renderTarget(1, 1, options),
     }));
-    this.blur = nodes?.blurQuad() ?? new FullScreenQuad(
+    this.blur = new FullScreenQuad(
       new THREE.ShaderMaterial({
         uniforms: { tSource: { value: null }, uStep: { value: new THREE.Vector2() }, uClamp: { value: 1e4 } },
         vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
@@ -190,17 +200,9 @@ class ReflectiveFloor {
     );
     this.camera = new THREE.PerspectiveCamera();
     const blurred = this.levels.map((l) => l.blurred.texture);
-    this.uniforms = shared({ uReflectMatrix: { value: new THREE.Matrix4() }, uReflect: { value: 1 }, uStageRadius: { value: 12 } });
-    const material = base.standard({
-      color: 0x1d1a17, // plancher peint en noir, assez clair pour que les poursuites y dessinent leur flaque
-      roughness: 0.5,
-      metalness: 0.0,
-      roughnessMap: tex.blotch(),
-      envMapIntensity: 0.25,
-    });
-    material.roughnessMap.repeat.set(14, 14);
-    if (nodes) nodes.stageFloor(material, this.uniforms, this.target.texture, blurred);
-    else material.onBeforeCompile = (shader) => {
+    this.uniforms.uReflect.value = 1;
+    const material = this.makeMaterial();
+    material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms, { tReflect: { value: this.target.texture }, tReflectBlur: { value: blurred } });
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nuniform mat4 uReflectMatrix;\nvarying vec4 vReflectUv;\nvarying vec3 vFloorPos;')
@@ -260,16 +262,33 @@ class ReflectiveFloor {
         );
     };
     this.material = material;
-    this.mesh = new THREE.Mesh(new THREE.CircleGeometry(90, 96), material);
-    this.mesh.rotation.x = -Math.PI / 2;
-    this.mesh.receiveShadow = true;
-    this.mesh.userData.giAlbedo = 0.2; // le sol capte bien la lumière indirecte (flaques de lumière)
+    this.makeMesh();
     this._v = new THREE.Vector3();
     this._up = new THREE.Vector3();
     this._bias = new THREE.Matrix4().set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
   }
 
+  makeMaterial() {
+    const material = base.standard({
+      color: 0x1d1a17, // plancher peint en noir, assez clair pour que les poursuites y dessinent leur flaque
+      roughness: 0.5,
+      metalness: 0.0,
+      roughnessMap: tex.blotch(),
+      envMapIntensity: 0.25,
+    });
+    material.roughnessMap.repeat.set(14, 14);
+    return material;
+  }
+
+  makeMesh() {
+    this.mesh = new THREE.Mesh(new THREE.CircleGeometry(90, 96), this.material);
+    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.receiveShadow = true;
+    this.mesh.userData.giAlbedo = 0.2; // le sol capte bien la lumière indirecte (flaques de lumière)
+  }
+
   setSize(w, h) {
+    if (!this.target) return; // pas de reflet planaire (WebGPU)
     w = Math.max(64, Math.round(w));
     h = Math.max(64, Math.round(h));
     this.target.setSize(w, h);
@@ -584,7 +603,6 @@ const beamFragment = `
 export class Environment {
   constructor(renderer, scene) {
     this.scene = scene;
-    this.ssr = SSR; // lu par la chaîne d'effets en nœuds
     this.radius = 8;
     this._tmpColor = new THREE.Color();
     scene.background = new THREE.Color(HAZE);
@@ -953,8 +971,8 @@ export class Environment {
     this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube toutes les deux images (renderProbe)
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
-    // Avec les reflets en espace écran (gpu.js, postfxNodes.js), pas de reflet planaire.
-    this.reflections = level !== 'low' && !BARE && !SSR;
+    // En WebGPU, les reflets en espace écran (postfxNodes.js) tiennent lieu de reflet planaire.
+    this.reflections = level !== 'low' && !BARE && !WEBGPU;
     this.reflectionScale = level === 'high' ? 0.5 : 0.4;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;
     // Trois cartes d'ombres (ensemble + deux poursuites) : 2K en qualité haute, 1K en moyenne.

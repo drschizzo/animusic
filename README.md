@@ -46,10 +46,9 @@ npm run collide -- morceau.mid   # interpénétrations (dans les deux styles) : 
 ```
 
 **Prototype WebGPU** (évaluation de la migration, `src/gpu.js`) : ajouter à l'adresse
-`?webgpu` (WebGPURenderer, WebGPU ou repli WebGL 2), `?webgpu&webgl2` (repli WebGL 2 forcé),
-`?webgpu&planar` (reflet planaire du sol au lieu des reflets en espace écran) ou `?raw`
-(moteur WebGL actuel, scène brute : matériaux, lumières, ombres, sans post-traitement ni
-reflets). En WebGPU, toute la scène est en nœuds TSL (`src/nodes.js`) et la chaîne d'effets
+`?webgpu` (WebGPURenderer sur WebGPU seulement ; sans adaptateur WebGPU qui convienne, la
+page reprend le moteur WebGL) ou `?raw` (moteur WebGL actuel, scène brute : matériaux,
+lumières, ombres, sans post-traitement ni reflets). En WebGPU, toute la scène est en nœuds TSL (`src/nodes.js`) et la chaîne d'effets
 aussi (`src/postfxNodes.js`), avec des modules de three-advanced-techniques copiés dans
 `src/vendor/` (TAAU, occlusion XeGTAO, reflets en espace écran, préfiltrage de la sonde).
 Ces modes affichent en bas le moteur utilisé et le temps processeur de rendu par image.

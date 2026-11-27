@@ -1,14 +1,13 @@
 // Prototype WebGPU (évaluation de la migration) : choisi par l'adresse.
 //
-//   ?webgpu         WebGPURenderer (WebGPU, ou WebGL 2 si le navigateur ne l'a pas)
-//   ?webgpu&webgl2  WebGPURenderer forcé sur son moteur WebGL 2
-//   ?webgpu&planar  reflet planaire du sol au lieu des reflets en espace écran
+//   ?webgpu         WebGPURenderer, sur WebGPU seulement : sans adaptateur WebGPU qui
+//                   convienne, la page reprend le moteur WebGL (pas de repli WebGL 2)
 //   ?raw            WebGLRenderer actuel, mais avec la même scène « brute » que le
 //                   prototype : comparaison à l'identique
 //
 // Scène brute : matériaux, lumières et ombres seulement. Pas de post-traitement en WebGL
 // (?raw), ni reflet du sol, ni sonde de reflets ; en WebGPU, la chaîne d'effets en nœuds
-// de postfxNodes.js, le reflet du sol et la sonde. Les retouches de matériaux par
+// de postfxNodes.js (reflets en espace écran compris) et la sonde. Les retouches de matériaux par
 // onBeforeCompile (grain de surface, verre…) et les ShaderMaterial écrits à la main
 // (lointain, cônes des projecteurs, poussières, ombres de contact, trappes, souffles)
 // sont ignorés par WebGPURenderer : chacun a son équivalent en nœuds TSL dans nodes.js,
@@ -17,17 +16,15 @@
 
 const params = typeof location === 'undefined' ? new URLSearchParams() : new URLSearchParams(location.search);
 
-export const WEBGPU = params.has('webgpu');
-export const RAW = WEBGPU || params.has('raw');
-
-// Reflets en espace écran (postfxNodes.js) : la passe de scène écrit alors six cibles,
-// 40 octets par pixel, au-delà des 32 garantis par WebGPU. Il faut un adaptateur qui en
-// permet davantage ; sinon (repli WebGL 2, ?planar, matériel limité), reflet planaire.
-const SSR_BYTES = 40;
-const adapter = WEBGPU && !params.has('webgl2') && !params.has('planar') ? await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' }) : null;
+// La passe de scène (postfxNodes.js) écrit six cibles, 40 octets par pixel : au-delà des 32
+// garantis par WebGPU. Il faut un adaptateur qui en permet davantage, sinon moteur WebGL.
+const SCENE_BYTES = 40;
+const wanted = params.has('webgpu');
+const adapter = wanted ? await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' }) : null;
 const attachmentBytes = adapter?.limits.maxColorAttachmentBytesPerSample ?? 0;
-/** Reflets en espace écran au lieu du reflet planaire du sol (voir postfxNodes.js). */
-export const SSR = attachmentBytes >= SSR_BYTES;
+export const WEBGPU = attachmentBytes >= SCENE_BYTES;
+if (wanted && !WEBGPU) console.warn('WebGPU absent ou trop limité sur cette machine : moteur WebGL.');
+export const RAW = WEBGPU || params.has('raw');
 
 /** Retouches de matériaux en TSL (null hors prototype : les vues gardent alors leur GLSL). */
 export const nodes = WEBGPU ? await import('./nodes.js') : null;
@@ -44,8 +41,7 @@ nodes?.useRenderer(gpuRenderer);
 
 async function createRenderer() {
   const { WebGPURenderer } = await import('three/webgpu');
-  const requiredLimits = SSR ? { maxColorAttachmentBytesPerSample: attachmentBytes } : undefined;
-  const renderer = new WebGPURenderer({ antialias: true, powerPreference: 'high-performance', forceWebGL: params.has('webgl2'), requiredLimits });
+  const renderer = new WebGPURenderer({ antialias: true, powerPreference: 'high-performance', requiredLimits: { maxColorAttachmentBytesPerSample: attachmentBytes } });
   await renderer.init();
   return renderer;
 }
@@ -53,7 +49,7 @@ async function createRenderer() {
 /** Nom du moteur effectivement utilisé, pour l'affichage. */
 export function backendName(renderer) {
   if (!renderer.isWebGPURenderer) return RAW ? 'WebGL (brut)' : 'WebGL';
-  return renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGPU → repli WebGL 2';
+  return 'WebGPU';
 }
 
 /** Masque les objets que le prototype ne sait pas dessiner (matériaux GLSL écrits à la main). */
