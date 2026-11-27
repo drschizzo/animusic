@@ -111,6 +111,10 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
     ailettes, posé devant l'arbre, l'entraîne par courroie.
   - À côté de la machine, le **réservoir d'air** des canons de la tourelle : son manomètre, tourné vers le public,
     baisse à chaque tir et remonte quand le compresseur a rattrapé.
+- **Construction des machines** (`src/machineKit.js`) : pièces tournées chanfreinées, boîtes aux arêtes adoucies,
+  longerons en caisson extrudés le long des tapis, boulonnerie, paliers à semelle, poulies à bras ; fonte laquée
+  vert machine, acier usiné, laiton, cuir, douelles de bois. Chaque arbre est porté par ses paliers et chaque
+  mouvement a sa transmission (courroie, renvoi, levier) ; tout est fusionné par matière.
 - **Échanges de billes** (`src/passes.js`) : par moments (le début d'une section sur deux), un **canon de passe**
   dressé derrière un instrument tire la bille d'une note de l'instrument situé derrière lui, d'un long lob ; à
   défaut de voisin bien placé, c'est le canon central de la tourelle du marimba qui tire, à travers toute la scène.

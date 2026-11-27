@@ -322,6 +322,13 @@ export const mat = {
     detail(P({ color, roughness: 0.42, metalness, clearcoat: 1, clearcoatRoughness: 0.06 }), { scale: 2.5, bump: 0.03, rough: 0.12 }),
   /** Carter d'aluminium moulé, peint gris chaud (bras des robots). */
   shell: () => detail(P({ color: 0xb4b0a6, roughness: 0.5, metalness: 0, clearcoat: 0.3, clearcoatRoughness: 0.35 }), { scale: 5, bump: 0.14, rough: 0.12 }),
+  /** Émail de machine sur fonte : peinture épaisse et tendue, vernis satiné, grain à peine sensible. */
+  enamel: (color = 0x24453a) =>
+    detail(P({ color, roughness: 0.4, metalness: 0.05, clearcoat: 0.7, clearcoatRoughness: 0.22, side: THREE.DoubleSide }), { scale: 2.2, bump: 0.012, rough: 0.05 }),
+  /** Fonte noircie (bâtis, socles) : mate, à peine métallique, grain de fonderie discret. */
+  castIron: () => detail(S({ color: 0x1b1c1f, roughness: 0.58, metalness: 0.6, side: THREE.DoubleSide }), { scale: 3, bump: 0.035, rough: 0.08 }),
+  /** Acier usiné (arbres, axes, pièces tournées) : poli de tour, reflets nets. */
+  machined: () => detail(S({ color: 0xb9bec8, roughness: 0.24, metalness: 1, roughnessMap: brushedTexture() }), { scale: 5, bump: 0.01, rough: 0.05 }),
   rubber: () => detail(S({ color: 0x0b0c10, roughness: 0.85, metalness: 0 }), { scale: 5, bump: 0.3, rough: 0.1 }),
   wood: (color = 0xb5562a) => P({ color, map: woodTexture(), roughness: 0.42, metalness: 0, clearcoat: 0.55, clearcoatRoughness: 0.25 }),
   paleWood: () => S({ color: 0xf0d6a4, map: woodTexture(), roughness: 0.55 }),
