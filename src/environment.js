@@ -9,7 +9,11 @@ import { FINITE } from './glsl.js';
 import { WEBGPU, RAW, nodes, shared } from './gpu.js';
 
 // Le préfiltrage d'environnement de WebGPURenderer est le sien (prototype, voir gpu.js).
-const PMREM = WEBGPU ? (await import('three/webgpu')).PMREMGenerator : THREE.PMREMGenerator;
+// En WebGPU, préfiltrage en une passe pour tous les niveaux (three en fait une par face
+// et par niveau) : la sonde de reflets le refait toutes les six images.
+const PMREM = WEBGPU
+  ? (await import('./vendor/three-advanced-techniques/rendering/environment-lighting/SlicedPMREMGenerator.js')).SlicedPMREMGenerator
+  : THREE.PMREMGenerator;
 
 // ?raw (WebGL brut) : ni sonde de reflets ni reflet du sol. Le prototype WebGPU les a.
 const BARE = RAW && !WEBGPU;

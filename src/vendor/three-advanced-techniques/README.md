@@ -6,6 +6,7 @@ le paquet est en 0.x, et son point d'entrée importe aussi three-mesh-bvh.
 
 - `rendering/ambient-occlusion/XeGTAONode.js` : occlusion ambiante (postfxNodes.js)
 - `rendering/taau/TAAUNode.js` : anticrénelage temporel avec montée en résolution (postfxNodes.js)
-- `utils/compileQuad.js` : dépendance des deux précédents
+- `rendering/environment-lighting/SlicedPMREMGenerator.js` : préfiltrage de la sonde de reflets (environment.js)
+- `utils/compileQuad.js` : dépendance des précédents
 
 Ne pas modifier ces fichiers : pour les mettre à jour, recopier ceux du dépôt.
