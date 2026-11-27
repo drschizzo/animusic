@@ -920,7 +920,8 @@ export class Environment {
   }
 
   /**
-   * Petites pièces (rayon sous 25 cm) : invisibles dans un cube de 256 pixels vu du milieu
+   * Pièces de moins d'un mètre de rayon : la sonde ne sert qu'aux reflets flous (lumière
+   * ambiante, métaux mats), où seuls comptent les grands volumes et les lumières. Vues du milieu
    * du plateau, mais chacune coûte un appel de rendu par face. La sonde s'en passe. Liste
    * refaite de temps en temps (l'ensemble change d'un morceau à l'autre).
    */
@@ -934,7 +935,7 @@ export class Environment {
       const g = o.geometry;
       if (!g.boundingSphere) g.computeBoundingSphere();
       sphere.copy(g.boundingSphere).applyMatrix4(o.matrixWorld);
-      if (sphere.radius < 0.25) list.push(o);
+      if (sphere.radius < 1) list.push(o);
     });
     return list;
   }
@@ -943,7 +944,8 @@ export class Environment {
     if (!this.probeFaces) return;
     // Une face toutes les trois images : la sonde se refait en dix-huit images (0,3 s à 60
     // images/s), assez vite pour suivre l'éclairage, pour trois fois moins d'appels de rendu.
-    if ((this.probeTick = (this.probeTick ?? 0) + 1) % 3) return;
+    // Jamais la même image que la carte d'ombres de la lumière d'ensemble (scheduleShadows).
+    if ((this.shadowFrame ?? 0) % 3 !== 1) return;
     const hidden = [this.dust, ...this.heads.map((h) => h.beam), ...this.probeClutter()];
     const visible = hidden.map((o) => o.visible);
     hidden.forEach((o) => (o.visible = false));
