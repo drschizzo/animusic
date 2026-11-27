@@ -1,7 +1,7 @@
 // Chaîne d'effets en nœuds TSL, pour WebGPURenderer : l'équivalent de postfx.js (GLSL).
 // Chargée seulement par le prototype (voir gpu.js).
 //
-//   scène (couleur + vitesse, sans MSAA) ── occlusion ambiante (GTAO) injectée dans les
+//   scène (couleur + vitesse, sans MSAA) ── occlusion ambiante (XeGTAO) injectée dans les
 //   matériaux : elle n'assombrit que la lumière ambiante, pas l'éclairage direct
 //     → anticrénelage temporel (TAAU)
 //     → lumière indirecte → flou de mouvement → profondeur de champ
@@ -10,8 +10,11 @@
 //
 // La lumière indirecte, le flou de mouvement, la profondeur de champ, les faisceaux, le
 // filtre du halo et l'objectif sont les portages des passes GLSL (ssgi.js, motionblur.js,
-// volumetric.js, postfx.js), où sont leurs explications.
-// L'ordre suit github.com/marcofugaro/three-advanced-techniques.
+// volumetric.js, postfx.js), où sont leurs explications. Une différence : en WebGL, les
+// rayons de la lumière indirecte donnent aussi l'occlusion, qui assombrit toute l'image ;
+// ici l'occlusion vient du seul XeGTAO, et les rayons ne servent plus qu'au rebond coloré.
+// L'ordre et l'occlusion viennent de github.com/marcofugaro/three-advanced-techniques
+// (copie dans src/vendor/).
 
 import { RenderPipeline, BlendMode, MaterialBlending, Matrix4, Vector2, Vector3, DepthTexture, LessEqualCompare, AgXToneMapping, SRGBColorSpace, NearestFilter } from 'three/webgpu';
 import {
@@ -35,7 +38,6 @@ import {
   output,
   velocity,
   normalView,
-  screenUV,
   screenCoordinate,
   uv,
   rtt,
@@ -61,11 +63,12 @@ import {
   perspectiveDepthToViewZ,
   interleavedGradientNoise,
   builtinAOContext,
+  context,
   workingToColorSpace,
   toneMappingExposure,
 } from 'three/tsl';
 import { taau } from 'three/addons/tsl/display/TAAUNode.js';
-import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { xeGTAO } from './vendor/three-advanced-techniques/rendering/ambient-occlusion/XeGTAONode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { motion } from './nodes.js';
 
@@ -115,9 +118,6 @@ export class PostFX {
       giRadius: uniform(3.2),
       giThickness: uniform(0.35),
       giClamp: uniform(8),
-      giAoRadius: uniform(0.9),
-      giAo: uniform(1),
-      giAoPower: uniform(1.6),
       time: uniform(0),
       vignette: uniform(0.3),
       grain: uniform(0.02),
@@ -130,6 +130,7 @@ export class PostFX {
     const prePass = (this.prePass = pass(scene, camera, { samples: 0 }));
     prePass.transparent = false;
     prePass.setMRT(mrt({ output: normalView, albedo: giAlbedo }));
+    prePass.contextNode = context({ getAO: null }); // elle ne lit pas l'occlusion qu'elle nourrit
     // Géométrie des seules surfaces opaques, lue par la lumière indirecte et les faisceaux.
     const solidDepth = prePass.getTextureNode('depth');
     const solidNormal = prePass.getTextureNode();
@@ -139,16 +140,17 @@ export class PostFX {
       const n = solidNormal.sample(at).level(0).xyz;
       return n.div(max(length(n), 1e-5));
     };
-    const occlusion = (this.occlusion = ao(prePass.getTextureNode('depth'), prePass.getTextureNode(), camera));
-    occlusion.resolutionScale = 0.5;
-    occlusion.radius.value = 0.5;
+    // Demi-résolution, débruitée et accumulée d'une image à l'autre ; remontée à pleine
+    // résolution dans le shader des matériaux, contre leur profondeur (pas de halo aux
+    // silhouettes). Le décalage de caméra de TAAU est pris en compte par le module.
+    const occlusion = (this.occlusion = xeGTAO(solidDepth, camera, { normalNode: solidNormal, radius: 0.5 }));
 
     // --- Scène : couleur et vitesse, sans MSAA (TAAU anticrénelle).
     const scenePass = (this.scenePass = pass(scene, camera, { samples: 0 }));
     // La vitesse suit le mélange du matériau : les opaques l'écrivent, les effets
     // additifs y ajoutent un zéro (nodes.seeThrough) et laissent celle de ce qu'ils couvrent.
     scenePass.setMRT(mrt({ output, velocity }).setBlendMode('velocity', new BlendMode(MaterialBlending)));
-    scenePass.contextNode = builtinAOContext(mix(1, occlusion.getTextureNode().sample(screenUV).r, u.ao));
+    scenePass.contextNode = builtinAOContext(mix(1, occlusion.getMaterialAONode(), u.ao));
     const depth = scenePass.getTextureNode('depth');
     const speed = scenePass.getTextureNode('velocity');
     const viewDist = (at) => perspectiveDepthToViewZ(depth.sample(at).level(0).r, u.near, u.far).negate();
@@ -157,7 +159,8 @@ export class PostFX {
     const resolve = (this.taa = taau(sanitized(scenePass.getTextureNode('output')), depth, speed, camera));
     const steady = resolve.getTextureNode();
 
-    // --- Lumière indirecte et occlusion, tirées des mêmes rayons (demi-résolution).
+    // --- Lumière indirecte (demi-résolution). L'occlusion est celle de XeGTAO : la tirer
+    // aussi de ces rayons l'aurait comptée deux fois, et sur l'éclairage direct.
     const half = { resolutionScale: 0.5, depthBuffer: false };
     const traced = rtt(
       Fn(() => {
@@ -171,7 +174,6 @@ export class PostFX {
           const noise = interleavedGradientNoise(screenCoordinate.xy).toVar();
           const origin = P.add(N.mul(P.z.negate().mul(0.004).add(0.02))).toVar();
           const sum = vec3(0).toVar();
-          const occlusion = float(0).toVar();
           Loop(GI_RAYS, ({ i }) => {
             // Direction tirée selon le cosinus : chaque rayon compte autant.
             const u1 = fract(noise.add(float(i).mul(0.61803399)));
@@ -199,15 +201,12 @@ export class PostFX {
                   // Seule une surface tournée vers nous peut nous éclairer.
                   const facing = step(0, dot(normalAt(at), dir).negate());
                   sum.addAssign(min(steady.sample(at).level(0).rgb, u.giClamp).mul(facing));
-                  // Occlusion : totale au contact, nulle au-delà de giAoRadius.
-                  const open = min(1, dist.div(u.giAoRadius));
-                  occlusion.addAssign(open.mul(open).oneMinus());
                   Break();
                 });
               });
             });
           });
-          result.assign(vec4(sum.div(GI_RAYS), occlusion.div(GI_RAYS).oneMinus()));
+          result.assign(vec4(sum.div(GI_RAYS), 1));
         });
         return result;
       })(),
@@ -253,8 +252,7 @@ export class PostFX {
         // Hors des surfaces opaques (fond, vitres seules) : ni ombre ni lumière.
         const solid = step(depthAt(uv()), 0.9999999);
         const gi = indirect.sample(uv());
-        const shade = mix(1, clamp(gi.a, 0, 1).pow(u.giAoPower), u.giAo.mul(solid));
-        return vec4(base.rgb.mul(shade).add(gi.rgb.mul(prePass.getTextureNode('albedo').sample(uv()).rgb).mul(solid).mul(u.giIntensity)), base.a);
+        return vec4(base.rgb.add(gi.rgb.mul(prePass.getTextureNode('albedo').sample(uv()).rgb).mul(solid).mul(u.giIntensity)), base.a);
       })(),
     );
 
