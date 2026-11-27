@@ -6,10 +6,10 @@
 //                   prototype : comparaison à l'identique
 //
 // Scène brute : matériaux, lumières et ombres seulement. Pas de post-traitement en WebGL
-// (?raw) ; en WebGPU, la chaîne d'effets en nœuds de postfxNodes.js. Pas de
-// reflet du sol ni de sonde de reflets, et les objets à shader GLSL écrit à la main
-// (ShaderMaterial : faisceaux, poussières…) sont masqués, car WebGPURenderer ne sait pas
-// les dessiner : il faudra les réécrire en TSL. Les retouches de matériaux par
+// (?raw), ni reflet du sol, ni sonde de reflets ; en WebGPU, la chaîne d'effets en nœuds
+// de postfxNodes.js, le reflet du sol et la sonde. Les objets à shader GLSL écrit à la
+// main (ShaderMaterial : cônes des projecteurs, poussières, bordure du plateau…) sont
+// masqués, car WebGPURenderer ne sait pas les dessiner : il faudra les réécrire en TSL. Les retouches de matériaux par
 // onBeforeCompile (grain de surface, verre…) sont ignorées par WebGPURenderer : chacune a
 // son équivalent en nœuds TSL dans nodes.js, branché ici quand le prototype est actif.
 

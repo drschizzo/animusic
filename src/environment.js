@@ -11,6 +11,10 @@ import { WEBGPU, RAW, nodes, shared } from './gpu.js';
 // Le préfiltrage d'environnement de WebGPURenderer est le sien (prototype, voir gpu.js).
 const PMREM = WEBGPU ? (await import('three/webgpu')).PMREMGenerator : THREE.PMREMGenerator;
 
+// ?raw (WebGL brut) : ni sonde de reflets ni reflet du sol. Le prototype WebGPU les a.
+const BARE = RAW && !WEBGPU;
+const renderTarget = (w, h, options) => (nodes ? nodes.target(w, h, options) : new THREE.WebGLRenderTarget(w, h, options));
+
 const HAZE = 0x070a14;
 const BLUR_LEVELS = 4;
 const ACCENTS = [0x49d8ff, 0xff4fa3, 0xffc46b, 0x8f7bff];
@@ -84,14 +88,14 @@ function studioEnvironment(renderer) {
 class ReflectionProbe {
   constructor(renderer) {
     this.renderer = renderer;
-    this.pmrem = new THREE.PMREMGenerator(renderer);
+    this.pmrem = new PMREM(renderer);
     this.filtered = null;
     this.face = 0;
     // Chaque face est d'abord rendue dans une image 2D, puis recopiée dans le cube par
     // une passe qui remplace toute valeur non finie et écrête les pics : la sonde se
     // filme elle-même (les métaux reflètent l'environnement qu'elle produit), un seul
     // pixel NaN y deviendrait permanent et contaminerait toute la scène.
-    this.copy = new FullScreenQuad(
+    this.copy = nodes?.sanitizeQuad(48) ?? new FullScreenQuad(
       new THREE.ShaderMaterial({
         uniforms: { tSource: { value: null }, uClamp: { value: 48 } },
         vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
@@ -113,8 +117,8 @@ class ReflectionProbe {
     this.faceTarget?.dispose();
     this.filtered?.dispose();
     this.filtered = null;
-    this.target = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, depthBuffer: false });
-    this.faceTarget = new THREE.WebGLRenderTarget(size, size, { type: THREE.HalfFloatType });
+    this.target = nodes ? nodes.cubeTarget(size, { type: THREE.HalfFloatType, depthBuffer: false }) : new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.faceTarget = renderTarget(size, size, { type: THREE.HalfFloatType });
     this.camera = new THREE.CubeCamera(0.3, 200, this.target);
     this.camera.coordinateSystem = this.renderer.coordinateSystem;
     this.camera.updateCoordinateSystem();
@@ -152,14 +156,14 @@ class ReflectiveFloor {
   constructor() {
     const options = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
     // Sans multi-échantillonnage : le sol est satiné, il ne lit que les niveaux flous.
-    this.target = new THREE.WebGLRenderTarget(512, 512, options);
+    this.target = renderTarget(512, 512, options);
     // Pyramide de flous gaussiens : chaque niveau est deux fois plus petit et deux fois
     // plus flou que le précédent. Le sol interpole entre deux niveaux selon sa rugosité.
     this.levels = Array.from({ length: BLUR_LEVELS }, () => ({
-      temp: new THREE.WebGLRenderTarget(1, 1, options),
-      blurred: new THREE.WebGLRenderTarget(1, 1, options),
+      temp: renderTarget(1, 1, options),
+      blurred: renderTarget(1, 1, options),
     }));
-    this.blur = new FullScreenQuad(
+    this.blur = nodes?.blurQuad() ?? new FullScreenQuad(
       new THREE.ShaderMaterial({
         uniforms: { tSource: { value: null }, uStep: { value: new THREE.Vector2() }, uClamp: { value: 1e4 } },
         vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
@@ -919,10 +923,10 @@ export class Environment {
 
   setQuality(level) {
     // Sonde de reflets : deux faces par image en qualité haute, une (plus petite) en moyenne.
-    this.probeFaces = level === 'low' || RAW ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
+    this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
-    this.reflections = level !== 'low' && !RAW;
+    this.reflections = level !== 'low' && !BARE;
     this.reflectionScale = level === 'high' ? 0.5 : 0.4;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;
     // Trois cartes d'ombres (ensemble + deux poursuites) : 2K en qualité haute, 1K en moyenne.

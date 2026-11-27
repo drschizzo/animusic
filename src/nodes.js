@@ -3,11 +3,12 @@
 // par le prototype (voir gpu.js) ; les explications de fond restent à côté des versions
 // GLSL, dans materials.js et dans les vues.
 
-import { MeshStandardNodeMaterial, MeshPhysicalNodeMaterial, MeshBasicNodeMaterial, Matrix4 } from 'three/webgpu';
+import { MeshStandardNodeMaterial, MeshPhysicalNodeMaterial, MeshBasicNodeMaterial, NodeMaterial, QuadMesh, RenderTarget, CubeRenderTarget, Matrix4, Vector2 } from 'three/webgpu';
 import {
   Fn,
   If,
   uniform,
+  uv,
   attribute,
   mrt,
   texture,
@@ -261,6 +262,37 @@ export function wash(material, u) {
   return material;
 }
 
+/** Cibles de rendu du moteur (les classes WebGL de three ne conviennent pas toutes à WebGPURenderer). */
+export const target = (w, h, options) => new RenderTarget(w, h, options);
+export const cubeTarget = (size, options) => new CubeRenderTarget(size, options);
+
+/**
+ * Passe plein écran : même usage que FullScreenQuad + ShaderMaterial côté GLSL
+ * (`material.uniforms.nom.value`, `render(renderer)`).
+ */
+function fullScreen(uniforms, fragment) {
+  const material = new NodeMaterial();
+  material.fragmentNode = fragment;
+  material.depthTest = false;
+  material.depthWrite = false;
+  material.uniforms = uniforms;
+  return new QuadMesh(material);
+}
+
+/** Flou gaussien à 9 points d'une direction (pyramide de flous du reflet du sol, environment.js). */
+export function blurQuad() {
+  const u = { tSource: texture(), uStep: uniform(new Vector2()), uClamp: uniform(1e4) };
+  const tap = (k) => min(finite(u.tSource.sample(uv().add(u.uStep.mul(k))).rgb), u.uClamp);
+  const pair = (k) => tap(k).add(tap(-k));
+  return fullScreen(u, vec4(tap(0).mul(0.2042).add(pair(1).mul(0.1802)).add(pair(2).mul(0.1238)).add(pair(3).mul(0.0663)).add(pair(4).mul(0.0276)), 1));
+}
+
+/** Copie qui remplace les valeurs non finies et écrête les pics (sonde de reflets, environment.js). */
+export function sanitizeQuad(ceiling) {
+  const u = { tSource: texture(), uClamp: uniform(ceiling) };
+  return fullScreen(u, vec4(min(finite(u.tSource.sample(uv()).rgb), u.uClamp), 1));
+}
+
 const nonFinite = (x) => floatBitsToUint(x).bitAnd(uint(0x7f800000)).equal(uint(0x7f800000));
 /** Protection contre les valeurs non finies (voir glsl.js). */
 const finite = (c) => select(nonFinite(c.r).or(nonFinite(c.g)).or(nonFinite(c.b)), vec3(0), c);
@@ -297,7 +329,10 @@ export function stageFloor(material, u, sharp, blurred) {
     // Sauté quand le reflet est coupé : une texture périmée ne doit pas contaminer le sol.
     If(u.uReflect.greaterThan(0), () => {
       const clip = u.uReflectMatrix.mul(vec4(p, 1));
-      const uv = clip.xy.div(clip.w);
+      // La cible du reflet se lit de haut en bas avec WebGPURenderer : v est retourné
+      // par rapport à la version GLSL (vérifié à l'image et à la mesure, face au WebGL).
+      const ndc = clip.xy.div(clip.w);
+      const uv = vec2(ndc.x, ndc.y.oneMinus());
       const level = gloss.mul(5.5).add(0.15).clamp(0, levels);
       // Lectures au niveau 0 (ces textures n'ont pas de mipmaps) : permises dans une branche.
       const lo = texture(sharp, uv).level(0).rgb.toVar();

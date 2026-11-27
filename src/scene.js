@@ -175,7 +175,7 @@ export class Stage {
     // Décor (sol réfléchissant, lumières, projecteurs) et post-traitement.
     this.environment = new Environment(renderer, scene);
     // Prototype (gpu.js) : en WebGPU, la chaîne d'effets en nœuds ; en ?raw, la scène brute.
-    this.post = NodePostFX ? new NodePostFX(renderer, scene, this.camera) : RAW ? new RawRender(renderer, scene, this.camera) : new PostFX(renderer, scene, this.camera, this.environment);
+    this.post = NodePostFX ? new NodePostFX(renderer, scene, this.camera, this.environment) : RAW ? new RawRender(renderer, scene, this.camera) : new PostFX(renderer, scene, this.camera, this.environment);
     this.pulse = 0;
     this.time = 0;
     this._last = { wall: 0, time: 0, eye: new THREE.Vector3() };
@@ -518,10 +518,10 @@ export class Stage {
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
     this.environment.scheduleShadows();
-    if (RAW) {
-      // Les vues créent des objets en cours de route (billes…) : contrôle régulier.
-      if ((this._hideTick = (this._hideTick ?? 0) + 1) % 30 === 1) hideUnsupported(this.scene);
-    } else {
+    // Les vues créent des objets en cours de route (billes…) : contrôle régulier.
+    if (RAW && (this._hideTick = (this._hideTick ?? 0) + 1) % 30 === 1) hideUnsupported(this.scene);
+    // Sonde de reflets et reflet du sol : partout sauf en WebGL brut (?raw).
+    if (!RAW || WEBGPU) {
       this.environment.renderProbe();
       this.environment.renderReflection(this.renderer, this.camera);
     }
