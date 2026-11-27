@@ -67,7 +67,7 @@ import {
   workingToColorSpace,
   toneMappingExposure,
 } from 'three/tsl';
-import { taau } from 'three/addons/tsl/display/TAAUNode.js';
+import { taau } from './vendor/three-advanced-techniques/rendering/taau/TAAUNode.js';
 import { xeGTAO } from './vendor/three-advanced-techniques/rendering/ambient-occlusion/XeGTAONode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { motion } from './nodes.js';
@@ -158,8 +158,11 @@ export class PostFX {
     const speed = scenePass.getTextureNode('velocity');
     const viewDist = (at) => perspectiveDepthToViewZ(depth.sample(at).level(0).r, u.near, u.far).negate();
 
-    // --- Anticrénelage temporel.
-    const resolve = (this.taa = taau(sanitized(scenePass.getTextureNode('output')), depth, speed, camera));
+    // --- Anticrénelage temporel, avec montée en résolution (TAAU de three-advanced-techniques :
+    // détails fins verrouillés, reconstruction en 4 lectures). L'image nettoyée de ses
+    // pixels non finis est rendue à l'échelle de la passe : TAAU en déduit sa taille d'entrée.
+    const beauty = (this.beauty = rtt(sanitized(scenePass.getTextureNode('output')), null, null, { type: HalfFloatType, depthBuffer: false }));
+    const resolve = (this.taa = taau(beauty, depth, speed, camera));
     const steady = resolve.getTextureNode();
 
     // --- Lumière indirecte (demi-résolution). L'occlusion est celle de XeGTAO : la tirer
