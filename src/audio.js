@@ -156,12 +156,11 @@ export class Player {
     // Les synthés monophoniques refusent deux attaques au même instant (ex. 38 + 40 → caisse claire).
     const last = this.lastDrum;
     last.clear();
-    this.sf = buildSynthEvents(notes, drumHits, tracks, lead);
+    this.source = { notes, drumHits, tracks, lead };
+    this.sf = buildSynthEvents(notes, drumHits, tracks, lead, this.balanced);
     this.soundfont.setup(this.sf.channels);
     this.parts = [
-      new Tone.Part((time, frame) => {
-        if (this.soundfontOn) this.soundfont.send(frame.msgs, time);
-      }, this.sf.frames).start(0),
+      this.soundfontPart(),
       new Tone.Part((time, ev) => {
         if (this.soundfontOn) return;
         const synth = this.voices[ev.voice] ?? this.synth;
@@ -182,6 +181,28 @@ export class Player {
       }, drums).start(0),
     ];
     this.setListenOriginal(!!audio);
+  }
+
+  soundfontPart() {
+    const part = new Tone.Part((time, frame) => {
+      if (this.soundfontOn) this.soundfont.send(frame.msgs, time);
+    }, this.sf.frames).start(0);
+    part.mute = !!this.listenOriginal;
+    return part;
+  }
+
+  /** Mix équilibré : reconstruit les messages SoundFont sans interrompre la lecture. */
+  setBalanced(on) {
+    this.balanced = on;
+    if (!this.source) return;
+    const { notes, drumHits, tracks, lead } = this.source;
+    this.sf = buildSynthEvents(notes, drumHits, tracks, lead, on);
+    this.parts[0].dispose();
+    this.parts[0] = this.soundfontPart();
+    // Coupe les notes en cours, puis renvoie volumes / pédale / bends à la position actuelle.
+    this.soundfont.silence(false, Tone.now());
+    this.soundfont.setup(this.sf.channels);
+    this.restoreControllers();
   }
 
   /** Avec un enregistrement importé : l'entendre lui (true) ou la transcription jouée (false). */

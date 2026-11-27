@@ -16,11 +16,17 @@ const vel = (v) => Math.max(1, Math.min(127, Math.round((v ?? 0.8) * 127)));
  * @param drumHits [{midi, time, velocity}]
  * @param tracks pistes du morceau : [{program, ccs: [{time, number, value}], bends: [{time, value}]}]
  * @param lead décalage (s) ajouté à tous les temps
+ * @param balanced mix équilibré : volumes de piste (CC7 / CC11) resserrés, pour qu'aucune
+ *   piste animée ne se perde dans le mix. Vélocités et durées restent celles du morceau :
+ *   les relever gommait les accents et rendait les notes étouffées legato (attaques floues).
  * @returns { channels: [{channel, program, track}], frames: [{time, msgs}] }
  *   msgs : ['cc', ch, numéro, valeur] | ['bend', ch, 0..16383] | ['off', ch, note] | ['on', ch, note, vélocité]
  *   Dans une même trame : contrôleurs, puis relâchés, puis attaques.
  */
-export function buildSynthEvents(notes, drumHits, tracks, lead = 0) {
+export function buildSynthEvents(notes, drumHits, tracks, lead = 0, balanced = false) {
+  // Volume perçu ≈ (valeur/127)² : 32 (−24 dB) devient 80 (−8 dB), 120 reste ≈ 124.
+  const level = (v) => (balanced ? Math.round(64 + v / 2) : v);
+
   const used = [...new Set(notes.map((n) => n.track))].sort((a, b) => a - b);
   const channelOf = new Map(used.map((t, k) => [t, melodicChannel(k)]));
   const channels = used.map((t) => ({ channel: channelOf.get(t), program: tracks[t]?.program ?? 0, track: t }));
@@ -40,7 +46,10 @@ export function buildSynthEvents(notes, drumHits, tracks, lead = 0) {
   }
   for (const t of used) {
     const ch = channelOf.get(t);
-    for (const e of ccsOf(tracks[t])) push(e.time, ['cc', ch, e.number, e.value]);
+    for (const e of ccsOf(tracks[t])) {
+      const v = e.number === 7 || e.number === 11 ? level(e.value) : e.value;
+      push(e.time, ['cc', ch, e.number, v]);
+    }
     for (const e of tracks[t]?.bends ?? []) push(e.time, ['bend', ch, bendValue(e.value)]);
   }
 

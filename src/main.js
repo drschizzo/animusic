@@ -517,6 +517,21 @@ $('loop').addEventListener('change', (e) => {
 
 $('listen').addEventListener('change', (e) => player.setListenOriginal(e.target.value === 'original'));
 
+try {
+  $('balanced').checked = localStorage.getItem('animusic.balanced') === '1';
+} catch {
+  /* stockage indisponible */
+}
+player.balanced = $('balanced').checked;
+$('balanced').addEventListener('change', (e) => {
+  player.setBalanced(e.target.checked);
+  try {
+    localStorage.setItem('animusic.balanced', e.target.checked ? '1' : '0');
+  } catch {
+    /* réglage non mémorisé */
+  }
+});
+
 $('samples').addEventListener('change', (e) => {
   player.useSamples = e.target.checked;
   if (ensemble) rebuild();
