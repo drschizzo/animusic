@@ -568,7 +568,7 @@ try {
 } catch {
   setIndirectLight(true);
 }
-const fpsMeter = { frames: 0, since: performance.now(), slow: 0, cpu: 0, gpu: 0, gpuFrames: 0 };
+const fpsMeter = { frames: 0, since: performance.now(), slow: 0, cpu: 0 };
 function measureFps() {
   fpsMeter.frames++;
   const now = performance.now();
@@ -578,10 +578,8 @@ function measureFps() {
   fpsMeter.frames = 0;
   fpsMeter.since = now;
   // Prototype WebGPU (gpu.js) : moteur et temps processeur de rendu, pour comparer.
-  const gpu = fpsMeter.gpuFrames ? ` · GPU ${(fpsMeter.gpu / fpsMeter.gpuFrames).toFixed(1)} ms` : '';
-  $('fps').textContent = RAW ? `${Math.round(fps)} img/s · ${cpu.toFixed(1)} ms${gpu} · ${backendName(stage.renderer)}` : `${Math.round(fps)} img/s`;
+  $('fps').textContent = RAW ? `${Math.round(fps)} img/s · ${cpu.toFixed(1)} ms · ${backendName(stage.renderer)}` : `${Math.round(fps)} img/s`;
   fpsMeter.cpu = 0;
-  fpsMeter.gpu = fpsMeter.gpuFrames = 0;
   // Prototype : pas de baisse automatique de qualité, elle fausserait la comparaison.
   if (qualityMode !== 'auto' || !player.playing || RAW) {
     fpsMeter.playingSince = null;
@@ -641,11 +639,6 @@ function frame(now = performance.now()) {
   const before = performance.now();
   stage.render();
   fpsMeter.cpu += performance.now() - before;
-  // ?webgpu&gputime : temps du processeur graphique, mesuré par horodatage de ses passes.
-  if (stage.renderer.backend?.trackTimestamp)
-    stage.renderer.resolveTimestampsAsync().then((ms) => {
-      if (ms > 0) (fpsMeter.gpu += ms), fpsMeter.gpuFrames++;
-    });
   measureFps();
 }
 

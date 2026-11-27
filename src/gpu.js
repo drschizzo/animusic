@@ -3,7 +3,6 @@
 //   ?webgpu         WebGPURenderer (WebGPU, ou WebGL 2 si le navigateur ne l'a pas)
 //   ?webgpu&webgl2  WebGPURenderer forcé sur son moteur WebGL 2
 //   ?webgpu&planar  reflet planaire du sol au lieu des reflets en espace écran
-//   ?webgpu&gputime temps du processeur graphique dans le panneau (horodatage des passes)
 //   ?raw            WebGLRenderer actuel, mais avec la même scène « brute » que le
 //                   prototype : comparaison à l'identique
 //
@@ -46,7 +45,7 @@ nodes?.useRenderer(gpuRenderer);
 async function createRenderer() {
   const { WebGPURenderer } = await import('three/webgpu');
   const requiredLimits = SSR ? { maxColorAttachmentBytesPerSample: attachmentBytes } : undefined;
-  const renderer = new WebGPURenderer({ antialias: true, powerPreference: 'high-performance', forceWebGL: params.has('webgl2'), requiredLimits, trackTimestamp: params.has('gputime') });
+  const renderer = new WebGPURenderer({ antialias: true, powerPreference: 'high-performance', forceWebGL: params.has('webgl2'), requiredLimits });
   await renderer.init();
   return renderer;
 }
