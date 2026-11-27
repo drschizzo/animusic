@@ -1,10 +1,11 @@
 // Réseau : une seule machine. Module pur (sans Three.js), en coordonnées de la scène.
 //
-// Du pied de la tourelle du marimba part un réseau de tuyaux de verre posés au sol, tracé
-// comme un labyrinthe circulaire : des arcs concentriques et des segments radiaux, centrés
-// sur la tourelle, rangés en faisceaux. Ils passent sous les billes du marimba, entre ses
-// pieds, suivent les allées entre les gradins et plongent dans le sol au pied de l'estrade
-// de leur instrument (ou au plus près, si le passage est pris). Le tuyau en ressort par une colonne de verre plantée dans l'estrade, qui
+// Derrière la tourelle du marimba part un réseau de tuyaux de verre posés au sol, tracé
+// sur une grille comme un circuit imprimé : de longs tronçons droits, parallèles ou
+// perpendiculaires au bord de scène, des coudes à angle droit, des faisceaux. Ils passent
+// sous les billes du marimba, entre ses pieds, suivent les allées entre les estrades et
+// plongent dans le sol au pied de celle de leur instrument (ou au plus près, si le
+// passage est pris). Le tuyau en ressort par une colonne de verre plantée dans l'estrade, qui
 // monte jusqu'à la rampe (alimentation) ou descend du collecteur (retour). Les billes y
 // roulent à vitesse constante, en avance sur la musique : chacune arrive au bout de sa
 // rampe juste à temps pour être tirée, si bien que le rythme d'un instrument se lit
@@ -19,11 +20,9 @@ export const TRUNK_DEFAULTS = {
   axisY: 0.1, // hauteur de l'axe des tuyaux posés au sol
   cell: 0.16, // pas de la grille au sol : deux tuyaux voisins sont à 16 cm d'axe en axe
   margin: 0.11, // distance minimale de l'axe d'un tuyau à un obstacle
-  ring: 2.6, // rayon du cercle des départs, au pied de la tourelle
-  fan: 1.35, // demi-ouverture de l'éventail des départs (rad), vers le fond de scène
-  pitch: 1.6, // écart entre deux départs, en cases
-  lead: 3, // longueur (en cases) du tronçon radial de départ
-  coarse: 1, // finesse angulaire : pas d'arc sur la couronne la plus grande, en cases
+  manifold: 2.6, // les lignes partent alignées à cette distance derrière l'axe de la tourelle
+  pitch: 2, // écart entre deux départs, en cases
+  lead: 4, // longueur (en cases) du tronçon droit de départ
   turnCost: 14, // coût d'un coude, en cases : de longs tronçons droits, peu de coudes
   bundle: 0.3, // rabais d'une case le long d'un tuyau déjà posé : les lignes se rangent en faisceaux
   rounds: 4, // nombre maximal d'essais de tracé
@@ -140,58 +139,31 @@ export function floorGrid(ensemble, o) {
   return { cell, half, size, blocked, index, inside, toCell };
 }
 
-/**
- * Grille polaire autour de la tourelle : des couronnes (rayon k·dr) et des rayons (angle
- * m·da, compté depuis le fond de scène, positif vers la droite). La scène est faite
- * d'anneaux (allées, gradins) : c'est dans ce repère que les tuyaux tracent des lignes
- * propres, des arcs le long des allées et des segments radiaux entre les estrades.
- */
-function polarGrid(ensemble, o) {
-  const floor = floorGrid(ensemble, { ...o, cell: o.cell / 2 });
-  const nr = Math.floor((floor.half * floor.cell) / o.cell);
-  const na = Math.round((2 * Math.PI * nr * o.cell) / (o.cell * o.coarse));
-  const da = (2 * Math.PI) / na;
-  const blocked = new Uint8Array(nr * na);
-  const index = (k, m) => k * na + (((m % na) + na) % na);
-  const world = (k, m) => [Math.sin(m * da) * k * o.cell, -Math.cos(m * da) * k * o.cell];
-  for (let k = 0; k < nr; k++)
-    for (let m = 0; m < na; m++) {
-      const [x, z] = world(k, m);
-      const [i, j] = floor.toCell(x, z);
-      blocked[index(k, m)] = !floor.inside(i, j) || floor.blocked[floor.index(i, j)] ? 1 : 0;
-    }
-  const toCell = (x, z) => [Math.round(Math.hypot(x, z) / o.cell), Math.round(Math.atan2(x, -z) / da)];
-  return { nr, na, da, dr: o.cell, blocked, index, world, toCell };
-}
-
 /** Case libre la plus proche de (x, z), dans un rayon de quelques cases. */
 function freeCell(grid, x, z) {
-  const [ck, cm] = grid.toCell(x, z);
+  const [ci, cj] = grid.toCell(x, z);
   let best = null;
-  const span = Math.ceil((6 * grid.dr) / Math.max(grid.dr, ck * grid.dr * grid.da));
-  for (let k = Math.max(1, ck - 6); k <= Math.min(grid.nr - 1, ck + 6); k++)
-    for (let m = cm - span; m <= cm + span; m++) {
-      if (grid.blocked[grid.index(k, m)]) continue;
-      const [wx, wz] = grid.world(k, m);
-      const d = Math.hypot(wx - x, wz - z);
-      if (d < 6 * grid.dr && (!best || d < best.d)) best = { k, m, d };
+  for (let i = ci - 6; i <= ci + 6; i++)
+    for (let j = cj - 6; j <= cj + 6; j++) {
+      if (!grid.inside(i, j) || grid.blocked[grid.index(i, j)]) continue;
+      const d = Math.hypot(i * grid.cell - x, j * grid.cell - z);
+      if (!best || d < best.d) best = { i, j, d };
     }
   return best;
 }
 
 /**
- * Chemin d'une case à une autre sur la grille polaire : d'une couronne à la voisine le
- * long d'un rayon, ou d'un rayon au voisin le long d'une couronne (A* sur les états case
- * × direction). Un coude coûte cher : le chemin est fait de longs arcs et de longs
- * segments radiaux. Longer un tuyau déjà posé coûte un peu moins : les lignes qui vont au
- * même endroit se rangent en faisceau.
+ * Chemin d'une case à une autre sur la grille, par pas d'une case le long de x ou de z
+ * (A* sur les états case × direction). Un coude coûte cher : le chemin est fait de longs
+ * tronçons droits. Longer un tuyau déjà posé coûte un peu moins : les lignes qui vont au
+ * même endroit se rangent en faisceau, comme les pistes d'un circuit imprimé.
  * @param heading direction imposée au départ (indice dans STEPS), ou −1
  */
-const STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]]; // [couronne, rayon] : vers l'extérieur, l'intérieur, la droite, la gauche
+const STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]]; // vers la droite, la gauche, le public, le fond de scène
 function route(grid, from, to, heading, pipes, o) {
-  const { nr, na, da, dr, blocked, index } = grid;
-  const n = nr * na;
-  const goal = index(to.k, to.m);
+  const { size, half, blocked, index } = grid;
+  const n = size * size;
+  const goal = index(to.i, to.j);
   const cost = new Float32Array(n * 4).fill(Infinity);
   const prev = new Int32Array(n * 4).fill(-1);
   const heap = [];
@@ -219,16 +191,13 @@ function route(grid, from, to, heading, pipes, o) {
     }
     return top;
   };
-  const turn = (a) => Math.abs(((((a % na) + na + na / 2) % na) - na / 2));
-  // Distance restante, en cases : l'écart de rayon, plus l'arc à parcourir sur la plus petite des deux couronnes.
-  const ahead = (k, m) => (Math.abs(k - to.k) + turn(m - to.m) * da * Math.min(k, to.k)) * o.stepCost;
-  const start = index(from.k, from.m);
+  const ahead = (i, j) => (Math.abs(i - to.i) + Math.abs(j - to.j)) * o.stepCost;
+  const start = index(from.i, from.j);
   for (let d = 0; d < 4; d++) {
     if (heading >= 0 && d !== heading) continue;
     cost[start * 4 + d] = 0;
     push([0, start * 4 + d]);
   }
-  const [tx, tz] = grid.world(to.k, to.m);
   let end = -1;
   let nearest = Infinity;
   let fallback = -1;
@@ -236,72 +205,51 @@ function route(grid, from, to, heading, pipes, o) {
     const [f, state] = pop();
     const at = state >> 2;
     const dir = state & 3;
-    const k = Math.floor(at / na);
-    const m = at % na;
-    if (f > cost[state] + ahead(k, m) + 1e-4) continue; // entrée périmée
+    const i = (at % size) - half;
+    const j = Math.floor(at / size) - half;
+    if (f > cost[state] + ahead(i, j) + 1e-4) continue; // entrée périmée
     if (at === goal) {
       end = state;
       break;
     }
     // Arrivée hors d'atteinte : on retiendra la case atteinte la plus proche de l'instrument.
-    const [x, z] = grid.world(k, m);
-    const away = Math.hypot(x - tx, z - tz);
+    const away = Math.hypot(i - to.i, j - to.j);
     if (away < nearest) {
       nearest = away;
       fallback = state;
     }
     for (let d = 0; d < 4; d++) {
       if ((d ^ 1) === dir) continue; // pas de demi-tour sur place
-      const nk = k + STEPS[d][0];
-      if (nk < 1 || nk >= nr) continue;
-      const next = index(nk, m + STEPS[d][1]);
+      const ni = i + STEPS[d][0];
+      const nj = j + STEPS[d][1];
+      if (!grid.inside(ni, nj)) continue;
+      const next = index(ni, nj);
       if (blocked[next] && next !== goal) continue;
-      const length = d < 2 ? 1 : nk * da; // un pas le long d'une couronne est d'autant plus long qu'elle est grande
       // Voisine d'un tuyau, de part ou d'autre du sens de marche : pas moins cher.
-      const beside = d < 2 ? 0 : (nk + 1 < nr && pipes[index(nk + 1, m + STEPS[d][1])]) || pipes[index(nk - 1, m + STEPS[d][1])] ? o.bundle : 0;
-      const c = cost[state] + length * (1 - beside) + (d !== dir ? o.turnCost : 0);
+      const [a, b] = d < 2 ? [[ni, nj + 1], [ni, nj - 1]] : [[ni + 1, nj], [ni - 1, nj]];
+      const beside = (grid.inside(a[0], a[1]) && pipes[index(a[0], a[1])]) || (grid.inside(b[0], b[1]) && pipes[index(b[0], b[1])]) ? o.bundle : 0;
+      const c = cost[state] + 1 - beside + (d !== dir ? o.turnCost : 0);
       const ns = next * 4 + d;
       if (c >= cost[ns]) continue;
       cost[ns] = c;
       prev[ns] = state;
-      push([c + ahead(nk, (next % na)), ns]);
+      push([c + ahead(ni, nj), ns]);
     }
   }
   if (end < 0) end = fallback;
   if (end < 0) return null;
   const cells = [];
-  for (let state = end; state >= 0; state = prev[state]) cells.push([Math.floor((state >> 2) / na), (state >> 2) % na]);
-  void dr;
+  for (let state = end; state >= 0; state = prev[state]) cells.push([((state >> 2) % size) - half, Math.floor((state >> 2) / size) - half]);
   return cells.reverse();
 }
 
-/** Tracé d'une ligne : arcs et segments radiaux, de la tourelle au pied de l'estrade, entre deux plongées dans le sol. */
+/** Tracé d'une ligne : ses tronçons droits, de la tourelle au pied de l'estrade, entre deux plongées dans le sol. */
 function trace(cells, grid, o) {
-  const at = ([k, m], y = o.axisY) => {
-    const [x, z] = grid.world(k, m);
-    return [x, y, z];
-  };
-  // Les angles sont dépliés le long du chemin (le chemin peut faire le tour de la tourelle).
-  const points = [at(cells[0], -0.14)];
-  let turns = 0;
-  for (let q = 0; q < cells.length; q++) {
-    const c = cells[q];
-    const before = cells[q - 1];
-    const after = cells[q + 1];
-    const radialIn = before && before[1] === c[1];
-    const radialOut = after && after[1] === c[1];
-    if (before && after && radialIn !== radialOut) turns++;
-    // Segment radial : seuls ses bouts comptent ; arc : un point tous les 12 cm environ.
-    const corner = !before || !after || radialIn !== radialOut;
-    const stride = Math.max(1, Math.round(0.12 / Math.max(1e-6, c[0] * grid.dr * grid.da)));
-    if (corner || (!radialIn && q % stride === 0)) points.push(at(c));
-  }
-  points.push(at(cells[cells.length - 1], -0.14));
-  const ground = (c) => {
-    const [x, z] = grid.world(c[0], c[1]);
-    return [x, 0, z];
-  };
-  return { points: smoothJoints(points, Math.min(0.07, o.cell * 0.42)), ends: [ground(cells[0]), ground(cells[cells.length - 1])], turns };
+  // Seuls les coins comptent : les cases alignées forment un tronçon droit.
+  const corners = cells.filter((c, q) => q === 0 || q === cells.length - 1 || (c[0] - cells[q - 1][0]) * (cells[q + 1][1] - c[1]) !== (c[1] - cells[q - 1][1]) * (cells[q + 1][0] - c[0]));
+  const at = ([i, j], y = o.axisY) => [i * grid.cell, y, j * grid.cell];
+  const points = [at(corners[0], -0.14), ...corners.map((c) => at(c)), at(corners[corners.length - 1], -0.14)];
+  return { points: smoothJoints(points, Math.min(0.07, o.cell * 0.42)), ends: [at(corners[0], 0), at(corners[corners.length - 1], 0)], turns: corners.length - 2 };
 }
 
 /** Arrondit les coudes d'une polyligne. */
@@ -326,28 +274,19 @@ function smoothJoints(points, radius) {
  *   arrivées au pied de leur estrade, puis la brièveté de l'ensemble
  */
 function layout(ensemble, order, sequence, o) {
-  const grid = polarGrid(ensemble, o);
+  const grid = floorGrid(ensemble, o);
   const pipes = new Uint8Array(grid.blocked.length); // cases occupées par un tuyau
-  // Un tuyau occupe sa case, et sur sa couronne les cases trop proches pour un tuyau voisin.
   const mark = (cells) => {
-    for (const [k, m] of cells) {
-      const w = Math.max(0, Math.ceil(o.cell / (k * grid.dr * grid.da) - 1e-6) - 1);
-      for (let q = -w; q <= w; q++) grid.blocked[grid.index(k, m + q)] = 1;
-      pipes[grid.index(k, m)] = 1;
-    }
+    for (const [i, j] of cells) grid.blocked[grid.index(i, j)] = pipes[grid.index(i, j)] = 1;
   };
-  // Départs : en éventail autour de la tourelle, à l'angle de leur instrument si la place le permet.
-  const k0 = Math.round(o.ring / o.cell);
-  const gap = (o.cell * o.pitch) / (k0 * o.cell); // écart angulaire minimal entre deux départs
-  const angle = order.map((l) => Math.max(-o.fan, Math.min(o.fan, Math.atan2(l.foot[0], -l.foot[1]))));
-  for (let i = 1; i < angle.length; i++) angle[i] = Math.max(angle[i], angle[i - 1] + gap);
-  for (let i = angle.length - 2; i >= 0; i--) angle[i] = Math.min(angle[i], Math.min(o.fan + gap * (i - angle.length + 1) * 0 + o.fan, angle[i + 1] - gap));
+  // Départs : alignés derrière la tourelle, dans l'ordre des arrivées (de gauche à droite).
+  const j0 = -Math.round(o.manifold / o.cell);
   const stubs = new Map();
-  order.forEach((l, i) => {
-    const m = Math.round(angle[i] / grid.da);
-    const stub = Array.from({ length: o.lead + 1 }, (_, q) => [k0 + q, m]);
-    if (stub.every(([a, b]) => !grid.blocked[grid.index(a, b)])) stubs.set(l, stub);
-    else o.debug?.(`départ bouché : ${ensemble.instruments[l.instrument].kind} ${l.kind}, angle ${angle[i].toFixed(2)}`);
+  order.forEach((l, k) => {
+    const i = Math.round((k - (order.length - 1) / 2) * o.pitch);
+    const stub = Array.from({ length: o.lead + 1 }, (_, q) => [i, j0 - q]);
+    if (stub.every(([a, b]) => grid.inside(a, b) && !grid.blocked[grid.index(a, b)])) stubs.set(l, stub);
+    else o.debug?.(`départ bouché : ${ensemble.instruments[l.instrument].kind} ${l.kind}`);
   });
   for (const stub of stubs.values()) mark(stub);
   const lines = [];
@@ -357,11 +296,11 @@ function layout(ensemble, order, sequence, o) {
     const stub = stubs.get(l);
     const to = stub && freeCell(grid, l.foot[0], l.foot[1]);
     const tip = stub?.[stub.length - 1];
-    const rest = to && route(grid, { k: tip[0], m: tip[1] }, to, 0, pipes, o);
+    const rest = to && route(grid, { i: tip[0], j: tip[1] }, to, 3, pipes, o);
     if (!rest || rest.length < 2) continue;
     mark(rest);
     const end = rest[rest.length - 1];
-    const ok = grid.index(end[0], end[1]) === grid.index(to.k, to.m);
+    const ok = end[0] === to.i && end[1] === to.j;
     if (ok) arrived++;
     length += rest.length;
     lines.push({ ...l, port: l, cells: [...stub.slice(0, -1), ...rest], arrived: ok });
@@ -383,8 +322,8 @@ export function planTrunks(ensemble, options = {}) {
   const far = (l) => Math.hypot(...l.foot);
   // Un tuyau posé ne se franchit pas : l'ordre du tracé décide de qui passe. Tant qu'une ligne n'arrive pas au pied de son estrade, on
   // recommence en la traçant avant les autres, et on garde le meilleur essai.
-  // Premier essai, des bords vers le centre : la ligne la plus à droite prend la couronne la plus
-  // proche de la tourelle, sa voisine passe juste derrière, et ainsi de suite (idem à gauche).
+  // Premier essai, des bords vers le centre : la ligne la plus à droite tourne la première, sa
+  // voisine la contourne par l'extérieur, et ainsi de suite (idem à gauche).
   const edge = (l) => Math.min(order.indexOf(l), order.length - 1 - order.indexOf(l));
   let sequence = [...all].sort((a, b) => edge(a) - edge(b) || far(b) - far(a));
   let best = null;

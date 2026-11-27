@@ -15,7 +15,7 @@ const e = buildEnsemble({ balls: marimba, pads: chords, bass: line(36, 2, 0.25, 
 const tr = e.trunks;
 const o = tr.options;
 
-test('réseau : au sol, de la tourelle vers les estrades, en arcs et en segments radiaux', () => {
+test('réseau : au sol, de la tourelle vers les estrades, en tronçons droits sur une grille', () => {
   assert.ok(tr.lines.length >= 5, `${tr.lines.length} lignes`);
   assert.ok(tr.arrived >= tr.lines.length - 3, 'la plupart des lignes arrivent au pied de leur estrade');
   // Une seule ligne pour toute la batterie.
@@ -23,20 +23,17 @@ test('réseau : au sol, de la tourelle vers les estrades, en arcs et en segments
   for (const l of tr.lines) {
     const pts = l.maze.points;
     for (const p of pts) assert.ok(p[1] <= o.axisY + 1e-9, 'jamais au-dessus du sol');
-    // Les deux bouts plongent dans le sol ; l'un est au pied de la tourelle.
+    // Les deux bouts plongent dans le sol ; l'un est dans la rangée des départs, derrière la tourelle.
     assert.ok(pts[0][1] < 0 && pts[pts.length - 1][1] < 0);
     const hub = l.kind === 'feed' ? pts[0] : pts[pts.length - 1];
-    assert.ok(Math.abs(Math.hypot(hub[0], hub[2]) - o.ring) < 0.1);
-    // Tracé propre : chaque tronçon est un arc centré sur la tourelle ou un segment radial.
+    assert.ok(Math.abs(hub[2] + o.manifold) < o.cell);
+    // Tracé propre : des tronçons parallèles ou perpendiculaires au bord de scène, peu de coudes.
     const flat = pts.filter((p) => p[1] > o.axisY - 1e-6);
-    let odd = 0;
-    for (let i = 1; i < flat.length; i++) {
-      const [r0, r1] = [Math.hypot(flat[i - 1][0], flat[i - 1][2]), Math.hypot(flat[i][0], flat[i][2])];
-      const [a0, a1] = [Math.atan2(flat[i - 1][0], -flat[i - 1][2]), Math.atan2(flat[i][0], -flat[i][2])];
-      const turn = Math.abs(Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0)));
-      if (Math.abs(r1 - r0) > 0.02 && turn * r0 > 0.02) odd++; // ni arc ni rayon : seulement dans l'arrondi des coudes
-    }
-    assert.ok(odd <= 12 * (l.turns + 2), `${odd} tronçons de biais pour ${l.turns} coudes`);
+    let skew = 0;
+    for (let i = 1; i < flat.length; i++) if (Math.abs(flat[i][0] - flat[i - 1][0]) > 1e-6 && Math.abs(flat[i][2] - flat[i - 1][2]) > 1e-6) skew += Math.hypot(flat[i][0] - flat[i - 1][0], flat[i][2] - flat[i - 1][2]);
+    // De biais seulement dans l'arrondi des coudes (quelques centimètres chacun).
+    assert.ok(skew <= 0.16 * (l.turns + 1), `${skew.toFixed(2)} m de biais pour ${l.turns} coudes`);
+    assert.ok(l.turns <= 20, `${l.turns} coudes`);
     if (l.arrived) {
       const end = l.kind === 'feed' ? pts[pts.length - 1] : pts[0];
       assert.ok(Math.hypot(end[0] - l.foot[0], end[2] - l.foot[1]) < 1, 'plongée au pied de l\'estrade');

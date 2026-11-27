@@ -75,14 +75,15 @@ puis la scène est posée à l'instant `t` lu sur l'horloge audio.
   **coupelle à poussoir** ; son poids ouvre la valve, la soupape ou l'iris tant qu'elle y repose, puis le poussoir
   remonte d'un coup sec et l'éjecte vers un cornet à la fin de la note.
 - **Une seule machine** (`src/trunks.js`) : du pied de la tourelle du marimba part un réseau de tuyaux de verre
-  posés au sol, tracé comme un labyrinthe circulaire : des arcs concentriques et des segments radiaux, centrés sur
-  la tourelle, rangés en faisceaux. Ils passent sous les billes du marimba, entre ses pieds, suivent les allées
+  posés au sol, tracé sur une grille comme un circuit imprimé : de longs tronçons droits, parallèles ou
+  perpendiculaires au bord de scène, des coudes à angle droit, des faisceaux. Ils passent sous les billes du marimba, entre ses pieds, suivent les allées
   entre les gradins et plongent dans le sol au pied de l'estrade de leur instrument ; le tuyau en ressort par une
   colonne de verre plantée dans l'estrade, jusqu'à la rampe (alimentation) ou depuis le collecteur (retour). Les
   billes y roulent à 5 m/s, en avance sur la musique : chacune arrive au bout de sa rampe juste à temps pour être
-  tirée. Le tracé contourne tout ce qui est posé au sol (grille polaire, A* où un coude coûte cher) ; deux tuyaux
+  tirée. Le tracé contourne tout ce qui est posé au sol (grille de 16 cm, A* où un coude coûte cher) ; deux tuyaux
   n'occupent jamais la même case, donc ne se croisent pas. Dans ce style, tous les instruments sont en place dès
-  le début, et les allées sont plus larges (1,5 m) pour laisser passer les tuyaux.
+  le début, les allées sont plus larges (1,5 m) pour laisser passer les tuyaux, et les estrades sont rangées en
+  lignes droites face au public (et non en arc) : tuyaux et estrades sont parallèles partout.
 - **Échanges de billes** (`src/passes.js`) : par moments (le début d'une section sur deux), un **canon de passe**
   dressé derrière un instrument tire la bille d'une note de l'instrument situé derrière lui, d'un long lob ; à
   défaut de voisin bien placé, c'est le canon central de la tourelle du marimba qui tire, à travers toute la scène.

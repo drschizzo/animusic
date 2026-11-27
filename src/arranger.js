@@ -427,6 +427,7 @@ const RISER_PAD = 0.35; // débord de l'estrade autour de l'instrument
 // Allée entre deux gradins (et entre l'arc de lames et le premier) et espace entre deux estrades
 // voisines. Dans le style « billes », ils sont plus larges : c'est là que court le réseau de tuyaux.
 const SPACING = { arms: { aisle: 0.7, gap: 0.8 }, balls: { aisle: 1.5, gap: 1.5 } };
+const ROW_HALF = 14; // demi-largeur maximale d'une rangée d'estrades (style « billes »)
 let AISLE = SPACING.arms.aisle;
 let SEAT_GAP = SPACING.arms.gap;
 
@@ -564,6 +565,19 @@ export function buildEnsemble(parts, controls = [], programs = [], { style = 'ar
     for (const it of items) it.side = seatOf(it).side;
     const r = outer + AISLE + Math.max(...items.map((it) => it.seatD)) / 2;
     const placed = [];
+    if (style === 'balls') {
+      // Style « billes » : des rangées droites, face au public, plutôt qu'un arc. Les estrades
+      // sont toutes parallèles au bord de scène, comme la grille des tuyaux qui les longent.
+      pending = fillTier(items, 1, ROW_HALF, (it, x) => {
+        it.origin = [x, 0, -r];
+        it.yaw = 0;
+        it.riser = tier.riser;
+        placed.push(it);
+      });
+      outer = Math.max(outer, r + Math.max(...items.map((it) => it.seatD)) / 2);
+      lastTier = tier;
+      return;
+    }
     pending = fillTier(items, r, tier.maxA, (it, angle) => {
       const [x, , z] = side(angle, r);
       it.origin = [x, 0, z];
