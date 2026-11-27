@@ -1,6 +1,6 @@
 // Retouches de matériaux en TSL, pour WebGPURenderer : les équivalents nœud pour nœud des
 // greffes GLSL faites par onBeforeCompile (que WebGPURenderer ignore). Chargé seulement
-// par le prototype (voir gpu.js) ; les explications de fond restent à côté des versions
+// en WebGPU (voir gpu.js) ; les explications de fond restent à côté des versions
 // GLSL, dans materials.js et dans les vues.
 
 import {
@@ -203,7 +203,7 @@ function screenVelocity(now, before) {
 }
 
 let renderer = null;
-/** Moteur de rendu du prototype : les vitesses écrites à la main lui demandent quelle passe est en cours. */
+/** Moteur WebGPU : les vitesses écrites à la main lui demandent quelle passe est en cours. */
 export function useRenderer(r) {
   renderer = r;
 }

@@ -532,7 +532,7 @@ export class Stage {
     this.renderer.shadowMap.needsUpdate = true;
     this.environment.scheduleShadows();
     // Les vues créent des objets en cours de route (billes…) : contrôle régulier.
-    if (RAW && (this._hideTick = (this._hideTick ?? 0) + 1) % 30 === 1) hideUnsupported(this.scene);
+    if ((WEBGPU || RAW) && (this._hideTick = (this._hideTick ?? 0) + 1) % 30 === 1) hideUnsupported(this.scene);
     // Sonde de reflets et reflet du sol : partout sauf en WebGL brut (?raw).
     if (!RAW || WEBGPU) {
       this.environment.renderProbe();

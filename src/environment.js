@@ -15,7 +15,7 @@ const PMREM = WEBGPU
   ? (await import('./vendor/three-advanced-techniques/rendering/environment-lighting/SlicedPMREMGenerator.js')).SlicedPMREMGenerator
   : THREE.PMREMGenerator;
 
-// ?raw (WebGL brut) : ni sonde de reflets ni reflet du sol. Le prototype WebGPU les a.
+// ?raw (WebGL brut) : ni sonde de reflets ni reflet du sol.
 const BARE = RAW && !WEBGPU;
 const renderTarget = (w, h, options) => (nodes ? nodes.target(w, h, options) : new THREE.WebGLRenderTarget(w, h, options));
 

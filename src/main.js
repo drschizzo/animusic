@@ -577,10 +577,10 @@ function measureFps() {
   const cpu = fpsMeter.cpu / fpsMeter.frames; // temps processeur moyen de stage.render() (ms)
   fpsMeter.frames = 0;
   fpsMeter.since = now;
-  // Prototype WebGPU (gpu.js) : moteur et temps processeur de rendu, pour comparer.
-  $('fps').textContent = RAW ? `${Math.round(fps)} img/s · ${cpu.toFixed(1)} ms · ${backendName(stage.renderer)}` : `${Math.round(fps)} img/s`;
+  // Moteur utilisé (gpu.js) et temps processeur de rendu par image.
+  $('fps').textContent = `${Math.round(fps)} img/s · ${cpu.toFixed(1)} ms · ${backendName(stage.renderer)}`;
   fpsMeter.cpu = 0;
-  // Prototype : pas de baisse automatique de qualité, elle fausserait la comparaison.
+  // Scène brute (?raw) : pas de baisse automatique de qualité, elle fausserait la comparaison.
   if (qualityMode !== 'auto' || !player.playing || RAW) {
     fpsMeter.playingSince = null;
     return;

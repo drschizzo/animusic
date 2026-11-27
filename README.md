@@ -45,13 +45,14 @@ npm run bench -- morceau.mid     # banc d'essai : arrangement, NaN, coût par im
 npm run collide -- morceau.mid   # interpénétrations (dans les deux styles) : billes, instruments, encombrements
 ```
 
-**Prototype WebGPU** (évaluation de la migration, `src/gpu.js`) : ajouter à l'adresse
-`?webgpu` (WebGPURenderer sur WebGPU seulement ; sans adaptateur WebGPU qui convienne, la
-page reprend le moteur WebGL) ou `?raw` (moteur WebGL actuel, scène brute : matériaux,
-lumières, ombres, sans post-traitement ni reflets). En WebGPU, toute la scène est en nœuds TSL (`src/nodes.js`) et la chaîne d'effets
-aussi (`src/postfxNodes.js`), avec des modules de three-advanced-techniques copiés dans
-`src/vendor/` (TAAU, occlusion XeGTAO, reflets en espace écran, préfiltrage de la sonde).
-Ces modes affichent en bas le moteur utilisé et le temps processeur de rendu par image.
+**Moteur de rendu** (`src/gpu.js`) : WebGPU par défaut. Toute la scène y est en nœuds TSL
+(`src/nodes.js`), la chaîne d'effets aussi (`src/postfxNodes.js`), avec des modules de
+three-advanced-techniques copiés dans `src/vendor/` (TAAU, occlusion XeGTAO, reflets en
+espace écran, préfiltrage de la sonde). Sans adaptateur WebGPU qui convienne, la page prend
+le moteur WebGL. Pour forcer celui-ci, ajouter à l'adresse `?webgl` (WebGLRenderer et ses
+effets GLSL) ou `?raw` (WebGL, scène brute : matériaux, lumières, ombres, sans
+post-traitement ni reflets). Le panneau affiche en bas le moteur utilisé et le temps
+processeur de rendu par image.
 
 ## Principe : l'animation à l'envers
 

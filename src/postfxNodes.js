@@ -1,5 +1,5 @@
 // Chaîne d'effets en nœuds TSL, pour WebGPURenderer : l'équivalent de postfx.js (GLSL).
-// Chargée seulement par le prototype (voir gpu.js).
+// Chargée seulement en WebGPU (voir gpu.js).
 //
 //   scène (couleur + vitesse, sans MSAA) ── occlusion ambiante (XeGTAO) injectée dans les
 //   matériaux : elle n'assombrit que la lumière ambiante, pas l'éclairage direct
