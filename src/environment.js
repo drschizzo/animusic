@@ -584,6 +584,7 @@ const beamFragment = `
 export class Environment {
   constructor(renderer, scene) {
     this.scene = scene;
+    this.ssr = SSR; // lu par la chaîne d'effets en nœuds
     this.radius = 8;
     this._tmpColor = new THREE.Color();
     scene.background = new THREE.Color(HAZE);
@@ -929,7 +930,7 @@ export class Environment {
     this.probeFaces = level === 'low' || BARE ? 0 : 1; // une face de cube par image : sonde à jour en 6 images
     this.probe.setSize(level === 'high' ? 256 : 128);
     if (!this.probeFaces || !this.probe.filtered) this.scene.environment = this.studio;
-    // Avec ?ssr (postfxNodes.js), les reflets en espace écran remplacent le reflet planaire.
+    // Avec les reflets en espace écran (gpu.js, postfxNodes.js), pas de reflet planaire.
     this.reflections = level !== 'low' && !BARE && !SSR;
     this.reflectionScale = level === 'high' ? 0.5 : 0.4;
     this.floor.uniforms.uReflect.value = this.reflections ? 1 : 0;

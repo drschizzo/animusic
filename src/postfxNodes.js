@@ -73,13 +73,6 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ssr, ssrComposite, ssrGBuffer } from './vendor/three-advanced-techniques/rendering/screen-space-reflections/SSRNode.js';
 import { motion } from './nodes.js';
 
-/**
- * Essai (?webgpu&ssr) : reflets en espace écran (three-advanced-techniques) à la place du
- * reflet planaire du sol, qui redessine toute la scène à chaque image. Lu ici et non dans
- * gpu.js, qui charge ce module : l'importer ferait un cycle.
- */
-const SSR = typeof location !== 'undefined' && new URLSearchParams(location.search).has('ssr'); // = gpu.js SSR
-
 const TILE = 16; // côté (pixels) des pavés du flou de mouvement
 const BLUR_SAMPLES = 16;
 const DOF_TAPS = 36;
@@ -107,6 +100,9 @@ export class PostFX {
   /** @param environment décor : `beams()` rend les faisceaux à tracer (voir environment.js) */
   constructor(renderer, scene, camera, environment) {
     Object.assign(this, { renderer, scene, camera, environment });
+    // Reflets en espace écran (décidés dans gpu.js, selon l'adaptateur) à la place du reflet
+    // planaire du sol, qui redessinait toute la scène à chaque image.
+    const SSR = (this.ssr = environment?.ssr === true);
     const u = (this.uniforms = {
       near: uniform(camera.near),
       far: uniform(camera.far),
@@ -638,7 +634,7 @@ export class PostFX {
     u.cameraWorld.value.copy(camera.matrixWorld);
     u.eye.value.setFromMatrixPosition(camera.matrixWorld);
     this.updateBeams();
-    if (SSR && this.scene.environment !== this.reflectedEnvironment) {
+    if (this.ssr && this.scene.environment !== this.reflectedEnvironment) {
       this.reflectedEnvironment = this.scene.environment;
       this.beauty.node = this.shaded();
       this.pipeline.needsUpdate = true;
