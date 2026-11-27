@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { keyDepth, keyHammerAngle, tineVibration, sustainPedal } from './keys.js';
-import { mat } from './materials.js';
+import { mat, instanceGlow } from './materials.js';
 import { rod, roundedBox, Piston, V } from './parts.js';
 import { attachRow } from './ballRowView.js';
 
@@ -8,6 +8,33 @@ const KEY_TOP = 0.92; // hauteur du dessus des touches blanches
 const WHITE_LEN = 0.62;
 const BLACK_LEN = 0.39;
 const TRAVEL = 0.055; // rotation (rad) d'une touche enfoncée
+
+const _m = new THREE.Matrix4();
+const _r = new THREE.Matrix4();
+const _s = new THREE.Matrix4();
+const _c = new THREE.Color();
+
+/**
+ * Pièces identiques d'un clavier (touches, lames, marteaux) en un seul maillage
+ * instancié : un appel de rendu pour toutes au lieu d'un par pièce. Chaque instance a sa
+ * matrice et sa lueur (couleur × intensité, voir instanceGlow).
+ */
+function instanced(geometry, material, count, { cast = false, receive = false } = {}) {
+  const mesh = new THREE.InstancedMesh(geometry.clone(), instanceGlow(material), count);
+  mesh.geometry.setAttribute('instanceGlow', new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
+  mesh.castShadow = cast;
+  mesh.receiveShadow = receive;
+  mesh.frustumCulled = false; // les instances bougent : la sphère englobante de la géométrie ne vaut rien
+  // Pièces solides : l'export glTF et le contrôle des collisions les déplient en pièces.
+  mesh.userData.unfold = true;
+  return mesh;
+}
+
+/** Lueur d'une instance (attribut instanceGlow). */
+function glowAt(mesh, i, color, intensity) {
+  const a = mesh.geometry.attributes.instanceGlow;
+  a.setXYZ(i, color.r * intensity, color.g * intensity, color.b * intensity);
+}
 
 /** Rendu du clavier mécanique (voir keys.js). */
 export class KeysView {
@@ -24,9 +51,6 @@ export class KeysView {
     const chrome = mat.steel();
     const dark = mat.gunmetal();
     const body = mat.lacquer(0x0a0a0d, 0.2);
-    const felt = mat.rubber();
-    const ivory = mat.ivory();
-    const ebony = mat.ebony();
 
     // Meuble : sommier sous les touches, joues, bandeau arrière qui porte les lames.
     const bed = roundedBox(model.width, 0.14, WHITE_LEN + 0.5, 0.03, body);
@@ -59,44 +83,46 @@ export class KeysView {
     const tineW = Math.max(0.018, kw * 0.42);
     const hammerZ = -0.14; // axe des marteaux, entre le fond des touches et les lames
 
+    // Touches (blanches, noires), lames et leurs têtes, bras et feutres des marteaux : un
+    // maillage instancié par sorte de pièce. Mêmes formes et mêmes places qu'une pièce par
+    // maillage ; les touches jouées s'allument par leur lueur d'instance.
+    const whites = model.keys.filter((k) => !k.black);
+    const blacks = model.keys.filter((k) => k.black);
+    const played = model.keys.filter((k) => k.hits.length > 0);
+    this.whiteKeys = instanced(whiteGeo, mat.ivory(), whites.length, { cast: true, receive: true });
+    this.blackKeys = instanced(blackGeo, mat.ebony(), blacks.length, { cast: true, receive: true });
+    const tineMat = mat.steel();
+    tineMat.emissive = new THREE.Color(0x000000);
+    const tineGeo = new THREE.BoxGeometry(tineW, 1, 0.012);
+    tineGeo.translate(0, 0.5, 0); // hauteur 1, mise à la longueur de chaque lame par l'instance
+    this.tines = instanced(tineGeo, tineMat, played.length, { cast: true });
+    const tipMat = mat.steel();
+    tipMat.emissive = new THREE.Color(0x000000);
+    this.tips = instanced(new THREE.SphereGeometry(tineW * 0.62, 12, 8), tipMat, played.length);
+    const headR = Math.min(0.026, tineW * 0.9);
+    const armLen = hammerZ - combZ - 0.006 - headR;
+    // Bras couché le long de -z, feutre au bout : posés dans la géométrie, l'instance ne
+    // porte que la position et l'angle du marteau.
+    const armGeo = new THREE.CylinderGeometry(0.006, 0.006, armLen, 6);
+    armGeo.rotateX(Math.PI / 2);
+    armGeo.translate(0, 0, -armLen / 2);
+    const headGeo = new THREE.SphereGeometry(headR, 12, 8);
+    headGeo.translate(0, 0, -armLen);
+    this.arms = instanced(armGeo, mat.steel(), played.length);
+    this.heads = instanced(headGeo, mat.rubber(), played.length, { cast: true });
+    g.add(this.whiteKeys, this.blackKeys, this.tines, this.tips, this.arms, this.heads);
+
+    const slot = new Map([...whites.map((k, i) => [k, i]), ...blacks.map((k, i) => [k, i])]);
     this.keyViews = model.keys.map((k) => {
-      const played = k.hits.length > 0;
-      // Chaque touche pivote autour de son bord arrière.
-      const material = played ? (k.black ? mat.ebony() : mat.ivory()) : k.black ? ebony : ivory;
-      const mesh = new THREE.Mesh(k.black ? blackGeo : whiteGeo, material);
-      mesh.position.set(k.x, KEY_TOP, -WHITE_LEN / 2 + 0.05);
-      mesh.castShadow = mesh.receiveShadow = true;
-      g.add(mesh);
-      if (!played) return { k, mesh };
-
-      // Lame vibrante, dressée derrière le clavier.
-      const tineMat = mat.steel();
-      tineMat.emissive = new THREE.Color(0x000000);
-      const tineGeo = new THREE.BoxGeometry(tineW, k.tine, 0.012);
-      tineGeo.translate(0, k.tine / 2, 0);
-      const tine = new THREE.Mesh(tineGeo, tineMat);
-      tine.position.set(k.x, combY, combZ);
-      tine.castShadow = true;
-      const tip = new THREE.Mesh(new THREE.SphereGeometry(tineW * 0.62, 12, 8), tineMat);
-      tip.position.y = k.tine;
-      tine.add(tip);
-
-      // Marteau : au contact, le bras est horizontal et le feutre touche la lame.
-      const hammer = new THREE.Group();
-      const strikeY = combY + Math.min(0.14, k.tine * 0.3);
-      hammer.position.set(k.x, strikeY, hammerZ);
-      const headR = Math.min(0.026, tineW * 0.9);
-      const armLen = hammerZ - combZ - 0.006 - headR;
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, armLen, 6), chrome);
-      arm.rotation.x = Math.PI / 2;
-      arm.position.z = -armLen / 2;
-      const head = new THREE.Mesh(new THREE.SphereGeometry(headR, 12, 8), felt);
-      head.position.z = -armLen;
-      head.castShadow = true;
-      hammer.add(arm, head);
-      g.add(tine, hammer);
-      return { k, mesh, material, tine, tineMat, hammer };
+      const v = { k, keys: k.black ? this.blackKeys : this.whiteKeys, key: slot.get(k), at: new THREE.Vector3(k.x, KEY_TOP, -WHITE_LEN / 2 + 0.05) };
+      if (k.hits.length > 0) {
+        v.slot = played.indexOf(k);
+        v.tineAt = new THREE.Vector3(k.x, combY, combZ);
+        v.hammerAt = new THREE.Vector3(k.x, combY + Math.min(0.14, k.tine * 0.3), hammerZ);
+      }
+      return v;
     });
+    this.pose(0, true);
     g.add(rod(V(-half + 0.2, combY + 0.04, hammerZ), V(half - 0.2, combY + 0.04, hammerZ), 0.012, dark, 8));
 
     // Pédale de sustain : la pédale au sol tire, par une tringle, la barre d'étouffoirs
@@ -132,25 +158,44 @@ export class KeysView {
     attachRow(this, model, trackColors, g);
   }
 
+  /**
+   * Pose les instances à l'instant t (au repos si `rest`) : touches enfoncées, marteaux,
+   * lames qui vibrent et leurs lueurs. Rend l'amplitude de la lame la plus vive.
+   */
+  pose(t, rest = false) {
+    const m = this.model;
+    let glow = 0;
+    for (const v of this.keyViews) {
+      const depth = rest || v.slot === undefined ? 0 : keyDepth(m, v.k, t);
+      v.keys.setMatrixAt(v.key, _m.makeRotationX(depth * TRAVEL).setPosition(v.at));
+      if (v.slot === undefined) continue;
+      const hammer = rest ? 0 : keyHammerAngle(m, v.k, t);
+      const { amp, since, track } = rest ? { amp: 0, since: 0, track: -1 } : tineVibration(m, v.k, t);
+      if (track >= 0) v.color = this.trackColors[track];
+      const color = v.color ?? _c.setRGB(0, 0, 0);
+      glowAt(v.keys, v.key, color, depth * (v.k.black ? 1.2 : 0.5));
+      glowAt(this.tines, v.slot, color, amp * 2.6);
+      glowAt(this.tips, v.slot, color, amp * 2.6);
+      // Lame : dressée à sa longueur, elle bat autour de son pied ; sa tête la suit.
+      _r.makeRotationX(amp > 0.002 ? amp * 0.05 * Math.sin(since * 75) : 0).setPosition(v.tineAt);
+      this.tines.setMatrixAt(v.slot, _m.multiplyMatrices(_r, _s.makeScale(1, v.k.tine, 1)));
+      this.tips.setMatrixAt(v.slot, _m.multiplyMatrices(_r, _s.makeTranslation(0, v.k.tine, 0)));
+      _m.makeRotationX(hammer).setPosition(v.hammerAt);
+      this.arms.setMatrixAt(v.slot, _m);
+      this.heads.setMatrixAt(v.slot, _m);
+      glow = Math.max(glow, amp);
+    }
+    for (const mesh of [this.whiteKeys, this.blackKeys, this.tines, this.tips, this.arms, this.heads]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.geometry.attributes.instanceGlow.needsUpdate = true;
+    }
+    return glow;
+  }
+
   update(t) {
     const m = this.model;
     this.rowView?.update(t);
-    let glow = 0;
-    for (const v of this.keyViews) {
-      if (!v.tine) continue;
-      const depth = keyDepth(m, v.k, t);
-      v.mesh.rotation.x = depth * TRAVEL;
-      v.hammer.rotation.x = keyHammerAngle(m, v.k, t);
-      const { amp, since, track } = tineVibration(m, v.k, t);
-      if (track >= 0) {
-        v.tineMat.emissive.copy(this.trackColors[track]);
-        v.material.emissive.copy(this.trackColors[track]);
-      }
-      v.tineMat.emissiveIntensity = amp * 2.6;
-      v.material.emissiveIntensity = depth * (v.k.black ? 1.2 : 0.5);
-      v.tine.rotation.x = amp > 0.002 ? amp * 0.05 * Math.sin(since * 75) : 0;
-      glow = Math.max(glow, amp);
-    }
+    const glow = this.pose(t);
     this.ledMat.emissiveIntensity = 0.25 + 3 * glow;
     const p = sustainPedal(m, t);
     this.pedal.rotation.x = 0.16 * p; // l'avant de la pédale s'enfonce

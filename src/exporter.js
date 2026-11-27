@@ -89,10 +89,31 @@ export async function exportGLTF(stage, ensemble, plan, options) {
   const camera = new THREE.PerspectiveCamera(stage.camera.fov, 16 / 9, 0.1, 200);
   camera.name = 'camera_realisateur';
   root.add(camera);
+  // Pièces instanciées (touches, marteaux…) : une pièce par instance, posée image par image
+  // d'après la matrice de son instance. Le glTF animé ne connaît pas l'instanciation.
+  const unfolded = [];
+  root.traverse((o) => o.isInstancedMesh && o.userData.unfold && o.visible && unfolded.push(o));
+  const proxies = unfolded.map((im) => {
+    const geometry = im.geometry.clone();
+    for (const name of Object.keys(geometry.attributes)) if (geometry.attributes[name].isInstancedBufferAttribute) geometry.deleteAttribute(name);
+    const meshes = Array.from({ length: im.count }, () => {
+      const m = new THREE.Mesh(geometry, im.material);
+      im.parent.add(m);
+      return m;
+    });
+    im.visible = false;
+    return { im, geometry, meshes };
+  });
+  const instanceMatrix = new THREE.Matrix4();
   const lookTarget = new THREE.Vector3();
   const tmp = [0, 0, 0];
   const pose = (t) => {
     stage.update(t);
+    for (const { im, meshes } of proxies)
+      meshes.forEach((m, i) => {
+        im.getMatrixAt(i, instanceMatrix);
+        instanceMatrix.decompose(m.position, m.quaternion, m.scale);
+      });
     for (const o of effects) o.visible = false;
     if (ballsView) poseBalls(ballsView.ch, pools, t, tmp);
     const cam = cameraAt(plan, t);
@@ -174,6 +195,11 @@ export async function exportGLTF(stage, ensemble, plan, options) {
     for (const { meshes } of pools) for (const m of meshes) root.remove(m);
     for (const { meshes } of pools) meshes[0]?.material.dispose();
     root.remove(camera);
+    for (const { im, geometry, meshes } of proxies) {
+      for (const m of meshes) m.removeFromParent();
+      geometry.dispose();
+      im.visible = true;
+    }
     if (ballsView) ballsView.balls.visible = true;
     for (const b of stationBalls) b.visible = true;
     for (const o of effects) o.visible = true;

@@ -128,6 +128,14 @@ export function* mountSteps(ensemble, trackColors, content, { freeze = true } = 
   yield;
   // Réseau de tuyaux de verre qui relie les instruments à la tour : fixe, dans le repère de la scène.
   const trunkView = ensemble.trunks?.lines.length ? yield* TrunksView.steps(ensemble.trunks, trackColors, content) : null;
+  if (freeze && trunkView) {
+    // Le réseau compte des centaines de pièces fixes (bâtis, capots, tuyaux) : fusionnées aussi.
+    const t0 = Math.min(...ensemble.instruments.map((i) => i.start));
+    const t1 = Math.max(...ensemble.instruments.map((i) => i.end));
+    const times = Array.from({ length: 8 }, (_, i) => t0 + ((i + 0.5) / 8) * (t1 - t0));
+    frozen += freezeStatic(trunkView.group, trunkView, trunkView.group, (t) => trunkView.update(t), times);
+    yield;
+  }
   return { lifts, views, hatches, frozen, passView, trunkView };
 }
 

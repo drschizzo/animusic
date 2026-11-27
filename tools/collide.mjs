@@ -34,16 +34,26 @@ const CELL = 0.5;
 function collectTriangles(root, label, grid, list) {
   root.updateMatrixWorld(true);
   root.traverse((o) => {
-    if (!o.isMesh || o.isInstancedMesh || o.userData.fx || !o.visible) return;
+    if (!o.isMesh || (o.isInstancedMesh && !o.userData.unfold) || o.userData.fx || !o.visible) return;
+    // Pièces instanciées solides (touches, marteaux…) : chaque instance compte comme une pièce.
+    const matrices = o.isInstancedMesh
+      ? Array.from({ length: o.count }, (_, i) => o.getMatrixAt(i, new THREE.Matrix4()).premultiply(o.matrixWorld))
+      : [o.matrixWorld];
+    for (const matrix of matrices) collectMesh(o, matrix, label, grid, list);
+  });
+}
+
+function collectMesh(o, matrix, label, grid, list) {
+  {
     const g = o.geometry;
     const pos = g.attributes.position;
     const idx = g.index;
     const n = idx ? idx.count : pos.count;
-    const name = `${label}/${o.name || g.type}@${fmt(new THREE.Vector3().setFromMatrixPosition(o.matrixWorld))}`;
+    const name = `${label}/${o.name || g.type}@${fmt(new THREE.Vector3().setFromMatrixPosition(matrix))}`;
     for (let i = 0; i < n; i += 3) {
       const tri = new THREE.Triangle();
       const ids = [0, 1, 2].map((k) => (idx ? idx.getX(i + k) : i + k));
-      [tri.a, tri.b, tri.c].forEach((v, k) => v.fromBufferAttribute(pos, ids[k]).applyMatrix4(o.matrixWorld));
+      [tri.a, tri.b, tri.c].forEach((v, k) => v.fromBufferAttribute(pos, ids[k]).applyMatrix4(matrix));
       const box = new THREE.Box3().setFromPoints([tri.a, tri.b, tri.c]);
       const entry = { tri, name, mesh: o };
       list.push(entry);
@@ -55,7 +65,7 @@ function collectTriangles(root, label, grid, list) {
             grid.get(key).push(entry);
           }
     }
-  });
+  }
 }
 
 const fmt = (v) => `(${v.x.toFixed(1)}, ${v.y.toFixed(1)}, ${v.z.toFixed(1)})`;
@@ -304,10 +314,12 @@ function check(name, song, style) {
       const sn = Math.sin(f.yaw);
       v.lift.updateMatrixWorld(true);
       v.lift.traverse((o) => {
-        if (!o.isMesh || o.isInstancedMesh || o.userData.fx || o.userData.pass || !o.visible) return;
+        if (!o.isMesh || (o.isInstancedMesh && !o.userData.unfold) || o.userData.fx || o.userData.pass || !o.visible) return;
         const pos = o.geometry.attributes.position;
+        const matrices = o.isInstancedMesh ? Array.from({ length: o.count }, (_, i) => o.getMatrixAt(i, new THREE.Matrix4()).premultiply(o.matrixWorld)) : [o.matrixWorld];
+        for (const matrix of matrices)
         for (let i = 0; i < pos.count; i++) {
-          p.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+          p.fromBufferAttribute(pos, i).applyMatrix4(matrix);
           const dx = p.x - f.center[0];
           const dz = p.z - f.center[1];
           // Repère de l'instrument : x le long de sa largeur, z vers le public.

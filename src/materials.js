@@ -398,6 +398,42 @@ export const mat = {
     lightMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
 };
 
+// Recette de chaque matériau (fabrique et arguments) : deux matériaux de même recette et
+// de mêmes réglages s'affichent à l'identique, la fusion des pièces fixes (freeze.js) les
+// confond. Sans cela, chaque pièce ayant son propre matériau, presque rien ne fusionnait.
+// Les cymbales n'en ont pas : leurs sillons tournent autour de l'axe de chaque pièce.
+for (const [name, make] of Object.entries(mat)) {
+  if (name === 'cymbal') continue;
+  mat[name] = (...args) => {
+    const material = make(...args);
+    material.userData.recipe = `${name}(${args.join(',')})`;
+    return material;
+  };
+}
+
+/**
+ * Lueur par instance : chaque instance d'un InstancedMesh s'allume dans sa propre couleur
+ * (attribut `instanceGlow`, couleur × intensité, à poser sur la géométrie), en plus de
+ * l'émissif du matériau. Une touche ou une lame qui s'éclaire n'a donc plus besoin de son
+ * propre matériau, ni de son propre appel de rendu.
+ */
+export function instanceGlow(material) {
+  if (nodes) return nodes.instanceGlow(material);
+  const previous = material.onBeforeCompile;
+  const previousKey = previous.toString();
+  material.onBeforeCompile = (shader, renderer) => {
+    previous.call(material, shader, renderer);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 instanceGlow;\nvarying vec3 vInstanceGlow;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvInstanceGlow = instanceGlow;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vInstanceGlow;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vInstanceGlow;');
+  };
+  material.customProgramCacheKey = () => `instance-glow|${previousKey}`;
+  return material;
+}
+
 /** Chrome des billes, teinté par la couleur de l'instance et légèrement lumineux dans cette couleur. */
 export function ballMaterial() {
   const material = S({ color: 0xffffff, metalness: 1, roughness: 0.14, envMapIntensity: 1.6 });

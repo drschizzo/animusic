@@ -901,9 +901,29 @@ export class Environment {
     this.follows.forEach((f, i) => turn(f.light.shadow, n % 2 === i));
   }
 
+  /**
+   * Petites pièces (rayon sous 25 cm) : invisibles dans un cube de 256 pixels vu du milieu
+   * du plateau, mais chacune coûte un appel de rendu par face. La sonde s'en passe. Liste
+   * refaite de temps en temps (l'ensemble change d'un morceau à l'autre).
+   */
+  probeClutter() {
+    if (this.clutter && (this.clutterAge = (this.clutterAge ?? 0) + 1) < 120) return this.clutter;
+    this.clutterAge = 0;
+    const sphere = new THREE.Sphere();
+    const list = (this.clutter = []);
+    this.scene.traverseVisible((o) => {
+      if (!o.isMesh || o.isInstancedMesh || o.layers.isEnabled(PROBE_LAYER)) return;
+      const g = o.geometry;
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      sphere.copy(g.boundingSphere).applyMatrix4(o.matrixWorld);
+      if (sphere.radius < 0.25) list.push(o);
+    });
+    return list;
+  }
+
   renderProbe() {
     if (!this.probeFaces) return;
-    const hidden = [this.dust, ...this.heads.map((h) => h.beam)];
+    const hidden = [this.dust, ...this.heads.map((h) => h.beam), ...this.probeClutter()];
     const visible = hidden.map((o) => o.visible);
     hidden.forEach((o) => (o.visible = false));
     const reflect = this.floor.uniforms.uReflect.value;

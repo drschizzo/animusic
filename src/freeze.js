@@ -3,13 +3,27 @@
 // coûtent un appel de rendu chacune, à chaque passe (ombres, reflet du sol, sonde,
 // image, tampon de profondeur). On les fusionne en un maillage par matériau.
 //
-// Une pièce est fixe si la vue ne garde aucune référence vers elle, vers l'un de ses
-// parents (hors racine de la vue) ni vers son matériau : tout ce qu'une vue anime, elle
-// le garde dans ses propriétés. Par sécurité, on vérifie aussi qu'elle n'a pas bougé
-// pendant quelques poses d'essai.
+// Une pièce est fixe si la vue ne garde aucune référence vers elle ni vers l'un de ses
+// parents (hors racine de la vue) : tout ce qu'une vue anime, elle le garde dans ses
+// propriétés. Par sécurité, on vérifie aussi qu'elle n'a pas bougé pendant quelques
+// poses d'essai. Un matériau que la vue garde (et peut donc animer) ne fusionne qu'avec
+// lui-même : les pièces qui le partagent s'allument ensemble, fusionnées ou non. Les
+// autres fusionnent par apparence (voir look).
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+/**
+ * Apparence d'un matériau : sa recette (materials.js) et les réglages qu'une vue a pu
+ * changer après coup. Deux matériaux de même apparence se dessinent à l'identique ; sans
+ * recette, le matériau ne se confond qu'avec lui-même.
+ */
+function look(m) {
+  const recipe = m.userData.recipe;
+  if (!recipe) return m.uuid;
+  const hex = (c) => (c ? c.getHex() : '-');
+  return [recipe, m.type, hex(m.color), hex(m.emissive), m.emissiveIntensity, m.roughness, m.metalness, m.opacity, m.transparent, m.side, m.map?.uuid, m.roughnessMap?.uuid, m.visible].join('|');
+}
 
 /** Objets Three (maillages, groupes, matériaux) référencés par les propriétés d'une vue. */
 function referenced(view) {
@@ -55,7 +69,7 @@ export function freezeStatic(lift, view, root, probe, times = []) {
     if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || o.userData.fx || !o.visible) return;
     const m = o.material;
     if (Array.isArray(m) || m.isShaderMaterial || m.userData.freezable === false || (m.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile && !m.userData.freezable)) return;
-    if (o.name || o.renderOrder !== 0 || o.morphTargetInfluences || refs.has(m)) return; // pièce nommée : gardée telle quelle
+    if (o.name || o.renderOrder !== 0 || o.morphTargetInfluences) return; // pièce nommée : gardée telle quelle
     for (let p = o; p && p !== lift; p = p.parent) if (refs.has(p) || !p.visible) return;
     candidates.push({ o, m: local(o) });
   });
@@ -69,13 +83,14 @@ export function freezeStatic(lift, view, root, probe, times = []) {
   probe(-1e6);
   lift.updateMatrixWorld(true);
 
-  // Regroupement par matériau, ombres et jeu d'attributs.
+  // Regroupement par apparence, ombres et jeu d'attributs.
   const groups = new Map();
   for (const c of candidates) {
     if (moved.has(c)) continue;
     const g = c.o.geometry;
     const attrs = Object.keys(g.attributes).sort().join(',');
-    const key = `${c.o.material.uuid}|${c.o.castShadow}|${c.o.receiveShadow}|${c.o.layers.mask}|${attrs}`;
+    const m = c.o.material;
+    const key = `${refs.has(m) ? m.uuid : look(m)}|${c.o.castShadow}|${c.o.receiveShadow}|${c.o.layers.mask}|${attrs}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(c);
   }

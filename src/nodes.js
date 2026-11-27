@@ -238,6 +238,12 @@ export function ballGlow(material) {
   return overrideVelocity(material, screenVelocity(positionWorld, positionWorld.sub(attribute('instanceVelocity', 'vec3').mul(motion.uDt))));
 }
 
+/** Lueur par instance (materials.js, `instanceGlow`) : attribut `instanceGlow` ajouté à l'émissif. */
+export function instanceGlow(material) {
+  material.emissiveNode = materialEmissive.add(attribute('instanceGlow', 'vec3'));
+  return material;
+}
+
 /** Peau qui vibre (drumsView.js, `membrane`). u : { uAmp, uSince, uRadius, uAngle }. */
 export function membrane(material, u) {
   const modes = (p, s) => {
