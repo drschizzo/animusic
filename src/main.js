@@ -9,6 +9,13 @@ import { Stage } from './scene.js';
 import { sustainedEnd, sliced, breathe } from './util.js';
 import { Loader } from './loader.js';
 
+// Import d'enregistrements (mp3, wav…) : désactivé pour l'instant (trop lent, résultat
+// pas encore satisfaisant). Le code reste en place : passer à true pour le réactiver.
+const AUDIO_IMPORT = false;
+// Morceau de démonstration (servi depuis public/) ; la démo générée sert de secours.
+const DEMO_URL = `${import.meta.env?.BASE_URL ?? './'}demo/chameleon.mid`;
+const DEMO_NAME = 'Chameleon (Herbie Hancock)';
+
 const PALETTE = ['#ff8a3d', '#3dc6ff', '#b56bff', '#5cff8f', '#ff5c8a', '#ffe14d', '#4dffe1', '#ff4d4d'];
 
 const $ = (id) => document.getElementById(id);
@@ -157,6 +164,10 @@ let importing = false;
 async function loadFile(file) {
   if (importing) return;
   try {
+    if (!AUDIO_IMPORT && isAudioFile(file)) {
+      showError('L\u2019import d\u2019enregistrements audio est désactivé pour le moment : utilise un fichier MIDI.');
+      return;
+    }
     if (isAudioFile(file)) {
       // Enregistrement : transcription dans le navigateur (chargée à la demande).
       importing = true;
@@ -193,10 +204,35 @@ $('file').addEventListener('change', (e) => {
   openFiles([...e.target.files]);
   e.target.value = '';
 });
-$('demo').addEventListener('click', () => {
+if (AUDIO_IMPORT) $('file').accept += ',audio/*,.mp3,.wav,.ogg,.flac,.m4a';
+
+/** Charge le MIDI de démonstration ; à défaut (hors ligne…), la démo générée. */
+let demoBuffer = null;
+async function loadDemo() {
+  try {
+    if (!demoBuffer) {
+      const res = await fetch(DEMO_URL);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      demoBuffer = await res.arrayBuffer();
+    }
+    return await loadSong(parseMidi(demoBuffer, DEMO_NAME));
+  } catch (err) {
+    console.warn('Démo MIDI indisponible, démo générée à la place :', err);
+    return loadSong(demoSong());
+  }
+}
+
+$('demo').addEventListener('click', async () => {
+  if (building) return;
+  player.unlock(); // pendant le clic : la lecture démarrera une fois la scène construite
+  showError('');
   playlist.index = -1;
   renderPlaylist();
-  loadSong(demoSong());
+  player.stop();
+  updatePlayButton();
+  await loadDemo();
+  if (ensemble) await player.play();
+  updatePlayButton();
 });
 
 // --- Playlist (fichiers MIDI) : les morceaux s'enchaînent ; « Lecture en boucle »
@@ -585,7 +621,7 @@ function frame(now = performance.now()) {
   measureFps();
 }
 
-loadSong(demoSong());
+loadDemo();
 frame();
 
 // Accès pour le débogage depuis la console.
