@@ -614,7 +614,7 @@ export class Environment {
     // Poursuites : projecteurs à ombres portées, accrochés aux deux têtes de face du pont.
     // Leur nombre est fixe (pas de recompilation des shaders), seule leur visée change.
     this.follows = FOLLOW_HEADS.map((head) => {
-      const light = new THREE.SpotLight(0xffe9cc, 0, 0, 0.2, 0.75, 0);
+      const light = new THREE.SpotLight(0xffe9cc, 0, 0, 0.21, 0.95, 0); // bord très fondu : une découpe de théâtre, pas un disque
       light.castShadow = true;
       light.shadow.bias = -0.0004;
       light.shadow.normalBias = 0.03;
@@ -816,11 +816,13 @@ export class Environment {
     // montent quand l'instrument suivi joue et retombent (sans s'éteindre) entre deux phrases.
     for (const f of this.follows) {
       const h = this.heads[f.head];
-      // Attaque franche, retombée lente : la lumière monte avec la note, pas après elle.
-      f.level += (h.level - f.level) * (h.level > f.level ? 0.5 : 0.06);
+      // Attaque rapide mais pas instantanée (un projecteur ne claque pas), retombée lente.
+      f.level += (h.level - f.level) * (h.level > f.level ? 0.18 : 0.05);
       f.light.position.copy(this.rig.position).add(h.pivot.position);
       f.light.target.position.copy(h.target);
-      f.light.intensity = this.followGain * (0.35 + 0.65 * Math.min(1, f.level * 1.6));
+      // Courbe douce : les dernières marches de l'intensité se gagnent lentement, le plein feu reste rare.
+      const x = Math.min(1, f.level * 1.4);
+      f.light.intensity = this.followGain * (0.4 + 0.6 * x * x * (3 - 2 * x));
     }
     this.dustMat.uniforms.uTime.value = wall;
     this.backdrop.material.uniforms.uPulse.value = pulse + 0.6 * energy;
@@ -929,7 +931,7 @@ export class Environment {
       light.shadow.map?.dispose();
       light.shadow.map = null;
     }
-    this.followGain = 8;
+    this.followGain = 7;
     this.washGain = 3.5;
     this.beamGain = level === 'low' ? 0 : 0.05;
     this.dust.visible = level !== 'low';

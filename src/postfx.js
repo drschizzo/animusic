@@ -144,6 +144,49 @@ const LensShader = {
     }`,
 };
 
+/**
+ * Halo plus fin que celui d'origine, qui recopie tel quel tout pixel au-dessus du seuil :
+ * un reflet minuscule mais très intense y devenait une grosse tache, et le seuil franc
+ * faisait clignoter le halo d'une image à l'autre. Ici :
+ * - moyenne de Karis sur quatre échantillons (chacun pesé par 1 / (1 + luminance)) : un
+ *   pixel isolé très chaud ne compte plus que pour ce qu'il couvre ;
+ * - seuil à genou doux : on garde l'excès au-dessus du seuil, raccordé en douceur ;
+ * - compression des très hautes valeurs : un éclat reste un éclat, pas un projecteur.
+ */
+function softenBloom(bloom) {
+  const u = bloom.highPassUniforms;
+  u.uTexel = { value: new THREE.Vector2(1 / 1024, 1 / 1024) };
+  u.uKnee = { value: 0.5 };
+  u.uCeiling = { value: 6 };
+  const m = bloom.materialHighPassFilter;
+  m.fragmentShader = /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float luminosityThreshold;
+    uniform float uKnee;
+    uniform float uCeiling;
+    uniform vec2 uTexel;
+    varying vec2 vUv;
+    float haloLuma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+    vec3 haloTap(vec2 o, inout float w) {
+      vec3 c = texture2D(tDiffuse, vUv + o * uTexel).rgb;
+      float k = 1.0 / (1.0 + haloLuma(c));
+      w += k;
+      return c * k;
+    }
+    void main() {
+      float w = 0.0;
+      vec3 c = haloTap(vec2(-0.5, -0.5), w) + haloTap(vec2(0.5, -0.5), w) + haloTap(vec2(-0.5, 0.5), w) + haloTap(vec2(0.5, 0.5), w);
+      c /= max(w, 1e-4);
+      float b = max(c.r, max(c.g, c.b));
+      float soft = clamp(b - luminosityThreshold + uKnee, 0.0, 2.0 * uKnee);
+      soft = soft * soft / (4.0 * uKnee + 1e-4);
+      c *= max(soft, b - luminosityThreshold) / max(b, 1e-4);
+      c *= uCeiling / (uCeiling + haloLuma(c));
+      gl_FragColor = vec4(c, 1.0);
+    }`;
+  m.needsUpdate = true;
+}
+
 export class PostFX {
   constructor(renderer, scene, camera, environment) {
     this.renderer = renderer;
@@ -172,7 +215,8 @@ export class PostFX {
     this.beams = new VolumetricPass(this.gbuffer.depthTexture, camera, environment);
     composer.addPass(this.beams);
 
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.3, 0.6, 1.5);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.36, 0.75, 1.7);
+    softenBloom(this.bloom);
     composer.addPass(this.bloom);
     this.lens = new ShaderPass(LensShader);
     composer.addPass(this.lens);
@@ -185,6 +229,7 @@ export class PostFX {
     const ratio = this.renderer.getPixelRatio();
     this.dof.uniforms.uTexel.value.set(1 / (w * ratio), 1 / (h * ratio));
     this.dof.uniforms.uMaxBlur.value = 9 * ratio;
+    this.bloom.highPassUniforms.uTexel.value.set(1 / (w * ratio), 1 / (h * ratio));
   }
 
   /**

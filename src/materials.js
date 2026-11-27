@@ -4,6 +4,38 @@
 
 import * as THREE from 'three';
 
+/**
+ * Taille apparente des lampes. Les lumières de three.js sont des points : sur une matière
+ * polie (chrome, acier usiné), le reflet d'un projecteur devient une tête d'épingle
+ * d'une intensité démesurée, que le halo transforme en éclat grossier. Un vrai projecteur
+ * a une lentille de vingt centimètres : son reflet a une taille. On l'approche comme les
+ * moteurs de jeu, en donnant au reflet des lampes (et à lui seul) une rugosité minimale ;
+ * les reflets du décor (sonde, sol) gardent tout leur poli.
+ */
+export const LAMP_MIN_ROUGHNESS = 0.3;
+/**
+ * Part du reflet des lampes (l'éclairage diffus n'en dépend pas). Comme l'échelle
+ * spéculaire des éclairagistes de jeu vidéo : un projecteur braqué sur une machine
+ * l'éclaire franchement, sans allumer chaque tube d'acier comme un néon.
+ */
+export const LAMP_SPECULAR = 0.55;
+{
+  const chunk = THREE.ShaderChunk.lights_physical_pars_fragment;
+  const direct = 'void RE_Direct_Physical( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {';
+  if (chunk.includes(direct) && !chunk.includes('lampMaterial')) {
+    const min = LAMP_MIN_ROUGHNESS.toFixed(3);
+    let patched = chunk.replace(
+      direct,
+      `${direct}\n\tPhysicalMaterial lampMaterial = material;\n\tlampMaterial.roughness = max( material.roughness, ${min} );\n\t#ifdef USE_CLEARCOAT\n\tlampMaterial.clearcoatRoughness = max( material.clearcoatRoughness, ${min} );\n\t#endif`,
+    );
+    const head = patched.indexOf(direct);
+    const end = patched.indexOf('#define RE_Direct\t', head);
+    const body = patched.slice(head, end).replace('reflectedLight.directSpecular += irradiance *', `reflectedLight.directSpecular += ${LAMP_SPECULAR.toFixed(3)} * irradiance *`).replace('clearcoatSpecularDirect += ccIrradiance *', `clearcoatSpecularDirect += ${LAMP_SPECULAR.toFixed(3)} * ccIrradiance *`).replace('BRDF_GGX_Clearcoat( directLight.direction, geometryViewDir, geometryClearcoatNormal, material )', 'BRDF_GGX_Clearcoat( directLight.direction, geometryViewDir, geometryClearcoatNormal, lampMaterial )').replace('BRDF_GGX( directLight.direction, geometryViewDir, geometryNormal, material )', 'BRDF_GGX( directLight.direction, geometryViewDir, geometryNormal, lampMaterial )');
+    patched = patched.slice(0, head) + body + patched.slice(end);
+    THREE.ShaderChunk.lights_physical_pars_fragment = patched;
+  }
+}
+
 const textures = new Map();
 
 /**

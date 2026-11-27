@@ -224,7 +224,14 @@ La famille du programme General MIDI décide du mécanisme, les statistiques des
 - **Lumière** : une lumière d'ensemble faible et deux **poursuites** à ombres portées, accrochées au pont, qui
   visent les instruments les plus actifs et montent quand ils jouent. Chaque section a un blanc de poursuite et un
   seul accent ; les couleurs vives restent aux notes (couleurs de piste). Les liserés des socles ne s'allument que
-  quand l'instrument joue.
+  quand l'instrument joue. Les poursuites ont un bord très fondu et montent en un instant plutôt que d'un coup.
+- **Reflets des lampes** (`src/materials.js`) : les lumières de three.js sont des points, dont le reflet sur un métal
+  poli est une tête d'épingle démesurée. Pour les lampes seulement (pas pour les reflets du décor), la rugosité a un
+  minimum (0,3, la taille d'une vraie lentille) et le reflet une échelle (0,55) : un projecteur éclaire une machine
+  franchement sans allumer chaque tube d'acier comme un néon.
+- **Halo** (`src/postfx.js`) : seuil progressif (on garde l'excès au-dessus du seuil, raccordé en douceur), moyenne
+  pondérée sur quatre échantillons qui éteint les points chauds isolés, et compression des valeurs extrêmes. Le halo
+  revient aux vraies sources : lentilles, anneaux des buses, rayons, liserés.
 - **Faisceaux dans la brume**, `src/volumetric.js` : en qualité haute, le rayon de vue de chaque pixel (au quart de
   la résolution) est coupé exactement par le cône de chaque projecteur ; les poursuites y lisent leur carte d'ombres.
   En qualité moyenne, des cônes lumineux les remplacent.

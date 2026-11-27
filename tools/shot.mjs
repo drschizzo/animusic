@@ -1,6 +1,6 @@
 // Capture d'écran du build de production à un instant du morceau de démo.
 //
-//   npm run build && node tools/shot.mjs sortie.png [--t 12] [--cam x,y,z,tx,ty,tz] [autre.png --t 20 …] [--ui] [--size 1280x720] [--quality high] [--gi off|debug] [--probe off]
+//   npm run build && node tools/shot.mjs sortie.png [--t 12] [--cam x,y,z,tx,ty,tz] [--eval 'code(a)'] [autre.png --t 20 …] [--ui] [--size 1280x720] [--quality high] [--gi off|debug] [--probe off]
 //
 // Sans --cam, c'est le plan du réalisateur à l'instant t. Sert à l'aperçu du README.
 
@@ -28,7 +28,7 @@ for (let i = 0; i < args.length; i++) {
   else if (shots.length) shots[shots.length - 1].own.push(args[i]);
 }
 if (!shots.length) shots.push({ out: 'apercu.png', own: [] });
-for (const s of shots) Object.assign(s, { t: Number(opt('t', 12, s.own)), cam: opt('cam', '', s.own) });
+for (const s of shots) Object.assign(s, { t: Number(opt('t', 12, s.own)), cam: opt('cam', '', s.own), js: opt('eval', '', s.own) });
 const [width, height] = opt('size', '1280x720').split('x').map(Number);
 const quality = opt('quality', 'high');
 
@@ -51,7 +51,7 @@ try {
   page.on('console', (m) => ['error', 'warning'].includes(m.type()) && console.error(m.type(), m.text().slice(0, 600)));
   await page.goto(`http://localhost:${server.address().port}/animusic/`);
   await page.waitForFunction(() => window.animusic?.ensemble, null, { timeout: 60000 });
-  for (const { out, t, cam } of shots) {
+  for (const { out, t, cam, js } of shots) {
     await page.evaluate(
       ({ t, cam, quality, ui, gi, probe }) => {
         const a = window.animusic;
@@ -75,6 +75,8 @@ try {
       },
       { t, cam, quality, ui: args.includes('--ui'), gi: opt('gi', 'on'), probe: opt('probe', 'on') },
     );
+    // Réglage de diagnostic (--eval) : code exécuté dans la page, `a` = window.animusic.
+    if (js) await page.evaluate((code) => new Function('a', code)(window.animusic), js);
     // Laisse passer quelques images (compilation des shaders, tour complet de la sonde de reflets).
     await page.evaluate(() => new Promise((r) => { let n = 0; const f = () => (++n > 10 ? r() : requestAnimationFrame(f)); f(); }));
     await page.screenshot({ path: out, timeout: 180000 });
