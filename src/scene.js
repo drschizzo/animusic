@@ -247,7 +247,7 @@ export class Stage {
   async build(ensemble, trackColors, onProgress = () => {}) {
     this.clear();
     this.ensemble = ensemble;
-    this.environment.setRadius(ensemble.radius, ensemble.stageRadius);
+    this.environment.setRadius(ensemble.radius, ensemble.stageRadius, spreadOf(ensemble));
     this.kick = ensemble.instruments.find((i) => i.kind === 'drums')?.model;
     this.song = analyzeSong(ensemble);
     onProgress(0, 'machines');
@@ -546,3 +546,28 @@ export class Stage {
     this.post.render(wall);
   }
 }
+
+/**
+ * Emprise au sol de l'ensemble, symétrique en x (le plateau l'est) : centre en z et
+ * demi-étendues, estrades comprises. Le pont des projecteurs s'y ajuste.
+ */
+export function spreadOf(ensemble) {
+  let halfX = 0;
+  let zMin = Infinity;
+  let zMax = -Infinity;
+  for (const inst of ensemble.instruments) {
+    const f = inst.footprint;
+    const [x, z] = f ? f.center : [inst.focus.center[0], inst.focus.center[2]];
+    // Boîte de l'estrade tournée de son lacet (ou disque du foyer, sans estrade).
+    const c = Math.abs(Math.cos(f?.yaw ?? 0));
+    const s = Math.abs(Math.sin(f?.yaw ?? 0));
+    const ex = f ? f.halfW * c + f.halfD * s : inst.focus.radius;
+    const ez = f ? f.halfW * s + f.halfD * c : inst.focus.radius;
+    halfX = Math.max(halfX, Math.abs(x) + ex);
+    zMin = Math.min(zMin, z - ez);
+    zMax = Math.max(zMax, z + ez);
+  }
+  if (!Number.isFinite(zMin)) return null;
+  return { cz: (zMin + zMax) / 2, halfX, halfZ: (zMax - zMin) / 2 };
+}
+

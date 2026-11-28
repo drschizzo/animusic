@@ -479,62 +479,68 @@ class Rigging {
   }
 
   /**
-   * @param rigR rayon du pont ; il est centré sur `rig`, membrure basse à y = 0,3 (les
-   *   têtes pivotent dessous sans la toucher)
+   * @param ax, az demi-axes (x, z) du pont, ellipse centrée sur `rig` ; membrure basse à
+   *   y = 0,3 (les têtes pivotent dessous sans la toucher)
    * @param grilY hauteur des perches ; wallR rayon de la conque
    */
-  layout(rigR, grilY, wallR) {
+  layout(ax, az, grilY, wallR) {
     const LOW = 0.3;
     const HIGH = 0.75;
     const HALF = 0.22;
-    const ring = (radius, y) => {
-      const g = new THREE.TorusGeometry(radius, 0.035, 6, 160);
-      g.rotateX(Math.PI / 2);
-      g.translate(0, y, 0);
-      return g;
+    // Point de l'ellipse à l'angle a, décalé de `off` le long de sa normale (membrures parallèles).
+    const at = (a, off, y) => {
+      const nx = az * Math.sin(a);
+      const nz = ax * Math.cos(a);
+      const k = off / Math.hypot(nx, nz);
+      return new THREE.Vector3(ax * Math.sin(a) + nx * k, y, az * Math.cos(a) + nz * k);
     };
-    [ring(rigR, LOW), ring(rigR - HALF, HIGH), ring(rigR + HALF, HIGH)].forEach((g, i) => {
+    const ring = (off, y) => {
+      const points = Array.from({ length: 160 }, (_, i) => at((i / 160) * Math.PI * 2, off, y));
+      return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points, true), 320, 0.035, 6, true);
+    };
+    [ring(0, LOW), ring(-HALF, HIGH), ring(HALF, HIGH)].forEach((g, i) => {
       this.chords[i].geometry.dispose();
       this.chords[i].geometry = g;
     });
-    const at = (a, radius, y) => new THREE.Vector3(Math.sin(a) * radius, y, Math.cos(a) * radius);
+    this.at = at;
     let n = 0;
     for (let i = 0; i < TRUSS_NODES; i++) {
       const a0 = (i / TRUSS_NODES) * Math.PI * 2;
       const a1 = ((i + 1) / TRUSS_NODES) * Math.PI * 2;
       const am = (a0 + a1) / 2;
-      const inner = at(am, rigR - HALF, HIGH);
-      const outer = at(am, rigR + HALF, HIGH);
-      setPipe(this.struts, n++, at(a0, rigR, LOW), inner);
-      setPipe(this.struts, n++, inner, at(a1, rigR, LOW));
-      setPipe(this.struts, n++, at(a0, rigR, LOW), outer);
-      setPipe(this.struts, n++, outer, at(a1, rigR, LOW));
+      const inner = at(am, -HALF, HIGH);
+      const outer = at(am, HALF, HIGH);
+      setPipe(this.struts, n++, at(a0, 0, LOW), inner);
+      setPipe(this.struts, n++, inner, at(a1, 0, LOW));
+      setPipe(this.struts, n++, at(a0, 0, LOW), outer);
+      setPipe(this.struts, n++, outer, at(a1, 0, LOW));
       setPipe(this.struts, n++, inner, outer);
     }
     this.struts.instanceMatrix.needsUpdate = true;
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2 + 0.39;
-      this.clamps.setMatrixAt(i, _m.makeTranslation(Math.sin(a) * rigR, LOW - 0.035 - 0.07, Math.cos(a) * rigR));
+      const p = at(a, 0, LOW - 0.035 - 0.07);
+      this.clamps.setMatrixAt(i, _m.makeTranslation(p.x, p.y, p.z));
     }
     this.clamps.instanceMatrix.needsUpdate = true;
 
     // Perches : tous les 3 m environ, du fond de la conque jusqu'en avant du pont.
     const c = this.rig.position;
     const zBack = -(wallR - 3);
-    const zFront = c.z + rigR + 2;
+    const zFront = c.z + az + 2;
     const count = Math.min(BATTEN_MAX, Math.max(2, Math.round((zFront - zBack) / 3) + 1));
     for (let i = 0; i < count; i++) {
       const z = zBack + ((zFront - zBack) * i) / (count - 1);
       const half = Math.sqrt(Math.max(1, wallR * wallR - z * z)) - 1;
       setPipe(this.pipes, i, new THREE.Vector3(-half, grilY, z), new THREE.Vector3(half, grilY, z));
     }
-    // Porteuses sous les perches (tube contre tube), élingues jusqu'aux membrures hautes.
-    const reach = (rigR + HALF) * Math.SQRT1_2;
+    // Porteuses sous les perches (tube contre tube), élingues jusqu'à la membrure haute extérieure.
+    const hook = at(Math.PI / 4, HALF, 0);
     [-1, 1].forEach((side, k) => {
-      const x = side * reach;
-      setPipe(this.pipes, count + k, new THREE.Vector3(x, grilY - 0.1, c.z - reach - 1), new THREE.Vector3(x, grilY - 0.1, c.z + reach + 1));
+      const x = side * hook.x;
+      setPipe(this.pipes, count + k, new THREE.Vector3(x, grilY - 0.1, c.z - hook.z - 1), new THREE.Vector3(x, grilY - 0.1, c.z + hook.z + 1));
       [-1, 1].forEach((end, j) => {
-        const z = c.z + end * reach;
+        const z = c.z + end * hook.z;
         setPipe(this.cables, k * 2 + j, new THREE.Vector3(x, c.y + HIGH + 0.035, z), new THREE.Vector3(x, grilY - 0.15, z));
       });
     });
@@ -749,8 +755,12 @@ export class Environment {
     this.setRadius(8);
   }
 
-  /** Adapte le décor à la taille de l'ensemble (rayon de l'arc de lames). */
-  setRadius(R, stage = R + 6.2) {
+  /**
+   * Adapte le décor à la taille de l'ensemble (rayon de l'arc de lames).
+   * @param spread emprise au sol des instruments { cz, halfX, halfZ } : le pont des
+   *   projecteurs la couvre (sans elle, il ne couvre que l'arc de lames)
+   */
+  setRadius(R, stage = R + 6.2, spread = null) {
     this.radius = R;
     const stageR = (this.stageRadius = Math.max(R + 6.2, stage));
     this.floor.uniforms.uStageRadius.value = stageR;
@@ -774,22 +784,28 @@ export class Environment {
     for (const l of this.rims) l.target.position.set(0, 1, -R * 0.2);
     this.fill.position.set(-R, 4, R * 2);
 
-    const rigR = R * 0.95 + 2;
-    const rigY = (this.rigY = R * 0.55 + 6.5);
-    this.rig.position.set(0, rigY, -R * 0.25);
+    // Pont des projecteurs : une ellipse au-dessus de tout l'ensemble, têtes un peu en retrait
+    // de son bord, de sorte que chaque instrument a des projecteurs au-dessus de lui ou devant.
+    const base = R * 0.95 + 2;
+    const cz = spread ? spread.cz : -R * 0.25;
+    const ax = spread ? Math.max(base * 0.7, spread.halfX * 0.8) : base;
+    const az = spread ? Math.max(base * 0.7, spread.halfZ * 0.8) : base;
+    // Plus le pont est grand, plus il monte : les têtes du bord atteignent le milieu sans raser.
+    const rigY = (this.rigY = Math.max(R * 0.55 + 6.5, Math.max(ax, az) * 0.45 + 5));
+    this.rig.position.set(0, rigY, cz);
     // Conque à 5 m du bord du plateau ; gril au-dessus du pont et des plus hautes grues
     // de la caméra (voir director.js : plan d'ensemble à 0,42 × rayon du plateau + 4,5).
     const wallR = (this.wallRadius = stageR + 5);
     const grilY = (this.grilY = Math.max(rigY + 4, stageR * 0.42 + 6));
     this.shell.layout(wallR, grilY + 2.5);
-    this.rigging.layout(rigR, grilY, wallR);
+    this.rigging.layout(ax, az, grilY, wallR);
     this.heads.forEach((h, i) => {
       const a = (i / this.heads.length) * Math.PI * 2 + 0.39;
-      h.pivot.position.set(Math.sin(a) * rigR, -0.35, Math.cos(a) * rigR);
+      h.pivot.position.copy(this.rigging.at(a, 0, -0.35));
       h.angle = a;
-      const len = rigY * 1.25;
-      h.beam.scale.set(len * 0.13, len, len * 0.13);
+      h.throw = rigY * 1.1;
     });
+    this.reach = { ax, az };
   }
 
   /**
@@ -831,12 +847,16 @@ export class Environment {
       } else {
         // Point qui se promène sur le plateau, d'autant plus vite que la section est intense.
         const a = h.angle + Math.sin(wall * 0.13 * speed + h.phase) * 0.9;
-        const r = R * (0.25 + 0.3 * (0.5 + 0.5 * Math.sin(wall * 0.09 * speed + h.phase * 1.7)));
-        h.goal.set(Math.sin(a) * r, 0, Math.cos(a) * r);
+        const r = 0.25 + 0.3 * (0.5 + 0.5 * Math.sin(wall * 0.09 * speed + h.phase * 1.7));
+        h.goal.set(Math.sin(a) * r * this.reach.ax, 0, this.rig.position.z + Math.cos(a) * r * this.reach.az);
       }
       h.target.lerp(h.goal, 0.06);
-      dir.copy(h.target).sub(h.pivot.position).setY(-this.rigY).normalize();
+      dir.copy(h.target).sub(this.rig.position).sub(h.pivot.position);
+      // Faisceau un peu plus long que la distance au sol visé (le cône s'y éteint).
+      h.throw = dir.length() * 1.15;
+      dir.normalize();
       h.pivot.quaternion.setFromUnitVectors(down, dir);
+      h.beam.scale.set(h.throw * 0.13, h.throw, h.throw * 0.13);
       h.beamMat.uniforms.uIntensity.value = this.beamGain * (0.45 + 0.7 * energy + 0.6 * pulse);
     });
     // Les poursuites partent de leur tête et visent le même point que son faisceau ; elles
@@ -891,7 +911,7 @@ export class Environment {
       const breath = h.beamMat.uniforms.uIntensity.value / Math.max(this.beamGain, 1e-4);
       beam.intensity = this.volumeGain * (follow ? follow.light.intensity / this.followGain : 0.3 * breath);
       beam.angle = follow ? follow.light.angle : 0.13;
-      beam.length = this.rigY * 1.6;
+      beam.length = h.throw * 1.3;
       beam.shadow = follow && follow.light.castShadow ? follow.light.shadow : null;
       return beam;
     });
