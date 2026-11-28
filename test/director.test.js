@@ -229,3 +229,42 @@ test('le réalisateur privilégie la piste la plus forte, sans s’y fixer', () 
     assert.ok(quiet > 0, 'la piste discrète est montrée quand même');
   }
 });
+
+test('un solo est repéré et le soliste filmé pendant son solo', () => {
+  // Piano en accords et sax en ligne calme pendant 110 s ; de 30 à 55 s, le sax part en solo :
+  // notes rapides et plus fortes, le piano se fait discret.
+  const keys = [];
+  for (let t = 0; t < 110; t += 1) for (const midi of [60, 64, 67]) keys.push({ midi, time: t, duration: 0.9, velocity: t >= 30 && t < 55 ? 0.35 : 0.7, track: 0 });
+  const winds = [];
+  for (let t = 0; t < 110; ) {
+    const solo = t >= 30 && t < 55;
+    winds.push({ midi: 67 + Math.round(5 * Math.sin(t)), time: t, duration: solo ? 0.2 : 0.9, velocity: solo ? 0.95 : 0.6, track: 1 });
+    t += solo ? 0.25 : 1;
+  }
+  const ens = buildEnsemble({ keys, winds });
+  const sax = ens.instruments.findIndex((i) => i.kind === 'winds');
+  const plan = planShots(ens);
+  assert.equal(plan.solos.length, 1);
+  const [so] = plan.solos;
+  assert.equal(so.k, sax);
+  assert.ok(Math.abs(so.start - 30) < 2 && Math.abs(so.end - 55) < 2.5, `solo ${so.start}–${so.end}`);
+  // Pendant le solo, la caméra est surtout sur le soliste, sans s'y enfermer (contrechamps permis).
+  let on = 0;
+  for (const s of plan.shots) {
+    const d = Math.min(so.end, s.end) - Math.max(so.start, s.start);
+    if (d > 0 && s.subject === sax) on += d;
+  }
+  assert.ok(on > 0.6 * (so.end - so.start), `soliste filmé ${on.toFixed(1)} s sur ${(so.end - so.start).toFixed(1)}`);
+  // Les plans successifs sur le soliste changent d'axe ou de grosseur : pas de saut à l'image.
+  for (const s of plan.shots.slice(1)) {
+    if (!s.cut) continue;
+    const [a, b] = [cameraAt(plan, s.start - 0.02), cameraAt(plan, s.start + 0.02)];
+    const va = a.position.map((v, k) => v - a.target[k]);
+    const vb = b.position.map((v, k) => v - b.target[k]);
+    const same = Math.hypot(...a.target.map((v, k) => v - b.target[k])) < 1.5;
+    const cos = va.reduce((x, v, k) => x + v * vb[k], 0) / Math.hypot(...va) / Math.hypot(...vb);
+    const size = (p, v) => Math.hypot(...v) * Math.tan((p.fov * Math.PI) / 360);
+    const ratio = size(b, vb) / size(a, va);
+    assert.ok(!(same && cos > Math.cos(Math.PI / 6) && ratio > 0.75 && ratio < 1.33), `saut à ${s.start.toFixed(1)} s`);
+  }
+});

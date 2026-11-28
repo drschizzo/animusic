@@ -38,6 +38,7 @@ export const DIRECTOR_DEFAULTS = {
   fairness: 0.22, // poids du temps d'écran dû (par seconde due) dans le choix du sujet
   maxRepeat: 2, // plans consécutifs au plus sur un même sujet, s'il y a quelqu'un d'autre à montrer
   wideEvery: 6, // un plan d'ensemble tous les n plans cadrés
+  reframe: 0.8, // deux plans de suite sur un même sujet : changement d'axe minimal (rad, ≈ 45°)
   // Ce qu'on entend le plus fort à l'instant passe devant : le score d'un instrument est
   // multiplié par (son niveau / celui de la piste la plus forte)^loudness, en amplitude
   // (−6 dB → ×0,25 avec loudness = 2).
@@ -46,6 +47,16 @@ export const DIRECTOR_DEFAULTS = {
   // divise son score par e tous les `fatigue` secondes. Il ne monopolise pas l'écran, même fort.
   fatigue: 10,
   fatigueTau: 25,
+  // Solos (voir findSolos).
+  soloWindow: 4,
+  soloLead: 1.4, // le soliste a au moins 1,4 fois la puissance (+1,5 dB) de chaque autre ligne mélodique
+  soloOver: 0.25, // … et pas moins du quart (−6 dB) d'un accompagnement en accords
+  soloBridge: 4, // trou (s) comblé à l'intérieur d'un solo
+  soloMin: 6, // durée minimale (s)
+  soloJoin: 8, // pour la caméra, deux solos du même instrument à moins de 8 s n'en font qu'un
+  soloMaxShare: 0.3,
+  soloBoost: 3, // le soliste passe devant…
+  soloRepeat: 3, // … jusqu'à 3 plans de suite, puis un contrechamp, puis on revient à lui
   forgotten: 2, // bonus maximal d'un instrument qui joue sans avoir été montré depuis longtemps
 
   // Passage d'un plan à l'autre : la caméra ne glisse que vers un cadrage voisin ; sinon on coupe,
@@ -156,6 +167,9 @@ function blocked(obstacles, p, q, skip) {
   return false;
 }
 
+/** Angle ramené dans [−π, π]. */
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
 /** Pseudo-aléatoire déterministe (même morceau → mêmes plans). */
 function rng(seed) {
   let s = seed >>> 0 || 1;
@@ -201,6 +215,115 @@ function machinePoints(ensemble) {
   const e = tr.engine;
   if (e?.kind === 'steam') out.push({ kind: 'engine', instrument: -1, center: [e.xe + e.side * 0.3, 0.45, e.z + e.dir * 0.45], along: [0, e.dir] });
   return out;
+}
+
+/**
+ * Puissance moyenne d'un instrument sur [a, b) : énergie de ses notes (volume, expression,
+ * vélocité, voir `loud` dans arranger.js), par seconde.
+ */
+function loudnessMeter(inst) {
+  const louds = inst.map((ins) => ins.loud ?? []);
+  const times = louds.map((l) => l.map((x) => x.time));
+  const longest = louds.map((l) => l.reduce((m, x) => Math.max(m, x.end - x.time), 0));
+  return (k, a, b) => {
+    const l = louds[k];
+    let e = 0;
+    for (let i = lowerBound(times[k], a - longest[k]); i < l.length && l[i].time < b; i++) {
+      const d = Math.min(b, l[i].end) - Math.max(a, l[i].time);
+      if (d > 0) e += l[i].energy * d;
+    }
+    return e / Math.max(1e-3, b - a);
+  };
+}
+
+/**
+ * Solos : passages où une voix mélodique sort du lot. Fenêtres de `soloWindow` s : la voix
+ * domine les autres lignes mélodiques (`soloLead`), n'est pas couverte par les accompagnements
+ * en accords (`soloOver`), joue une
+ * ligne (peu d'accords) et tranche sur son propre jeu — plus fort ou plus dense que
+ * d'habitude, ou c'est une piste qui ne joue que là. Fenêtres fusionnées, au moins `soloMin` s.
+ * @returns [{k, start, end}] trié
+ */
+export function findSolos(ensemble, options = {}) {
+  const o = { ...DIRECTOR_DEFAULTS, ...options };
+  const inst = ensemble.instruments;
+  const power = loudnessMeter(inst);
+  const t0 = Math.min(ensemble.start, 0);
+  const t1 = Math.max(ensemble.end, t0 + 1);
+  const W = o.soloWindow;
+  const step = 1;
+  const melodic = inst.map((ins, k) => MELODIC.has(ins.kind) && (ins.loud?.length ?? 0) > 0 && (ins.line?.length ?? 0) > 0 ? k : -1).filter((k) => k >= 0);
+  if (melodic.length < 2) return [];
+  const slots = Math.max(1, Math.floor((t1 - t0 - W) / step) + 1);
+  // Mesures par fenêtre : puissance, notes, attaques.
+  const stats = new Map();
+  for (const k of melodic) {
+    const line = inst[k].line;
+    const lt = line.map((n) => n.time);
+    const rows = [];
+    for (let i = 0; i < slots; i++) {
+      const a = t0 + i * step;
+      const notes = line.slice(lowerBound(lt, a), lowerBound(lt, a + W));
+      const attacks = new Set(notes.map((n) => Math.round(n.time * 20))).size;
+      rows.push({ p: power(k, a, a + W), notes: notes.length, attacks });
+    }
+    const active = rows.filter((r) => r.attacks >= 2);
+    const median = (xs) => (xs.length ? xs.sort((x, y) => x - y)[Math.floor(xs.length / 2)] : 0);
+    stats.set(k, { rows, active: active.length / slots, p: median(active.map((r) => r.p)), rate: median(active.map((r) => r.attacks)) });
+  }
+  const solos = [];
+  for (const k of melodic) {
+    const S = stats.get(k);
+    const flag = S.rows.map((r, i) => {
+      if (r.attacks < Math.max(3, W * 0.75)) return false; // assez de notes
+      if (r.notes / r.attacks > 1.4) return false; // une ligne, pas des accords
+      for (const j of melodic) {
+        if (j === k) continue;
+        // Une autre ligne mélodique est une concurrente : le soliste doit la dominer. Un
+        // accompagnement en accords peut sonner plus fort (ses notes s'additionnent) sans
+        // masquer la ligne.
+        const q = stats.get(j).rows[i];
+        const line = q.attacks >= 3 && q.notes / q.attacks <= 1.4;
+        if (q.p * (line ? o.soloLead : o.soloOver) > r.p) return false;
+      }
+      const louder = r.p > S.p * 1.5; // ≈ +1,8 dB sur son niveau habituel
+      const busier = r.attacks > S.rate * 1.35;
+      const rare = S.active < 0.3; // une piste qui ne joue que pour ça
+      return louder || busier || rare;
+    });
+    // Fenêtres retenues → intervalles : chaque fenêtre ne compte que pour son centre (les bords
+    // d'une fenêtre à cheval sur le solo n'en font pas partie) ; trous de moins de soloBridge s comblés.
+    let run = null;
+    const runs = [];
+    flag.forEach((f, i) => {
+      if (!f) return;
+      const a = t0 + i * step + (W - step) / 2;
+      if (run && a <= run.end + o.soloBridge) run.end = a + step;
+      else runs.push((run = { k, start: a, end: a + step }));
+    });
+    // Recale sur les notes : du premier au dernier son de l'intervalle.
+    const lt = inst[k].line.map((n) => n.time);
+    for (const r of runs) {
+      const line = inst[k].line;
+      const i0 = lowerBound(lt, r.start);
+      const i1 = lowerBound(lt, r.end) - 1;
+      if (i1 <= i0) continue;
+      r.start = line[i0].time;
+      r.end = Math.max(...line.slice(i0, i1 + 1).map((n) => n.time + n.duration));
+    }
+    // Morceaux d'un même solo, séparés par un court silence : on les recoud.
+    const sewn = [];
+    for (const r of runs) {
+      const last = sewn[sewn.length - 1];
+      if (last && r.start <= last.end + o.soloBridge) last.end = Math.max(last.end, r.end);
+      else sewn.push({ ...r });
+    }
+    for (const r of sewn) if (r.end - r.start >= o.soloMin) solos.push(r);
+  }
+  // Une voix « en solo » plus d'un tiers du morceau, c'est la mélodie principale, pas un solo.
+  const total = new Map();
+  for (const r of solos) total.set(r.k, (total.get(r.k) ?? 0) + r.end - r.start);
+  return solos.filter((r) => total.get(r.k) <= (t1 - t0) * o.soloMaxShare).sort((a, b) => a.start - b.start);
 }
 
 export function planShots(ensemble, options = {}) {
@@ -276,19 +399,43 @@ export function planShots(ensemble, options = {}) {
   };
 
   /** Plan cadré sur un instrument, d'un type tiré au sort. */
-  const framed = (k, duration) => {
+  /**
+   * Plan cadré sur un instrument, d'un type tiré au sort. `prev` : le plan précédent s'il
+   * filme déjà ce sujet. Couper entre deux cadrages presque pareils fait un saut à l'image
+   * (faux raccord) : le nouveau plan change franchement d'axe (`reframe` rad au moins) et
+   * de type ; si l'axe ne peut pas changer assez (un instrument masque l'autre côté), il
+   * change de grosseur.
+   */
+  const framed = (k, duration, solo = false, prev = null) => {
     const ins = inst[k];
     const { center, radius } = ins.focus;
     const cam = { distScale: 1.7, minHeight: 0, allowLow: true, ...ins.camera };
-    const r = random();
-    const type = cam.allowLow && r < 0.22 ? 'low' : r < 0.42 ? 'dolly' : r < 0.58 ? 'crane' : 'close';
+    // Un soliste : contre-plongée, travelling, gros plan ; pas de grue, on reste sur lui.
+    const pick = (r) =>
+      solo
+        ? cam.allowLow && r < 0.3 ? 'low' : r < 0.6 ? 'dolly' : 'close'
+        : cam.allowLow && r < 0.22 ? 'low' : r < 0.42 ? 'dolly' : r < 0.58 ? 'crane' : 'close';
+    let type = pick(random());
+    for (let n = 0; prev && type === prev.type && n < 3; n++) type = pick(random());
     // Distance pour 40°, puis recul (ou approche) propre à l'objectif du plan : le champ
     // libre est vérifié depuis la position réelle de la caméra.
     const framing = radius * cam.distScale + 1.5;
-    const dist = (type === 'low' ? radius * 1.3 + 1.5 : type === 'dolly' ? framing * 0.9 : framing) * pullBack(type);
+    let dist = (type === 'low' ? radius * 1.3 + 1.5 : type === 'dolly' ? framing * 0.9 : framing) * pullBack(type);
     const height = Math.max(cam.minHeight, radius * 0.45 + 0.8);
-    const angle = clearAngle(k, center, (ins.front ?? 0) + (random() - 0.5) * 1.1, dist, height, duration);
-    const base = { subject: k, center, angle, type, dist, fov: LENS[type] };
+    const front = ins.front ?? 0;
+    let angle;
+    let tight = false;
+    if (prev?.angle !== undefined) {
+      // Axe de fin du plan précédent ; on part de l'autre côté, vers la face de l'instrument.
+      const last = prev.angle + (prev.spin ?? 0) * (prev.end - prev.start);
+      const step = o.reframe + random() * 0.4;
+      const sides = [last + step, last - step].sort((a, b) => Math.abs(wrap(a - front)) - Math.abs(wrap(b - front)));
+      const apart = (a) => Math.abs(wrap(a - last));
+      angle = sides.map((a) => clearAngle(k, center, a, dist, height, duration)).sort((a, b) => apart(b) - apart(a))[0];
+      if (apart(angle) < o.reframe * 0.75) tight = !prev.tight;
+    } else angle = clearAngle(k, center, front + (random() - 0.5) * 1.1, dist, height, duration);
+    if (tight) dist *= 0.7;
+    const base = { subject: k, center, angle, type, dist, fov: LENS[type], ...(tight ? { tight } : {}) };
     if (type === 'low') return { ...base, height: 0.6 - center[1] * 0.5 };
     if (type === 'dolly') return { ...base, height, travel: (random() < 0.5 ? -1 : 1) * Math.min(3.5, radius * 1.4) };
     if (type === 'crane') {
@@ -347,19 +494,8 @@ export function planShots(ensemble, options = {}) {
     const register = clamp(0.6 + (pitch - 55) / 30, 0.4, 1.6);
     return Math.sqrt(Math.min(notes.length, 24)) * register * (0.5 + vel) / Math.sqrt(chords);
   };
-  /** Puissance moyenne d'un instrument sur [a, b) : énergie de ses notes (volume, expression, vélocité). */
+  const power = loudnessMeter(inst);
   const louds = inst.map((ins) => ins.loud ?? []);
-  const loudTimes = louds.map((l) => l.map((x) => x.time));
-  const longest = louds.map((l) => l.reduce((m, x) => Math.max(m, x.end - x.time), 0));
-  const power = (k, a, b) => {
-    const l = louds[k];
-    let e = 0;
-    for (let i = lowerBound(loudTimes[k], a - longest[k]); i < l.length && l[i].time < b; i++) {
-      const d = Math.min(b, l[i].end) - Math.max(a, l[i].time);
-      if (d > 0) e += l[i].energy * d;
-    }
-    return e / Math.max(1e-3, b - a);
-  };
   /** Début de phrase dans [a, b) : une note après au moins `phraseGap` de silence. */
   const phraseStart = (k, a, b) => {
     const on = inst[k].onsets;
@@ -438,6 +574,24 @@ export function planShots(ensemble, options = {}) {
     return null;
   };
 
+  // Solos : le soliste est le sujet, du début à la fin du solo.
+  const solos = [];
+  for (const so of findSolos(ensemble, o)) {
+    const prev = solos.findLast((x) => x.k === so.k);
+    if (prev && so.start - prev.end <= o.soloJoin) prev.end = Math.max(prev.end, so.end);
+    else solos.push({ ...so });
+  }
+  /** Solo en cours sur [a, b) : celui qui en couvre la plus grande part (au moins la moitié). */
+  const soloIn = (a, b) => {
+    let best = null;
+    let cover = Math.min(2, (b - a) / 2);
+    for (const so of solos) {
+      const c = Math.min(b, so.end) - Math.max(a, so.start);
+      if (c >= cover) [best, cover] = [so, c];
+    }
+    return best;
+  };
+
   const shots = [];
   let t = t0;
   let lastMachine = -Infinity;
@@ -476,11 +630,22 @@ export function planShots(ensemble, options = {}) {
       // Entrées rapprochées : on enchaîne sur la suivante.
       const following = entries[entry];
       if (following && following.time < end) end = Math.max(t + 2.4, following.time);
+      // Un solo qui commence pendant la montée : on coupe sur le soliste.
+      const so = solos.find((x) => x.start > t + 2.4 && x.start < end);
+      if (so) {
+        end = so.start - 0.15;
+        cutPending = true;
+      }
     } else {
       // Une entrée imminente impose la fin du plan.
       const imminent = e && e.time < end + 1.5;
+      // Un solo qui commence pendant le plan : on coupe sur le soliste juste avant sa première note.
+      const soloNext = !imminent && solos.find((so) => so.start > t + 1.5 && so.start < end + 1);
       if (imminent) end = Math.max(t + 1.5, e.time);
-      else {
+      else if (soloNext) {
+        end = Math.max(t + 1.5, soloNext.start - 0.15);
+        cutPending = true;
+      } else {
         // Fin de plan calée sur le temps fort le plus proche.
         const i = lowerBound(beats, end);
         const near = [beats[i - 1], beats[i]].filter((b) => b !== undefined && Math.abs(b - end) <= o.snap && b > t + o.minShot * 0.6);
@@ -496,6 +661,7 @@ export function planShots(ensemble, options = {}) {
       const fade = Math.exp(-(t - recentAt) / o.fatigueTau);
       for (let k = 0; k < recent.length; k++) recent[k] *= fade;
       recentAt = t;
+      const solo = soloIn(t, end);
       const scores = inst.map((ins, k) => {
         let score = salience(k, t, end);
         if (!score) return 0;
@@ -508,6 +674,14 @@ export function planShots(ensemble, options = {}) {
         // Temps d'écran dû : celui qui en a reçu moins que sa part passe devant, celui qui en a
         // reçu plus s'efface (sans disparaître s'il porte la mélodie).
         const owed = due[k] * framedTime - shown[k];
+        if (solo?.k === k) {
+          // Le soliste passe devant : ni lassitude, ni temps d'écran déjà consommé, ni volume
+          // (une ligne seule sonne moins fort qu'un accompagnement en accords, et s'entend mieux).
+          // Après quelques plans sur lui, un contrechamp.
+          score *= o.soloBoost * Math.max(1, 1 + o.fairness * owed);
+          if (k === lastSubject && repeat + 1 >= o.soloRepeat) score *= 0.05;
+          return score;
+        }
         score *= clamp(1 + o.fairness * owed, 0.35, 3);
         // Le plus fort passe devant (sans force connue, l'instrument n'est pas pénalisé).
         if (loudest > 0 && louds[k].length) score *= Math.max(0.08, Math.sqrt(powers[k] / loudest)) ** o.loudness;
@@ -523,18 +697,24 @@ export function planShots(ensemble, options = {}) {
           best = k;
         }
       });
-      // Plan calé sur la phrase du sujet : il finit avec elle (si elle finit assez tard).
-      if (best >= 0 && !cutPending && !imminent) {
+      const onSoloist = best >= 0 && solo?.k === best;
+      // Fin du solo pendant le plan : on la suit jusqu'à la dernière note.
+      if (onSoloist && solo.end > t + o.minShot * 0.6 && solo.end < end + 1.5) {
+        end = Math.min(t1, solo.end + 0.3);
+        cutPending = true;
+      } else if (best >= 0 && !cutPending && !imminent) {
+        // Plan calé sur la phrase du sujet : il finit avec elle (si elle finit assez tard).
         const pe = phraseEnd(best, t + o.minShot * 0.8, end + 1.5);
         if (pe !== null) end = Math.min(t1, pe + 0.35);
       }
 
       // Insert sur une machine : rare, court, jamais sur une entrée ni à l'approche d'une entrée.
       const insertOk =
-        machines.length && best >= 0 && !imminent && !(first[best] >= t && first[best] < end) && t - lastMachine >= o.machineGap && sinceMachine >= o.machineEvery && t > t0 + 12;
+        machines.length && best >= 0 && !solo && !imminent && !(first[best] >= t && first[best] < end) && t - lastMachine >= o.machineGap && sinceMachine >= o.machineEvery && t > t0 + 12;
       const ranked = scores.map((sc, k) => [sc, k]).filter(([sc]) => sc > 0).sort((a, b) => b[0] - a[0]).map(([, k]) => k);
       const insert = insertOk && random() < o.machineChance ? machineShot(ranked, o.machineMax) : null;
-      if (best < 0 || sinceWide >= o.wideEvery || (shots.length === 0 && inst.length > 1)) {
+      // Pendant un solo, le plan d'ensemble attendra que la caméra quitte le soliste.
+      if (best < 0 || (sinceWide >= o.wideEvery && !onSoloist) || (shots.length === 0 && inst.length > 1)) {
         shot = wide();
         sinceWide = 0;
       } else if (insert) {
@@ -552,7 +732,7 @@ export function planShots(ensemble, options = {}) {
         const ball = best === ballsIndex && random() < o.followChance ? followBall(t) : -1;
         // Partenaire de dialogue : une autre voix mélodique presque aussi présente, qui alterne avec le sujet.
         let partner = -1;
-        if (MELODIC.has(inst[best].kind)) {
+        if (MELODIC.has(inst[best].kind) && !onSoloist) {
           scores.forEach((score, k) => {
             if (k === best || !MELODIC.has(inst[k].kind) || score < 0.45 * bestScore) return;
             // Assez proches pour tenir dans un même plan sans devenir un plan d'ensemble.
@@ -568,7 +748,8 @@ export function planShots(ensemble, options = {}) {
           end = Math.min(t1, Math.max(end, b.lastImpact + 0.7));
           cutPending = false;
         } else if (partner >= 0) shot = duo(best, partner, end - t);
-        else shot = framed(best, end - t);
+        else shot = framed(best, end - t, onSoloist, shots.at(-1)?.subject === best && shots.at(-1).partner === undefined ? shots.at(-1) : null);
+        if (onSoloist) shot.solo = true;
         sinceWide++;
       }
     }
@@ -589,7 +770,13 @@ export function planShots(ensemble, options = {}) {
     lastSubject = shot.subject;
     t = end;
   }
-  const plan = { shots, options: o, balls: ballsModel, obstacles };
+  // Deux plans d'ensemble de suite n'en font qu'un (une coupe entre eux ne ferait qu'un saut).
+  for (let i = shots.length - 1; i > 0; i--) {
+    if (shots[i].type !== 'wide' || shots[i - 1].type !== 'wide') continue;
+    shots[i - 1].end = shots[i].end;
+    shots.splice(i, 1);
+  }
+  const plan = { shots, solos, options: o, balls: ballsModel, obstacles };
   const attacks = [...new Set(inst.flatMap((i) => i.onsets))].sort((a, b) => a - b);
   // Passages d'un plan à l'autre : glissement vers un cadrage voisin, coupe franche sinon.
   for (let i = 1; i < shots.length; i++) {
@@ -606,6 +793,12 @@ export function planShots(ensemble, options = {}) {
     const turn = Math.acos(clamp(da[0] * db[0] + da[1] * db[1] + da[2] * db[2], -1, 1));
     // Durée d'un glissement tranquille ; si le plan est trop court pour le loger, on coupe aussi.
     const glide = o.blend * 0.7 + move / o.moveSpeed;
+    if (cur.cut && jumpCut(a, b)) {
+      // Coupe entre deux cadrages presque pareils : elle ferait sauter l'image. On glisse.
+      cur.cut = false;
+      cur.blend = Math.max(0.6, Math.min(glide, o.blendMax, (cur.end - cur.start) * 0.45));
+      continue;
+    }
     if (cur.cut || move > o.moveMax || turn > o.aimMax || glide > Math.min(o.blendMax, (cur.end - cur.start) * 0.45)) cur.cut = true;
     else cur.blend = glide;
     if (!cur.cut) continue;
@@ -619,6 +812,24 @@ export function planShots(ensemble, options = {}) {
     }
   }
   return plan;
+}
+
+/**
+ * Faux raccord : même point visé, axe de prise de vue à moins de 30° et grosseur de plan à
+ * moins d'un tiers près. Couper entre ces deux cadrages ne montre rien de neuf, l'image saute.
+ */
+function jumpCut(a, b) {
+  if (Math.hypot(a.target[0] - b.target[0], a.target[1] - b.target[1], a.target[2] - b.target[2]) > 1.5) return false;
+  const va = a.position.map((v, k) => v - a.target[k]);
+  const vb = b.position.map((v, k) => v - b.target[k]);
+  const la = Math.hypot(...va) || 1;
+  const lb = Math.hypot(...vb) || 1;
+  const cos = (va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]) / la / lb;
+  if (cos < Math.cos(Math.PI / 6)) return false;
+  // Grosseur de plan : largeur du champ au niveau du sujet.
+  const size = (p, d) => d * Math.tan(((p.fov ?? REFERENCE_FOV) * Math.PI) / 360);
+  const ratio = size(b, lb) / size(a, la);
+  return ratio > 0.75 && ratio < 1.33;
 }
 
 /**
