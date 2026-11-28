@@ -141,7 +141,7 @@ async function construct() {
   try {
     await breathe();
     // Expression (pédale de sustain, pitch bend, modulation) de chaque piste.
-    const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
+    const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod, ccs: t.ccs }));
     const built = await sliced(ensembleSteps(parts, controls, song.tracks.map((t) => t.program ?? -1), { style: $('style').value }));
     loader.progress(0.15, 'machines');
     await stage.build(built, song.tracks.map((_, i) => colorFor(i)), (f, step) => loader.progress(0.15 + 0.85 * f, step));

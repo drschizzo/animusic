@@ -211,3 +211,21 @@ test('style « billes » : de rares inserts sur les machines, les instruments re
   // Hors du style « billes », pas de machines à montrer.
   assert.ok(planShots(ensemble).shots.every((s) => s.type !== 'machine'));
 });
+
+test('le réalisateur privilégie la piste la plus forte, sans s’y fixer', () => {
+  // Deux voix identiques pendant 90 s, l'une à plein volume (CC7 = 127), l'autre à 50.
+  const line = (track) => Array.from({ length: 360 }, (_, i) => ({ midi: 64 + (i % 7), time: i * 0.25, duration: 0.2, velocity: 0.8, track }));
+  const controls = [{ ccs: [{ time: 0, number: 7, value: 127 }] }, { ccs: [{ time: 0, number: 7, value: 50 }] }];
+  const make = (loudKind) => {
+    const parts = loudKind === 'keys' ? { keys: line(0), winds: line(1) } : { winds: line(0), keys: line(1) };
+    const ens = buildEnsemble(parts, controls);
+    const shots = planShots(ens).shots.filter((s) => s.subject >= 0 && s.partner === undefined && !s.entry);
+    const time = (kind) => shots.filter((s) => ens.instruments[s.subject].kind === kind).reduce((a, s) => a + s.end - s.start, 0);
+    return [time(loudKind), time(loudKind === 'keys' ? 'winds' : 'keys')];
+  };
+  for (const kind of ['keys', 'winds']) {
+    const [loud, quiet] = make(kind);
+    assert.ok(loud > quiet * 1.5, `${kind} fort : ${loud.toFixed(0)} s contre ${quiet.toFixed(0)} s`);
+    assert.ok(quiet > 0, 'la piste discrète est montrée quand même');
+  }
+});

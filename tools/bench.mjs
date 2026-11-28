@@ -74,7 +74,7 @@ for (const file of process.argv.slice(2)) {
     return `${tr.name}[${tr.program}]→${tr.role}(${tr.notes.length})`;
   });
   const parts = groupParts(song.tracks);
-  const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod }));
+  const controls = song.tracks.map((t) => ({ sustain: t.sustain, bends: t.bends, mod: t.mod, ccs: t.ccs }));
 
   t0 = performance.now();
   const ens = buildEnsemble(parts, controls, song.tracks.map((t) => t.program ?? -1));

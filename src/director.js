@@ -38,6 +38,15 @@ export const DIRECTOR_DEFAULTS = {
   fairness: 0.22, // poids du temps d'écran dû (par seconde due) dans le choix du sujet
   maxRepeat: 2, // plans consécutifs au plus sur un même sujet, s'il y a quelqu'un d'autre à montrer
   wideEvery: 6, // un plan d'ensemble tous les n plans cadrés
+  // Ce qu'on entend le plus fort à l'instant passe devant : le score d'un instrument est
+  // multiplié par (son niveau / celui de la piste la plus forte)^loudness, en amplitude
+  // (−6 dB → ×0,25 avec loudness = 2).
+  loudness: 2,
+  // Lassitude : le temps d'écran récent d'un instrument (s, oublié à la constante fatigueTau)
+  // divise son score par e tous les `fatigue` secondes. Il ne monopolise pas l'écran, même fort.
+  fatigue: 10,
+  fatigueTau: 25,
+  forgotten: 2, // bonus maximal d'un instrument qui joue sans avoir été montré depuis longtemps
 
   // Passage d'un plan à l'autre : la caméra ne glisse que vers un cadrage voisin ; sinon on coupe,
   // comme une régie qui passe d'une caméra à une autre (une caméra ne traverse pas la scène en volant).
@@ -338,6 +347,19 @@ export function planShots(ensemble, options = {}) {
     const register = clamp(0.6 + (pitch - 55) / 30, 0.4, 1.6);
     return Math.sqrt(Math.min(notes.length, 24)) * register * (0.5 + vel) / Math.sqrt(chords);
   };
+  /** Puissance moyenne d'un instrument sur [a, b) : énergie de ses notes (volume, expression, vélocité). */
+  const louds = inst.map((ins) => ins.loud ?? []);
+  const loudTimes = louds.map((l) => l.map((x) => x.time));
+  const longest = louds.map((l) => l.reduce((m, x) => Math.max(m, x.end - x.time), 0));
+  const power = (k, a, b) => {
+    const l = louds[k];
+    let e = 0;
+    for (let i = lowerBound(loudTimes[k], a - longest[k]); i < l.length && l[i].time < b; i++) {
+      const d = Math.min(b, l[i].end) - Math.max(a, l[i].time);
+      if (d > 0) e += l[i].energy * d;
+    }
+    return e / Math.max(1e-3, b - a);
+  };
   /** Début de phrase dans [a, b) : une note après au moins `phraseGap` de silence. */
   const phraseStart = (k, a, b) => {
     const on = inst[k].onsets;
@@ -423,6 +445,8 @@ export function planShots(ensemble, options = {}) {
   let lastSubject = -2;
   let repeat = 0; // plans consécutifs sur le même sujet
   const seen = inst.map(() => t0); // dernier passage à l'écran de chaque instrument
+  const recent = inst.map(() => 0); // temps d'écran récent (s), qui s'oublie avec fatigueTau
+  let recentAt = t0;
   let sinceWide = 0;
   let entry = 0;
   let cutPending = false; // le plan précédent s'est terminé sur un temps fort : coupe franche
@@ -467,6 +491,11 @@ export function planShots(ensemble, options = {}) {
       }
       // Sujet : la voix qu'on écoute. Bonus d'entrée (premières notes) et de réponse
       // (début de phrase dans la première moitié du plan).
+      const powers = inst.map((_, k) => power(k, t, end));
+      const loudest = Math.max(...powers);
+      const fade = Math.exp(-(t - recentAt) / o.fatigueTau);
+      for (let k = 0; k < recent.length; k++) recent[k] *= fade;
+      recentAt = t;
       const scores = inst.map((ins, k) => {
         let score = salience(k, t, end);
         if (!score) return 0;
@@ -475,11 +504,14 @@ export function planShots(ensemble, options = {}) {
         if (ph !== null && ph > first[k]) score += 0.6;
         if (ins.kind === 'balls') score *= 1.25; // l'instrument vedette
         // Un instrument qui joue sans avoir été montré depuis longtemps finit par l'être.
-        score += Math.min(2, (t - seen[k]) / 18);
+        score += Math.min(o.forgotten, (t - seen[k]) / 18);
         // Temps d'écran dû : celui qui en a reçu moins que sa part passe devant, celui qui en a
         // reçu plus s'efface (sans disparaître s'il porte la mélodie).
         const owed = due[k] * framedTime - shown[k];
         score *= clamp(1 + o.fairness * owed, 0.35, 3);
+        // Le plus fort passe devant (sans force connue, l'instrument n'est pas pénalisé).
+        if (loudest > 0 && louds[k].length) score *= Math.max(0.08, Math.sqrt(powers[k] / loudest)) ** o.loudness;
+        score *= Math.exp(-recent[k] / o.fatigue); // lassitude
         if (k === lastSubject) score *= repeat + 1 >= o.maxRepeat ? 0.05 : 0.8; // variété
         return score;
       });
@@ -546,6 +578,8 @@ export function planShots(ensemble, options = {}) {
       framedTime += end - t;
       shown[shot.subject] += (end - t) * (shot.partner >= 0 ? 0.6 : 1);
       if (shot.partner >= 0) shown[shot.partner] += (end - t) * 0.6;
+      recent[shot.subject] += (end - t) * (shot.partner >= 0 ? 0.6 : 1);
+      if (shot.partner >= 0) recent[shot.partner] += (end - t) * 0.6;
     }
     shot.start = t;
     shot.end = end;

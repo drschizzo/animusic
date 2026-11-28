@@ -17,7 +17,7 @@ import { buildLaserHarp } from './laser.js';
 import { buildKeyboard } from './keys.js';
 import { buildBowed } from './bowed.js';
 import { buildWinds, windStyle } from './winds.js';
-import { mergeEvents, clamp, drain } from './util.js';
+import { mergeEvents, clamp, drain, lowerBound } from './util.js';
 import { mergeSpans } from './sections.js';
 import { GM_ATTACK } from './gmAttack.js';
 
@@ -245,6 +245,32 @@ const tracksOf = (notes) => [...new Set((notes ?? []).map((n) => n.track))];
 const lastEnd = (notes) => Math.max(...notes.map((n) => n.time + n.duration));
 /** Ligne musicale d'une partie (pour le réalisateur) : notes triées, hauteur et force. */
 const lineOf = (notes) => notes.map((n) => ({ time: n.time, midi: n.midi, velocity: n.velocity, duration: n.duration })).sort((a, b) => a.time - b.time);
+/**
+ * Force sonore d'une partie, note par note (pour le réalisateur) : [{time, end, energy}] trié.
+ * Même estimation que `trackLevel` : volume (CC7) et expression (CC11) de la piste au moment
+ * de la note, vélocité, en loi carrée ; l'énergie est l'amplitude au carré.
+ */
+function loudnessOf(notes, controls) {
+  const byTrack = new Map();
+  const curve = (tr, number) => {
+    const key = `${tr}:${number}`;
+    if (!byTrack.has(key)) {
+      const ev = (controls[tr]?.ccs ?? []).filter((e) => e.number === number);
+      byTrack.set(key, { ev, times: ev.map((e) => e.time) });
+    }
+    return byTrack.get(key);
+  };
+  const at = ({ ev, times }, t, def) => {
+    const i = lowerBound(times, t + 1e-6);
+    return i > 0 ? ev[i - 1].value : def;
+  };
+  return notes
+    .map((n) => {
+      const gain = (at(curve(n.track, 7), n.time, 100) / 127) ** 2 * (at(curve(n.track, 11), n.time, 127) / 127) ** 2 * (n.velocity ?? 0.8) ** 2;
+      return { time: n.time, end: n.time + Math.max(0.15, n.duration ?? 0), energy: gain * gain };
+    })
+    .sort((a, b) => a.time - b.time);
+}
 /** Piste qui joue le plus de notes d'une partie : sa couleur identifie l'instrument. */
 const mainTrack = (notes) => {
   const count = new Map();
@@ -511,6 +537,7 @@ export function* ensembleSteps(parts, controls = [], programs = [], { style = 'a
       tracks: tracksOf(all('balls')),
       onsets: balls.impacts.map((i) => i.time),
       line: lineOf(all('balls')),
+      loud: loudnessOf(all('balls'), controls),
       busy: mergeSpans(balls.balls.map((b) => [b.launch - 0.6, b.end])),
       focus: { center: [0, 1.4, -R * 0.7], radius: R * 0.75 },
       front: 0,
@@ -535,12 +562,12 @@ export function* ensembleSteps(parts, controls = [], programs = [], { style = 'a
         controlsFor: (keys) => Object.fromEntries(tracks.map((tr) => [tr, Object.fromEntries(keys.map((k) => [k, controls[tr]?.[k]]))])),
       };
       const made = FACTORIES[p.kind](p.notes, ctx);
-      others.push({ kind: p.kind, tracks, mainTrack: main, ...made, width: made.model.width, onsets: made.model.onsets, n: p.notes.length, line: lineOf(p.notes) });
+      others.push({ kind: p.kind, tracks, mainTrack: main, ...made, width: made.model.width, onsets: made.model.onsets, n: p.notes.length, line: lineOf(p.notes), loud: loudnessOf(p.notes, controls) });
     }
     yield;
   }
   if (drumNotes.length) {
-    const drums = { kind: 'drums', notes: drumNotes, width: SEATS.drums.width, n: drumNotes.length };
+    const drums = { kind: 'drums', notes: drumNotes, width: SEATS.drums.width, n: drumNotes.length, loud: loudnessOf(drumNotes, controls) };
     if (style === 'balls') {
       // Les tuyaux débordent du kit : l'estrade se règle sur leur encombrement réel, et le
       // kit est décalé pour s'y trouver centré.
@@ -646,6 +673,7 @@ export function* ensembleSteps(parts, controls = [], programs = [], { style = 'a
       mainTrack: it.mainTrack,
       onsets: it.onsets,
       line: it.line ?? [],
+      loud: it.loud ?? [],
       busy: it.busy,
       riser: it.riser,
       focus: { center: [o[0], it.riser + it.focusY, o[2]], radius: Math.max(2, it.width * 0.6) },
