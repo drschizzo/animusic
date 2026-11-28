@@ -53,6 +53,11 @@ export class Loader {
     if (label && this.text.textContent !== label) this.text.textContent = label;
   }
 
+  /** Écran affiché (il l'est au démarrage, jusqu'à la fin du premier chargement). */
+  get shown() {
+    return !this.root.classList.contains('done');
+  }
+
   hide() {
     this.bar.style.transform = 'scaleX(1)';
     this.root.classList.add('done');

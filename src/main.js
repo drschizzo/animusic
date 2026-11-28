@@ -719,8 +719,10 @@ function displayLead(now) {
 const frameState = { second: -1 };
 function frame(now = performance.now()) {
   requestAnimationFrame(frame);
-  // Scène en construction : c'est elle qui tient le moteur de rendu.
-  if (building) return;
+  // Scène en construction : c'est elle qui tient le moteur de rendu. Et rien sous l'écran
+  // de chargement : au démarrage, avant la première construction, la scène vide y aurait
+  // compilé toute la chaîne d'effets d'un bloc (le rodage le fait sans rien bloquer).
+  if (building || loader.shown) return;
   if (ensemble) {
     const t = player.currentTime() + displayLead(now);
     stage.update(t);

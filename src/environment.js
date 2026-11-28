@@ -960,18 +960,22 @@ export class Environment {
     return list;
   }
 
-  renderProbe() {
+  /** @param faces faces à rendre d'un coup, hors cadence (rodage) ; par défaut, la cadence normale. */
+  renderProbe(faces) {
     if (!this.probeFaces) return;
     // Une face toutes les trois images : la sonde se refait en dix-huit images (0,3 s à 60
     // images/s), assez vite pour suivre l'éclairage, pour trois fois moins d'appels de rendu.
     // Jamais la même image que la carte d'ombres de la lumière d'ensemble (scheduleShadows).
-    if ((this.shadowFrame ?? 0) % 3 !== 1) return;
+    if (faces === undefined) {
+      if ((this.shadowFrame ?? 0) % 3 !== 1) return;
+      faces = this.probeFaces;
+    }
     const hidden = [this.dust, ...this.heads.map((h) => h.beam), ...this.probeClutter()];
     const visible = hidden.map((o) => o.visible);
     hidden.forEach((o) => (o.visible = false));
     const reflect = this.floor.uniforms.uReflect.value;
     this.floor.uniforms.uReflect.value = 0;
-    const fresh = this.probe.update(this.scene, this.probePosition, this.probeFaces);
+    const fresh = this.probe.update(this.scene, this.probePosition, faces);
     this.floor.uniforms.uReflect.value = reflect;
     hidden.forEach((o, i) => (o.visible = visible[i]));
     if (fresh) this.scene.environment = fresh;

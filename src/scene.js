@@ -275,8 +275,8 @@ export class Stage {
    * variantes d'ombre, de reflet et de profondeur prêtes. Sans lui, un instrument qui entre
    * en scène pour la première fois fait hoqueter l'image en pleine lecture.
    *
-   * Compiler un shader à son premier dessin bloque le fil principal jusqu'à la fin de la
-   * compilation. On procède donc en deux temps : des images « à blanc », où chaque passe
+   * En WebGL, compiler un shader à son premier dessin bloque le fil principal jusqu'à la fin
+   * de la compilation. On procède donc en deux temps : des images « à blanc », où chaque passe
    * déroule son vrai parcours mais où chaque dessin se borne à créer son programme (le
    * pilote les compile alors en parallèle, sans bloquer personne) ; puis, une fois tous les
    * programmes prêts, les vraies images, instrument par instrument.
@@ -295,13 +295,11 @@ export class Stage {
     try {
       onProgress(0.4, 'shaders');
       if (renderer.isWebGPURenderer) {
-        // Pas de compileAsync : ses objets ne portent pas les mêmes clés de cache que ceux
-        // du vrai rendu (contexte de passe, MRT), si bien que presque tout était construit
-        // deux fois (190 shaders au lieu de 98, 12 s de chargement au lieu de 4). Les vraies
-        // images ci-dessous compilent exactement ce qui servira ; l'écran de chargement,
-        // animé hors du fil principal, ne s'en ressent pas.
         hideUnsupported(this.scene);
-      } else if (renderer.extensions.get('KHR_parallel_shader_compile')) {
+        await this.warmUpGPU(onProgress);
+        return;
+      }
+      if (renderer.extensions.get('KHR_parallel_shader_compile')) {
         const before = renderer.info.programs.length;
         // Six images : les faces de la sonde et les cartes d'ombre se relaient d'une image à l'autre.
         for (let i = 0; i < 6; i++) {
@@ -318,14 +316,12 @@ export class Stage {
         }
       }
       // Vraies images : le décor seul, puis chaque instrument seul, puis tout ensemble.
-      // (En WebGPU, ce sont elles qui compilent : elles portent toute la fin de la barre.)
-      const from = renderer.isWebGPURenderer ? 0.4 : 0.85;
-      onProgress(from, 'scène');
+      onProgress(0.85, 'scène');
       const lifts = this.lifts ?? [];
       for (let k = -1; k < lifts.length; k++) {
         lifts.forEach((lift, i) => (lift.visible = i === k));
         this.render();
-        onProgress(from + ((1 - from) * (k + 2)) / (lifts.length + 2), 'scène');
+        onProgress(0.85 + (0.15 * (k + 2)) / (lifts.length + 2), 'scène');
         await breathe();
       }
       lifts.forEach((lift) => (lift.visible = true));
@@ -335,6 +331,86 @@ export class Stage {
       for (const small of this._dryTiny?.values() ?? []) small.dispose();
       this._dryTiny = this._drySeen = null;
     }
+  }
+
+  /**
+   * Rodage WebGPU. Pas de compileAsync : ses objets ne portent pas les mêmes clés de cache
+   * que ceux du vrai rendu (contexte de passe, MRT), si bien que presque tout était construit
+   * deux fois. On rend donc de vraies images, mais en demandant chaque pipeline nouveau de
+   * façon asynchrone (createRenderPipelineAsync). Créé en synchrone, un pipeline est compilé
+   * par Metal (newLibraryWithSource, ~0,5 s pour une grosse matière quand le cache Metal ne
+   * l'a pas) sur le fil principal du processus GPU, celui qui dessine aussi la page : une
+   * cinquantaine à la suite figeaient tout l'onglet 5 à 9 s (mesuré sous trace Chrome). En
+   * asynchrone, Metal compile sur les fils secondaires du processus GPU et la page reste
+   * fluide. Un dessin dont le pipeline n'est pas prêt est simplement sauté ; on attend
+   * qu'ils le soient tous.
+   *
+   * Chaque étape (décor seul, chaque instrument seul, tout ensemble) passe par toutes les
+   * variantes : trois images pour les trois cartes d'ombres qui se relaient, les six faces
+   * de la sonde, et rien d'écarté hors du champ (la caméra du réalisateur ira partout).
+   */
+  async warmUpGPU(onProgress) {
+    const pipelines = this.renderer._pipelines;
+    const pending = [];
+    const update = pipelines.updateForRender;
+    pipelines.updateForRender = (renderObject) => pipelines.getForRender(renderObject, pending);
+    const culled = [];
+    this.scene.traverse((o) => {
+      if (o.frustumCulled) {
+        culled.push(o);
+        o.frustumCulled = false;
+      }
+    });
+    // Attente des compilations, toutes lancées en même temps (le pilote les répartit sur
+    // ses fils) : les attendre étape par étape les sérialisait (20 s au lieu de 7, à froid).
+    let total = 0;
+    let done = 0;
+    const settle = async (from, to) => {
+      while (pending.length) {
+        const batch = pending.splice(0);
+        total += batch.length;
+        batch.forEach((p) => p.then(() => onProgress(from + ((to - from) * ++done) / total, 'shaders')));
+        await Promise.all(batch);
+      }
+    };
+    // Les passes en nœuds (scène, ombres) ne se refont qu'une fois par image du moteur,
+    // qui avance au rythme de requestAnimationFrame : on attend donc une vraie image entre
+    // deux rendus (délai de secours : un onglet en arrière-plan ne dessine pas).
+    const nextFrame = () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => resolve());
+        setTimeout(resolve, 100);
+      });
+    const pass = async () => {
+      for (let i = 0; i < 3; i++) {
+        await nextFrame();
+        this.render();
+      }
+      this.environment.renderProbe(6);
+    };
+    try {
+      const lifts = this.lifts ?? [];
+      for (let k = -1; k < lifts.length; k++) {
+        lifts.forEach((lift, i) => (lift.visible = i === k));
+        await pass();
+        onProgress(0.4 + (0.2 * (k + 2)) / (lifts.length + 1), 'scène');
+      }
+      lifts.forEach((lift) => (lift.visible = true));
+      await pass();
+      await settle(0.6, 0.95);
+      // Une fois tout dessiné pour de bon, quelques variantes peuvent encore apparaître
+      // (sonde refaite, environnement remplacé) : un dernier tour, attendu lui aussi.
+      await pass();
+      await settle(0.95, 1);
+    } finally {
+      pipelines.updateForRender = update;
+      for (const o of culled) o.frustumCulled = true;
+    }
+    // Tout est prêt : la sonde refaite pour de bon (ses dessins sautés l'avaient laissée
+    // incomplète), puis une image complète.
+    this.environment.renderProbe(6);
+    await nextFrame();
+    this.render();
   }
 
   /**
